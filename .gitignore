@@ -1,0 +1,16 @@
+# Build artifacts
+bin/
+obj/
+
+# IDE / editor
+.idea/
+.vs/
+*.user
+*.suo
+
+# Logs
+*.log
+
+# OS files
+Thumbs.db
+Desktop.ini
