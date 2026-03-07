@@ -43,6 +43,32 @@ WPF で使う場合、ConPTY 出力には VT/ANSI 制御シーケンスが含ま
 - 原因: `OSC` 終端処理で状態遷移が詰まり、通常文字処理に戻れなかった
 - 対応: `BEL`、`ESC \`、`ST` の終端を受理し、連続シーケンスでも復帰できるよう修正
 
+### 5) `CreateProcessW` は成功するのに ConPTY 側が無出力で固まる
+- 症状: `CreateProcessW` 自体は成功するが、ConPTY 出力が 0 バイトのままになり、`cmd.exe` が `0xC0000142` で落ちることがある
+- 原因: `UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE)` に `HPCON` そのものではなく、`IntPtr` 変数の参照を渡していた
+- 対応: `lpValue` には `HPCON` 値そのものを渡す。C# の P/Invoke でも `ref IntPtr` ではなく `IntPtr` を使う
+
+### 6) ConPTY を付けても子プロセスの標準入出力が親コンソールに流れる
+- 症状: 子プロセスの表示や入力が ConPTY パイプに来ず、親コンソール側に出たり、対話が不安定になる
+- 原因: `STARTUPINFOEX` で Pseudoconsole を付けても、`STARTF_USESTDHANDLES` を立てずに起動すると標準ハンドル複製の影響を受けることがある
+- 対応: `STARTF_USESTDHANDLES` を設定し、`hStdInput` / `hStdOutput` / `hStdError` は `NULL`、`CreateProcessW` の `bInheritHandles` は `FALSE` にする
+
+### 7) ConPTY 側パイプを閉じるタイミングが早すぎると起動が不安定になる
+- 症状: 初期化直後にハングや無出力が発生し、再現が安定しない
+- 原因: `CreatePseudoConsole` 用に渡した ConPTY 側の read/write ハンドルを、子プロセス生成前に閉じていた
+- 対応: `CreateProcessW` 成功後に ConPTY 側ハンドルを閉じる
+
+### 8) `cmd.exe /K chcp 65001 > nul` は ConPTY 既定コマンドとして不適切
+- 症状: 単発コマンド (`cmd.exe /c echo ...`) は動くのに、対話モードだけ入力が返ってこない
+- 原因: `cmd.exe /K chcp 65001 > nul` を初期コマンドにすると、この構成では `cmd.exe` の対話状態が崩れる
+- 対応: 既定コマンドは `cmd.exe /K` にする。UTF-8 化が必要なら、ConPTY 上での `chcp` 依存を前提にしない別設計を検討する
+
+## 今回の切り分けで有効だった確認方法
+- ネイティブ最小実装と C# 実装で同じコマンドを実行し、WPF 固有の問題か ConPTY 起動条件の問題かを分離した
+- `cmd.exe /c echo ...` の単発実行で ConPTY 自体の生成可否を確認した
+- `cmd.exe /K` と `cmd.exe /K chcp 65001 > nul` を比較して、API 問題と起動コマンド問題を分離した
+- 失敗時の終了コード `0xC0000142` を手掛かりに、無効な Pseudoconsole handle の可能性を優先して潰した
+
 ## 現在のファイル構成
 - ConPTY セッションと Win32 連携: `ConPtySession.cs`
 - VT パーサと画面バッファ: `AnsiTerminalBuffer.cs`
