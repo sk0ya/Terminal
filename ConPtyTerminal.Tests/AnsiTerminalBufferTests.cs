@@ -91,4 +91,42 @@ public sealed class AnsiTerminalBufferTests
         Assert.Null(buffer.GetCellHyperlink(0, 4));
         Assert.Null(buffer.GetCellHyperlink(0, 5));
     }
+
+    [Fact]
+    public void DeviceStatusReportEmitsCurrentCursorPosition()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("A\r\nBC");
+        buffer.Process("\u001b[6n");
+
+        Assert.Equal("\u001b[2;3R", emitted);
+    }
+
+    [Fact]
+    public void DeviceAttributesRespondToPrimaryAndSecondaryQueries()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        var emitted = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => emitted.Add(text);
+
+        buffer.Process("\u001b[c");
+        buffer.Process("\u001b[>c");
+
+        Assert.Equal(new[] { "\u001b[?1;2c", "\u001b[>0;10;1c" }, emitted);
+    }
+
+    [Fact]
+    public void Osc52ClipboardQueryRaisesSelectionTarget()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? requestedTarget = null;
+        buffer.ClipboardQueryRequested += (_, target) => requestedTarget = target;
+
+        buffer.Process("\u001b]52;s0;?\u0007");
+
+        Assert.Equal("s0", requestedTarget);
+    }
 }
