@@ -23,6 +23,7 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
             <TextBlock Grid.Column="0"
@@ -44,8 +45,15 @@
             <Button x:Name="StopButton"
                     Grid.Column="3"
                     Width="90"
+                    Margin="0,0,8,0"
                     Content="Stop"
                     Click="StopButton_Click"
+                    IsEnabled="False" />
+            <Button x:Name="RecoverButton"
+                    Grid.Column="4"
+                    Width="90"
+                    Content="Recover"
+                    Click="RecoverButton_Click"
                     IsEnabled="False" />
         </Grid>
 

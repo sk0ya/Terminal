@@ -6,23 +6,31 @@ using System.Text;
 
 namespace ConPtyTerminal;
 
-public sealed class ConPtySession : IDisposable
+public sealed class ConPtySession : ITerminalSession
 {
     private const uint ExtendedStartupInfoPresent = 0x00080000;
     private const uint HandleFlagInherit = 0x00000001;
+    private const int StartfUseStdHandles = 0x00000100;
     private const int ProcThreadAttributePseudoConsole = 0x00020016;
     private const uint Infinite = 0xFFFFFFFF;
+    private const uint WaitTimeout = 0x00000102;
 
     private readonly object _syncRoot = new();
     private IntPtr _pseudoConsole;
     private IntPtr _processHandle;
     private IntPtr _threadHandle;
+    private SafeFileHandle? _pseudoConsoleInputReadHandle;
+    private SafeFileHandle? _pseudoConsoleOutputWriteHandle;
     private SafeFileHandle? _inputWriteHandle;
     private SafeFileHandle? _outputReadHandle;
     private StreamWriter? _inputWriter;
     private StreamReader? _outputReader;
     private CancellationTokenSource? _readCancellation;
     private Task? _readTask;
+    private bool _started;
+    private DateTime _startedAtUtc;
+    private DateTime _lastOutputAtUtc;
+    private bool _hasOutput;
     private bool _disposed;
 
     public event EventHandler<string>? OutputReceived;
@@ -49,14 +57,33 @@ public sealed class ConPtySession : IDisposable
         {
             CreatePseudoConsole(columns, rows);
             LaunchProcess(commandLine);
-            StartOutputReadLoop();
-            StartExitMonitor();
         }
         catch
         {
             Dispose();
             throw;
         }
+    }
+
+    public void Start()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        lock (_syncRoot)
+        {
+            if (_started)
+            {
+                return;
+            }
+
+            _started = true;
+            _startedAtUtc = DateTime.UtcNow;
+            _lastOutputAtUtc = _startedAtUtc;
+            _hasOutput = false;
+        }
+
+        StartOutputReadLoop();
+        StartExitMonitor();
     }
 
     public void Write(string input)
@@ -76,6 +103,42 @@ public sealed class ConPtySession : IDisposable
         {
             Marshal.ThrowExceptionForHR(hr);
         }
+    }
+
+    public bool IsOutputStalled(TimeSpan initialOutputTimeout, TimeSpan idleOutputTimeout)
+    {
+        if (_disposed || !_started || _processHandle == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        if (WaitForSingleObject(_processHandle, 0) != WaitTimeout)
+        {
+            return false;
+        }
+
+        DateTime now = DateTime.UtcNow;
+        if (!_hasOutput)
+        {
+            return now - _startedAtUtc > initialOutputTimeout;
+        }
+
+        return now - _lastOutputAtUtc > idleOutputTimeout;
+    }
+
+    public bool TryForceUnlock(uint exitCode = 1)
+    {
+        if (_disposed || _processHandle == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        if (WaitForSingleObject(_processHandle, 0) != WaitTimeout)
+        {
+            return false;
+        }
+
+        return TerminateProcess(_processHandle, exitCode);
     }
 
     public void Dispose()
@@ -103,6 +166,8 @@ public sealed class ConPtySession : IDisposable
         }
 
         _readCancellation?.Cancel();
+        _outputReader?.Dispose();
+
         try
         {
             _readTask?.Wait(200);
@@ -111,9 +176,16 @@ public sealed class ConPtySession : IDisposable
         {
         }
 
-        _inputWriter?.Dispose();
-        _outputReader?.Dispose();
+        if (_processHandle != IntPtr.Zero && WaitForSingleObject(_processHandle, 250) == WaitTimeout)
+        {
+            _ = TerminateProcess(_processHandle, 1);
+            _ = WaitForSingleObject(_processHandle, 500);
+        }
 
+        _inputWriter?.Dispose();
+
+        _pseudoConsoleInputReadHandle?.Dispose();
+        _pseudoConsoleOutputWriteHandle?.Dispose();
         _inputWriteHandle?.Dispose();
         _outputReadHandle?.Dispose();
 
@@ -144,7 +216,6 @@ public sealed class ConPtySession : IDisposable
         IntPtr pipeToPseudoConsoleInputWrite = IntPtr.Zero;
         IntPtr pipeFromPseudoConsoleOutputRead = IntPtr.Zero;
         IntPtr pipeFromPseudoConsoleOutputWrite = IntPtr.Zero;
-
         var pipeSecurity = new SecurityAttributes
         {
             nLength = Marshal.SizeOf<SecurityAttributes>(),
@@ -195,9 +266,13 @@ public sealed class ConPtySession : IDisposable
 
             _inputWriteHandle = new SafeFileHandle(pipeToPseudoConsoleInputWrite, ownsHandle: true);
             _outputReadHandle = new SafeFileHandle(pipeFromPseudoConsoleOutputRead, ownsHandle: true);
+            _pseudoConsoleInputReadHandle = new SafeFileHandle(pipeToPseudoConsoleInputRead, ownsHandle: true);
+            _pseudoConsoleOutputWriteHandle = new SafeFileHandle(pipeFromPseudoConsoleOutputWrite, ownsHandle: true);
 
             pipeToPseudoConsoleInputWrite = IntPtr.Zero;
             pipeFromPseudoConsoleOutputRead = IntPtr.Zero;
+            pipeToPseudoConsoleInputRead = IntPtr.Zero;
+            pipeFromPseudoConsoleOutputWrite = IntPtr.Zero;
         }
         finally
         {
@@ -243,11 +318,13 @@ public sealed class ConPtySession : IDisposable
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to initialize attribute list.");
             }
 
+            IntPtr pseudoConsoleValue = _pseudoConsole;
+
             if (!UpdateProcThreadAttribute(
                     attributeList,
                     0,
                     (IntPtr)ProcThreadAttributePseudoConsole,
-                    _pseudoConsole,
+                    pseudoConsoleValue,
                     (IntPtr)IntPtr.Size,
                     IntPtr.Zero,
                     IntPtr.Zero))
@@ -259,12 +336,16 @@ public sealed class ConPtySession : IDisposable
             {
                 StartupInfo = new StartupInfo
                 {
-                    cb = Marshal.SizeOf<StartupInfoEx>()
+                    cb = Marshal.SizeOf<StartupInfoEx>(),
+                    dwFlags = StartfUseStdHandles,
+                    hStdInput = IntPtr.Zero,
+                    hStdOutput = IntPtr.Zero,
+                    hStdError = IntPtr.Zero
                 },
                 lpAttributeList = attributeList
             };
-
             var commandLineBuffer = new StringBuilder(commandLine);
+
             if (!CreateProcess(
                     null,
                     commandLineBuffer,
@@ -282,6 +363,11 @@ public sealed class ConPtySession : IDisposable
 
             _processHandle = processInfo.hProcess;
             _threadHandle = processInfo.hThread;
+
+            _pseudoConsoleInputReadHandle?.Dispose();
+            _pseudoConsoleInputReadHandle = null;
+            _pseudoConsoleOutputWriteHandle?.Dispose();
+            _pseudoConsoleOutputWriteHandle = null;
         }
         finally
         {
@@ -314,7 +400,7 @@ public sealed class ConPtySession : IDisposable
         _readCancellation = new CancellationTokenSource();
         CancellationToken cancellationToken = _readCancellation.Token;
 
-        _readTask = Task.Run(async () =>
+        _readTask = Task.Run(() =>
         {
             char[] buffer = new char[4096];
 
@@ -323,11 +409,7 @@ public sealed class ConPtySession : IDisposable
                 int read;
                 try
                 {
-                    read = await _outputReader.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
+                    read = _outputReader.Read(buffer, 0, buffer.Length);
                 }
                 catch
                 {
@@ -339,6 +421,8 @@ public sealed class ConPtySession : IDisposable
                     break;
                 }
 
+                _hasOutput = true;
+                _lastOutputAtUtc = DateTime.UtcNow;
                 OutputReceived?.Invoke(this, new string(buffer, 0, read));
             }
         }, cancellationToken);
@@ -429,6 +513,10 @@ public sealed class ConPtySession : IDisposable
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateProcess(IntPtr hProcess, uint uExitCode);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
