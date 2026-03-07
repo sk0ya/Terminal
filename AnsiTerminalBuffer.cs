@@ -157,6 +157,8 @@ internal sealed class AnsiTerminalBuffer
     public bool IsAlternateScreenActive => _primaryScreenBackup is not null;
     public TerminalMouseEncoding MouseEncoding => ResolveMouseEncoding();
     public TerminalMouseTrackingMode MouseTrackingMode => _mouseTrackingMode;
+    public int ScrollbackLineCount => _scrollback.Count;
+    public int VisibleLineCount => FindLastVisibleScreenRow(showCursor: false) + 1;
 
     public void Resize(short columns, short rows)
     {
@@ -309,6 +311,24 @@ internal sealed class AnsiTerminalBuffer
         _scrollback.Clear();
         _scrollbackRenderCache.Clear();
         _renderCacheDirty = true;
+    }
+
+    public string CreatePlainTextSnapshot()
+    {
+        var builder = new StringBuilder();
+        bool isFirstLine = true;
+        foreach (TerminalLine line in _scrollback)
+        {
+            AppendPlainTextLine(builder, line, ref isFirstLine);
+        }
+
+        int lastScreenRow = FindLastVisibleScreenRow(showCursor: false);
+        for (int row = 0; row <= lastScreenRow; row++)
+        {
+            AppendPlainTextLine(builder, _screen[row], ref isFirstLine);
+        }
+
+        return builder.ToString();
     }
 
     internal string GetScreenLineText(int row)
@@ -2037,6 +2057,17 @@ internal sealed class AnsiTerminalBuffer
         }
 
         return builder.ToString();
+    }
+
+    private static void AppendPlainTextLine(StringBuilder builder, TerminalLine line, ref bool isFirstLine)
+    {
+        if (!isFirstLine)
+        {
+            builder.AppendLine();
+        }
+
+        isFirstLine = false;
+        builder.Append(ExtractLineText(line).TrimEnd());
     }
 
     private TerminalRenderLineSnapshot CreateLineSnapshot(TerminalLine line, int cursorColumn, int anchorColumn, bool showCursor)

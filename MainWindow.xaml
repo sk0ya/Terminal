@@ -5,155 +5,84 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="ConPTY Terminal"
-        Height="720"
-        Width="1000"
-        MinWidth="720"
-        MinHeight="480">
-    <Grid Margin="12">
+        Width="1200"
+        Height="760"
+        MinWidth="840"
+        MinHeight="520"
+        Background="#0E0E0E"
+        Foreground="#F3F3F3"
+        PreviewKeyDown="Window_PreviewKeyDown">
+    <Window.Resources>
+        <SolidColorBrush x:Key="ChromeBrush" Color="#151515" />
+        <SolidColorBrush x:Key="ChromeBorderBrush" Color="#2A2A2A" />
+        <SolidColorBrush x:Key="TabIdleBrush" Color="#1B1B1B" />
+        <SolidColorBrush x:Key="TabActiveBrush" Color="#0E0E0E" />
+        <SolidColorBrush x:Key="TabHoverBrush" Color="#232323" />
+        <SolidColorBrush x:Key="TabTextBrush" Color="#EDEDED" />
+        <SolidColorBrush x:Key="TabTextMutedBrush" Color="#A7A7A7" />
+        <SolidColorBrush x:Key="AccentBrush" Color="#4BA3FF" />
+
+        <Style x:Key="TabActionButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="34" />
+            <Setter Property="Width" Value="34" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="FontSize" Value="18" />
+            <Setter Property="Foreground" Value="{StaticResource TabTextMutedBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+        </Style>
+
+        <Style x:Key="TabTextButtonStyle" TargetType="Button" BasedOn="{StaticResource TabActionButtonStyle}">
+            <Setter Property="Width" Value="Auto" />
+            <Setter Property="Padding" Value="10,0" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+    </Window.Resources>
+
+    <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
+            <RowDefinition Height="40" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Grid Grid.Row="0" Margin="0,0,0,8">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
+        <Border Grid.Row="0"
+                Background="{StaticResource ChromeBrush}"
+                BorderBrush="{StaticResource ChromeBorderBrush}"
+                BorderThickness="0,0,0,1">
+            <DockPanel LastChildFill="False">
+                <ListBox x:Name="TabStrip"
+                         DockPanel.Dock="Left"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         SelectionChanged="TabStrip_SelectionChanged"
+                         ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                         ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                </ListBox>
 
-            <TextBlock Grid.Column="0"
-                       VerticalAlignment="Center"
-                       Margin="0,0,8,0"
-                       Text="Command" />
-            <TextBox x:Name="CommandTextBox"
-                     Grid.Column="1"
-                     Margin="0,0,8,0"
-                     Height="30"
-                     VerticalContentAlignment="Center"
-                     Text="cmd.exe /K" />
-            <Button x:Name="StartButton"
-                    Grid.Column="2"
-                    Width="90"
-                    Margin="0,0,8,0"
-                    Content="Start"
-                    Click="StartButton_Click" />
-            <Button x:Name="StopButton"
-                    Grid.Column="3"
-                    Width="90"
-                    Margin="0,0,8,0"
-                    Content="Stop"
-                    Click="StopButton_Click"
-                    IsEnabled="False" />
-            <Button x:Name="RecoverButton"
-                    Grid.Column="4"
-                    Width="90"
-                    Content="Recover"
-                    Click="RecoverButton_Click"
-                    IsEnabled="False" />
-        </Grid>
+                <Button x:Name="NewTabButton"
+                        DockPanel.Dock="Left"
+                        Style="{StaticResource TabActionButtonStyle}"
+                        FontSize="20"
+                        Content="+"
+                        Click="NewTabButton_Click" />
+                <Button x:Name="SettingsButton"
+                        DockPanel.Dock="Left"
+                        Style="{StaticResource TabTextButtonStyle}"
+                        Content="Settings"
+                        Click="SettingsButton_Click" />
+            </DockPanel>
+        </Border>
 
-        <Grid Grid.Row="1">
-            <RichTextBox x:Name="TerminalOutput"
-                         IsReadOnly="True"
-                         IsUndoEnabled="False"
-                         Focusable="True"
-                         IsTabStop="True"
-                         VerticalScrollBarVisibility="Auto"
-                         HorizontalScrollBarVisibility="Auto"
-                         FontFamily="Cascadia Mono"
-                         FontSize="14"
-                         Background="#111111"
-                         Foreground="#E3E3E3"
-                         BorderBrush="#303030"
-                         Padding="8"
-                         PreviewKeyDown="TerminalOutput_PreviewKeyDown"
-                         PreviewTextInput="TerminalOutput_PreviewTextInput"
-                         PreviewMouseDown="TerminalOutput_PreviewMouseDown"
-                         PreviewMouseUp="TerminalOutput_PreviewMouseUp"
-                         PreviewMouseMove="TerminalOutput_PreviewMouseMove"
-                         PreviewMouseWheel="TerminalOutput_PreviewMouseWheel"
-                         GotKeyboardFocus="TerminalOutput_GotKeyboardFocus"
-                         LostKeyboardFocus="TerminalOutput_LostKeyboardFocus" />
-
-            <Canvas IsHitTestVisible="False"
-                    Panel.ZIndex="1">
-                <Border x:Name="TerminalCursorOverlay"
-                        Visibility="Collapsed"
-                        Panel.ZIndex="2"
-                        Width="2"
-                        Height="20"
-                        Background="#A0E3E3E3" />
-
-                <TextBox x:Name="TerminalInputProxy"
-                        Panel.ZIndex="1"
-                        Width="2"
-                        Height="20"
-                        Opacity="1"
-                        Background="Transparent"
-                        BorderThickness="0"
-                        Padding="0"
-                        Foreground="#E3E3E3"
-                        CaretBrush="Transparent"
-                        FontFamily="Cascadia Mono"
-                        FontSize="14"
-                        Focusable="True"
-                        IsUndoEnabled="False"
-                        KeyboardNavigation.IsTabStop="False"
-                        TextAlignment="Left"
-                        HorizontalContentAlignment="Left"
-                        VerticalContentAlignment="Top"
-                        PreviewKeyDown="TerminalInputProxy_PreviewKeyDown"
-                        TextChanged="TerminalInputProxy_TextChanged"
-                        GotKeyboardFocus="TerminalInputProxy_GotKeyboardFocus"
-                        LostKeyboardFocus="TerminalInputProxy_LostKeyboardFocus"
-                        InputMethod.IsInputMethodEnabled="True"
-                        InputMethod.PreferredImeState="On" />
-            </Canvas>
-        </Grid>
-
-        <TextBlock x:Name="StatusText"
-                   Grid.Row="2"
-                   Margin="0,8,0,0"
-                   Foreground="#666666"
-                   Text="Ready" />
-
-        <Grid Grid.Row="3" Margin="0,8,0,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-
-            <TextBlock Grid.Column="0"
-                       VerticalAlignment="Center"
-                       Foreground="#7A7A7A"
-                       Text="Type directly in the terminal. Ctrl+Shift+C copies, Ctrl+V pastes, Ctrl+C sends break."
-                       TextWrapping="Wrap" />
-            <Button x:Name="PasteButton"
-                    Grid.Column="1"
-                    Width="90"
-                    Margin="8,0,8,0"
-                    Content="Paste"
-                    Click="PasteButton_Click"
-                    IsEnabled="False" />
-            <Button x:Name="InterruptButton"
-                    Grid.Column="2"
-                    Width="90"
-                    Margin="0,0,8,0"
-                    Content="Ctrl+C"
-                    Click="InterruptButton_Click"
-                    IsEnabled="False" />
-            <Button x:Name="ClearButton"
-                    Grid.Column="3"
-                    Width="110"
-                    Content="Clear View"
-                    Click="ClearButton_Click" />
-        </Grid>
+        <ContentControl x:Name="ActiveTabHost"
+                        Grid.Row="1"
+                        Focusable="False"
+                        Background="#0E0E0E" />
     </Grid>
 </Window>

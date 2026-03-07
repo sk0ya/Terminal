@@ -1,0 +1,447 @@
+<UserControl x:Class="ConPtyTerminal.TerminalTabView"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Background="#151311"
+        Foreground="#EEE5D8">
+    <UserControl.Resources>
+        <SolidColorBrush x:Key="WindowBrush" Color="#151311" />
+        <SolidColorBrush x:Key="PanelBrush" Color="#211C18" />
+        <SolidColorBrush x:Key="PanelAltBrush" Color="#2A241E" />
+        <SolidColorBrush x:Key="InputBrush" Color="#120F0D" />
+        <SolidColorBrush x:Key="BorderBrush" Color="#43372B" />
+        <SolidColorBrush x:Key="AccentBrush" Color="#E19A4A" />
+        <SolidColorBrush x:Key="AccentMutedBrush" Color="#4F3820" />
+        <SolidColorBrush x:Key="ForegroundMutedBrush" Color="#B9AD9E" />
+        <SolidColorBrush x:Key="ForegroundDimBrush" Color="#8B7E70" />
+
+        <Style x:Key="PanelBorderStyle" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource PanelBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="18" />
+        </Style>
+
+        <Style x:Key="InputTextBoxStyle" TargetType="TextBox">
+            <Setter Property="Height" Value="36" />
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="Background" Value="{StaticResource InputBrush}" />
+            <Setter Property="Foreground" Value="#F4EBDD" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="SelectionBrush" Value="{StaticResource AccentBrush}" />
+            <Setter Property="CaretBrush" Value="{StaticResource AccentBrush}" />
+        </Style>
+
+        <Style x:Key="InputComboBoxStyle" TargetType="ComboBox">
+            <Setter Property="Height" Value="36" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Background" Value="{StaticResource InputBrush}" />
+            <Setter Property="Foreground" Value="#F4EBDD" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+
+        <Style x:Key="ToolbarButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="36" />
+            <Setter Property="Padding" Value="14,0" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="Foreground" Value="#F6EEDF" />
+            <Setter Property="Background" Value="{StaticResource PanelAltBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+
+        <Style x:Key="AccentButtonStyle" TargetType="Button" BasedOn="{StaticResource ToolbarButtonStyle}">
+            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+            <Setter Property="Foreground" Value="#23170C" />
+            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+        </Style>
+
+        <Style x:Key="ChipBorderStyle" TargetType="Border">
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="Background" Value="{StaticResource PanelAltBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="999" />
+        </Style>
+    </UserControl.Resources>
+
+    <Grid Margin="0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0"
+                Style="{StaticResource PanelBorderStyle}"
+                Padding="18"
+                Margin="0"
+                Visibility="Collapsed">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0">
+                        <TextBlock FontFamily="Cascadia Code"
+                                   FontSize="26"
+                                   FontWeight="SemiBold"
+                                   Text="ConPTY Terminal" />
+                        <TextBlock Margin="0,4,0,0"
+                                   Foreground="{StaticResource ForegroundMutedBrush}"
+                                   Text="Profiles, working directory, search, transcript export, and viewport controls in one shell surface." />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Top">
+                        <Button x:Name="FindToggleButton"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Content="Find"
+                                Click="FindToggleButton_Click" />
+                        <Button x:Name="SaveTranscriptButton"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Content="Save Output"
+                                Click="SaveTranscriptButton_Click" />
+                        <Button x:Name="PasteButton"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Content="Paste"
+                                Click="PasteButton_Click"
+                                IsEnabled="False" />
+                        <Button x:Name="InterruptButton"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Content="Ctrl+C"
+                                Click="InterruptButton_Click"
+                                IsEnabled="False" />
+                        <Button x:Name="ClearButton"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Content="Clear View"
+                                Click="ClearButton_Click" />
+                        <Button x:Name="ZoomOutButton"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Width="40"
+                                Padding="0"
+                                Content="-"
+                                Click="ZoomOutButton_Click" />
+                        <Button x:Name="ZoomResetButton"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Width="70"
+                                Padding="0"
+                                Content="100%"
+                                Click="ZoomResetButton_Click" />
+                        <Button x:Name="ZoomInButton"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Width="40"
+                                Padding="0"
+                                Margin="0"
+                                Content="+"
+                                Click="ZoomInButton_Click" />
+                    </StackPanel>
+                </Grid>
+
+                <Grid Grid.Row="1" Margin="0,18,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="210" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="250" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0"
+                               Margin="0,0,10,0"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource ForegroundMutedBrush}"
+                               Text="Profile" />
+                    <ComboBox x:Name="ProfileComboBox"
+                              Grid.Column="1"
+                              Margin="0,0,14,0"
+                              Style="{StaticResource InputComboBoxStyle}"
+                              SelectionChanged="ProfileComboBox_SelectionChanged" />
+
+                    <TextBlock Grid.Column="2"
+                               Margin="0,0,10,0"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource ForegroundMutedBrush}"
+                               Text="Command" />
+                    <TextBox x:Name="CommandTextBox"
+                             Grid.Column="3"
+                             Margin="0,0,14,0"
+                             Style="{StaticResource InputTextBoxStyle}"
+                             TextChanged="CommandTextBox_TextChanged"
+                             KeyDown="LaunchInput_KeyDown" />
+
+                    <TextBlock Grid.Column="4"
+                               Margin="0,0,10,0"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource ForegroundMutedBrush}"
+                               Text="Start In" />
+                    <TextBox x:Name="WorkingDirectoryTextBox"
+                             Grid.Column="5"
+                             Margin="0,0,8,0"
+                             Style="{StaticResource InputTextBoxStyle}"
+                             TextChanged="WorkingDirectoryTextBox_TextChanged"
+                             KeyDown="LaunchInput_KeyDown" />
+                    <Button x:Name="WorkingDirectoryHereButton"
+                            Grid.Column="6"
+                            Width="56"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Content="Here"
+                            Click="WorkingDirectoryHereButton_Click" />
+
+                    <Button x:Name="StartButton"
+                            Grid.Column="7"
+                            Width="86"
+                            Style="{StaticResource AccentButtonStyle}"
+                            Content="Start"
+                            Click="StartButton_Click" />
+                    <Button x:Name="StopButton"
+                            Grid.Column="8"
+                            Width="86"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Content="Stop"
+                            Click="StopButton_Click"
+                            IsEnabled="False" />
+                    <Button x:Name="RecoverButton"
+                            Grid.Column="9"
+                            Width="96"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Content="Recover"
+                            Click="RecoverButton_Click"
+                            IsEnabled="False" />
+                    <Button x:Name="RestartButton"
+                            Grid.Column="10"
+                            Width="96"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Margin="0"
+                            Content="Restart"
+                            Click="RestartButton_Click"
+                            IsEnabled="False" />
+                </Grid>
+
+                <Grid Grid.Row="2" Margin="0,14,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock x:Name="ProfileHintText"
+                               Grid.Column="0"
+                               Foreground="{StaticResource ForegroundMutedBrush}"
+                               Text="Use any executable or shell command line."
+                               TextWrapping="Wrap" />
+                    <TextBlock Grid.Column="1"
+                               Foreground="{StaticResource ForegroundDimBrush}"
+                               HorizontalAlignment="Right"
+                               Text="Ctrl+Shift+F Find   Ctrl+Shift+S Save   Ctrl+Shift+R Restart   Ctrl+Plus/Minus Zoom" />
+                </Grid>
+            </Grid>
+        </Border>
+
+        <Border x:Name="FindPanel"
+                Grid.Row="1"
+                Style="{StaticResource PanelBorderStyle}"
+                Padding="14"
+                Margin="0"
+                Visibility="Collapsed">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="280" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0"
+                           Margin="0,0,10,0"
+                           VerticalAlignment="Center"
+                           Foreground="{StaticResource ForegroundMutedBrush}"
+                           Text="Find" />
+                <TextBox x:Name="FindTextBox"
+                         Grid.Column="1"
+                         Margin="0,0,10,0"
+                         Style="{StaticResource InputTextBoxStyle}"
+                         TextChanged="FindTextBox_TextChanged"
+                         KeyDown="FindTextBox_KeyDown" />
+                <CheckBox x:Name="FindCaseSensitiveCheckBox"
+                          Grid.Column="2"
+                          Margin="0,0,12,0"
+                          VerticalAlignment="Center"
+                          Foreground="{StaticResource ForegroundMutedBrush}"
+                          Click="FindOptions_Changed"
+                          Content="Case" />
+                <Button Grid.Column="3"
+                        Style="{StaticResource ToolbarButtonStyle}"
+                        Content="Previous"
+                        Click="FindPreviousButton_Click" />
+                <Button Grid.Column="4"
+                        Style="{StaticResource ToolbarButtonStyle}"
+                        Content="Next"
+                        Click="FindNextButton_Click" />
+                <TextBlock x:Name="FindCountText"
+                           Grid.Column="5"
+                           VerticalAlignment="Center"
+                           Foreground="{StaticResource ForegroundMutedBrush}"
+                           Text="Find" />
+                <Button Grid.Column="6"
+                        Style="{StaticResource ToolbarButtonStyle}"
+                        Margin="0"
+                        Content="Close"
+                        Click="CloseFindButton_Click" />
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="2"
+                Style="{StaticResource PanelBorderStyle}"
+                Padding="0"
+                CornerRadius="0"
+                BorderThickness="0">
+            <Grid>
+                <RichTextBox x:Name="TerminalOutput"
+                             Margin="0"
+                             Padding="12"
+                             IsReadOnly="True"
+                             IsUndoEnabled="False"
+                             Focusable="True"
+                             IsTabStop="True"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto"
+                             FontFamily="Cascadia Mono"
+                             FontSize="14"
+                             Background="#0E0C0A"
+                             Foreground="#E8E0D2"
+                             BorderThickness="0"
+                             PreviewKeyDown="TerminalOutput_PreviewKeyDown"
+                             PreviewTextInput="TerminalOutput_PreviewTextInput"
+                             PreviewMouseDown="TerminalOutput_PreviewMouseDown"
+                             PreviewMouseUp="TerminalOutput_PreviewMouseUp"
+                             PreviewMouseMove="TerminalOutput_PreviewMouseMove"
+                             PreviewMouseWheel="TerminalOutput_PreviewMouseWheel"
+                             GotKeyboardFocus="TerminalOutput_GotKeyboardFocus"
+                             LostKeyboardFocus="TerminalOutput_LostKeyboardFocus" />
+
+                <Canvas IsHitTestVisible="False"
+                        Panel.ZIndex="1">
+                    <Border x:Name="TerminalCursorOverlay"
+                            Visibility="Collapsed"
+                            Panel.ZIndex="2"
+                            Width="2"
+                            Height="20"
+                            Background="#A0E3E3E3" />
+
+                    <TextBox x:Name="TerminalInputProxy"
+                             Panel.ZIndex="1"
+                             Width="2"
+                             Height="20"
+                             Opacity="1"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             Padding="0"
+                             Foreground="#E8E0D2"
+                             CaretBrush="Transparent"
+                             FontFamily="Cascadia Mono"
+                             FontSize="14"
+                             Focusable="True"
+                             IsUndoEnabled="False"
+                             KeyboardNavigation.IsTabStop="False"
+                             TextAlignment="Left"
+                             HorizontalContentAlignment="Left"
+                             VerticalContentAlignment="Top"
+                             PreviewKeyDown="TerminalInputProxy_PreviewKeyDown"
+                             TextChanged="TerminalInputProxy_TextChanged"
+                             GotKeyboardFocus="TerminalInputProxy_GotKeyboardFocus"
+                             LostKeyboardFocus="TerminalInputProxy_LostKeyboardFocus"
+                             InputMethod.IsInputMethodEnabled="True"
+                             InputMethod.PreferredImeState="On" />
+                </Canvas>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="3"
+                Style="{StaticResource PanelBorderStyle}"
+                Padding="12"
+                Margin="0"
+                Visibility="Collapsed">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="320" />
+                </Grid.ColumnDefinitions>
+
+                <WrapPanel Grid.Column="0"
+                           VerticalAlignment="Center">
+                    <Border Style="{StaticResource ChipBorderStyle}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Foreground="{StaticResource ForegroundDimBrush}" Text="Session " />
+                            <TextBlock x:Name="SessionModeValueText" Text="Idle" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource ChipBorderStyle}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Foreground="{StaticResource ForegroundDimBrush}" Text="Viewport " />
+                            <TextBlock x:Name="ViewportValueText" Text="120x30" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource ChipBorderStyle}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Foreground="{StaticResource ForegroundDimBrush}" Text="Lines " />
+                            <TextBlock x:Name="ScrollbackValueText" Text="0 sb / 0 vis" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource ChipBorderStyle}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Foreground="{StaticResource ForegroundDimBrush}" Text="Scroll " />
+                            <TextBlock x:Name="FollowValueText" Text="Follow" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource ChipBorderStyle}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Foreground="{StaticResource ForegroundDimBrush}" Text="Font " />
+                            <TextBlock x:Name="FontSizeValueText" Text="14px" />
+                        </StackPanel>
+                    </Border>
+                </WrapPanel>
+
+                <TextBlock x:Name="StatusText"
+                           Grid.Column="1"
+                           VerticalAlignment="Center"
+                           Margin="12,0"
+                           Foreground="{StaticResource ForegroundMutedBrush}"
+                           Text="Ready"
+                           TextTrimming="CharacterEllipsis" />
+
+                <TextBlock x:Name="WorkingDirectorySummaryText"
+                           Grid.Column="2"
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Right"
+                           Foreground="{StaticResource ForegroundDimBrush}"
+                           TextTrimming="CharacterEllipsis" />
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

@@ -17,6 +17,7 @@ public sealed class ConPtySession : ITerminalSession
     private const uint WaitTimeout = 0x00000102;
 
     private readonly object _syncRoot = new();
+    private readonly string? _workingDirectory;
     private IntPtr _pseudoConsole;
     private IntPtr _processHandle;
     private IntPtr _threadHandle;
@@ -49,7 +50,7 @@ public sealed class ConPtySession : ITerminalSession
     public event EventHandler<string>? OutputReceived;
     public event EventHandler<int>? Exited;
 
-    public ConPtySession(short columns, short rows, string commandLine)
+    public ConPtySession(short columns, short rows, string commandLine, string? workingDirectory = null)
     {
         if (columns <= 0)
         {
@@ -65,6 +66,13 @@ public sealed class ConPtySession : ITerminalSession
         {
             throw new ArgumentException("Command line is required.", nameof(commandLine));
         }
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory) && !Directory.Exists(workingDirectory))
+        {
+            throw new DirectoryNotFoundException($"Working directory was not found: {workingDirectory}");
+        }
+
+        _workingDirectory = string.IsNullOrWhiteSpace(workingDirectory) ? null : workingDirectory;
 
         try
         {
@@ -441,7 +449,7 @@ public sealed class ConPtySession : ITerminalSession
                     false,
                     ExtendedStartupInfoPresent,
                     IntPtr.Zero,
-                    null,
+                    _workingDirectory,
                     ref startupInfo,
                     out ProcessInformation processInfo))
             {

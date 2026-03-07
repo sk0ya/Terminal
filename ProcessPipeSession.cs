@@ -9,6 +9,7 @@ public sealed class ProcessPipeSession : ITerminalSession
 {
     private readonly object _syncRoot = new();
     private readonly string _commandLine;
+    private readonly string? _workingDirectory;
     private short _columns;
     private short _rows;
     private Process? _process;
@@ -34,20 +35,26 @@ public sealed class ProcessPipeSession : ITerminalSession
     public event EventHandler<int>? Exited;
 
     public ProcessPipeSession(string commandLine)
-        : this(commandLine, null, null)
+        : this(commandLine, null, null, null)
     {
     }
 
-    public ProcessPipeSession(string commandLine, short? columns, short? rows)
+    public ProcessPipeSession(string commandLine, short? columns, short? rows, string? workingDirectory = null)
     {
         if (string.IsNullOrWhiteSpace(commandLine))
         {
             throw new ArgumentException("Command line is required.", nameof(commandLine));
         }
 
+        if (!string.IsNullOrWhiteSpace(workingDirectory) && !Directory.Exists(workingDirectory))
+        {
+            throw new DirectoryNotFoundException($"Working directory was not found: {workingDirectory}");
+        }
+
         _commandLine = commandLine.Trim();
         _columns = columns.GetValueOrDefault();
         _rows = rows.GetValueOrDefault();
+        _workingDirectory = string.IsNullOrWhiteSpace(workingDirectory) ? null : workingDirectory;
     }
 
     public void Start()
@@ -80,6 +87,12 @@ public sealed class ProcessPipeSession : ITerminalSession
             StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
             StandardErrorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
         };
+
+        if (!string.IsNullOrWhiteSpace(_workingDirectory))
+        {
+            startInfo.WorkingDirectory = _workingDirectory;
+        }
+
         foreach (string argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);

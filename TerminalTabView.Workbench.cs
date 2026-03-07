@@ -1,0 +1,659 @@
+using Microsoft.Win32;
+using System.IO;
+using System.Text;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Documents;
+using System.Windows.Input;
+using System.Windows.Threading;
+
+namespace ConPtyTerminal;
+
+public partial class TerminalTabView
+{
+    private const double DefaultTerminalFontSize = 14;
+    private const double MinTerminalFontSize = 11;
+    private const double MaxTerminalFontSize = 24;
+
+    private readonly List<TerminalProfileDefinition> _profiles = [];
+    private readonly TerminalProfileDefinition _customProfile = new(
+        "custom",
+        "Custom",
+        string.Empty,
+        "Use any executable or shell command line.",
+        IsCustom: true);
+
+    private string _activeCommandLine = string.Empty;
+    private string _activeWorkingDirectory = Environment.CurrentDirectory;
+    private bool _suppressProfileSelectionChanged;
+    private bool _suppressCommandTextChanged;
+
+    private void InitializeTerminalWorkbench()
+    {
+        WorkingDirectoryTextBox.Text = Environment.CurrentDirectory;
+        BuildProfileCatalog();
+        ApplySavedWorkbenchSettings();
+        ApplyTerminalFontSize(TerminalOutput.FontSize, persist: false);
+        UpdateFindMatchCount();
+        UpdateTerminalChrome();
+    }
+
+    private void BuildProfileCatalog()
+    {
+        _profiles.Clear();
+        _profiles.AddRange(TerminalProfileCatalog.CreateProfiles());
+        _profiles.Add(_customProfile);
+        ProfileComboBox.ItemsSource = _profiles;
+        ProfileComboBox.DisplayMemberPath = nameof(TerminalProfileDefinition.DisplayName);
+    }
+
+    private void ApplySavedWorkbenchSettings()
+    {
+        TerminalAppSettings settings = TerminalAppSettings.Load();
+
+        string commandLine = string.IsNullOrWhiteSpace(settings.CommandLine)
+            ? TerminalProfileCatalog.BuildDefaultCommandLine()
+            : settings.CommandLine.Trim();
+        string workingDirectory = string.IsNullOrWhiteSpace(settings.WorkingDirectory)
+            ? Environment.CurrentDirectory
+            : settings.WorkingDirectory.Trim();
+
+        WorkingDirectoryTextBox.Text = workingDirectory;
+        ApplyTerminalFontSize(settings.FontSize <= 0 ? DefaultTerminalFontSize : settings.FontSize, persist: false);
+        SetSelectedProfile(settings.SelectedProfileId, commandLine);
+    }
+
+    public TerminalAppSettings CreateSettingsSnapshot()
+    {
+        return new TerminalAppSettings
+        {
+            SelectedProfileId = GetSelectedProfile().Id,
+            CommandLine = string.IsNullOrWhiteSpace(CommandTextBox.Text)
+                ? TerminalProfileCatalog.BuildDefaultCommandLine()
+                : CommandTextBox.Text.Trim(),
+            WorkingDirectory = string.IsNullOrWhiteSpace(WorkingDirectoryTextBox.Text)
+                ? Environment.CurrentDirectory
+                : WorkingDirectoryTextBox.Text.Trim(),
+            FontSize = TerminalOutput.FontSize
+        };
+    }
+
+    private void SetSelectedProfile(string? profileId, string commandLine)
+    {
+        TerminalProfileDefinition selectedProfile =
+            _profiles.FirstOrDefault(profile => string.Equals(profile.Id, profileId, StringComparison.OrdinalIgnoreCase)) ??
+            MatchProfileByCommandLine(commandLine) ??
+            _customProfile;
+
+        string effectiveCommandLine = string.IsNullOrWhiteSpace(commandLine) && !selectedProfile.IsCustom
+            ? selectedProfile.CommandLine
+            : commandLine;
+
+        _suppressProfileSelectionChanged = true;
+        ProfileComboBox.SelectedItem = selectedProfile;
+        _suppressProfileSelectionChanged = false;
+
+        _suppressCommandTextChanged = true;
+        CommandTextBox.Text = effectiveCommandLine;
+        _suppressCommandTextChanged = false;
+
+        UpdateProfileHint();
+    }
+
+    private TerminalProfileDefinition GetSelectedProfile()
+    {
+        return ProfileComboBox.SelectedItem as TerminalProfileDefinition ?? _customProfile;
+    }
+
+    private TerminalProfileDefinition? MatchProfileByCommandLine(string? commandLine)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine))
+        {
+            return null;
+        }
+
+        string normalized = commandLine.Trim();
+        return _profiles.FirstOrDefault(profile =>
+            !profile.IsCustom &&
+            string.Equals(profile.CommandLine, normalized, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void UpdateProfileHint()
+    {
+        TerminalProfileDefinition profile = GetSelectedProfile();
+        ProfileHintText.Text = profile.Description;
+    }
+
+    private bool TryBuildLaunchRequest(out string commandLine, out string workingDirectory)
+    {
+        commandLine = string.IsNullOrWhiteSpace(CommandTextBox.Text)
+            ? TerminalProfileCatalog.BuildDefaultCommandLine()
+            : CommandTextBox.Text.Trim();
+
+        try
+        {
+            workingDirectory = NormalizeWorkingDirectory(WorkingDirectoryTextBox.Text);
+            WorkingDirectoryTextBox.Text = workingDirectory;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            workingDirectory = string.Empty;
+            SetStatus($"Invalid working directory: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static string NormalizeWorkingDirectory(string? rawPath)
+    {
+        string candidate = string.IsNullOrWhiteSpace(rawPath)
+            ? Environment.CurrentDirectory
+            : Environment.ExpandEnvironmentVariables(rawPath.Trim());
+        string fullPath = Path.GetFullPath(candidate);
+        if (!Directory.Exists(fullPath))
+        {
+            throw new DirectoryNotFoundException(fullPath);
+        }
+
+        return fullPath;
+    }
+
+    private void UpdateActiveLaunchState(string commandLine, string workingDirectory)
+    {
+        _activeCommandLine = commandLine;
+        _activeWorkingDirectory = workingDirectory;
+        UpdateTerminalChrome();
+    }
+
+    private void ClearActiveLaunchState()
+    {
+        _activeCommandLine = string.Empty;
+        _activeWorkingDirectory = Environment.CurrentDirectory;
+        UpdateTerminalChrome();
+    }
+
+    private void UpdateTerminalChrome()
+    {
+        SessionModeValueText.Text = _session is null
+            ? "Idle"
+            : _session.Capabilities.DisplayName;
+        ViewportValueText.Text = $"{_currentColumns}x{_currentRows}";
+        ScrollbackValueText.Text = $"{_terminalBuffer.ScrollbackLineCount} sb / {_terminalBuffer.VisibleLineCount} vis";
+        FollowValueText.Text = _followTerminalOutput ? "Follow" : "Pinned";
+        FontSizeValueText.Text = $"{TerminalOutput.FontSize:0}px";
+
+        string workingDirectory = _session is null
+            ? (string.IsNullOrWhiteSpace(WorkingDirectoryTextBox.Text) ? Environment.CurrentDirectory : WorkingDirectoryTextBox.Text.Trim())
+            : _activeWorkingDirectory;
+        WorkingDirectorySummaryText.Text = workingDirectory;
+    }
+
+    private void ProfileComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressProfileSelectionChanged)
+        {
+            return;
+        }
+
+        TerminalProfileDefinition profile = GetSelectedProfile();
+        if (!profile.IsCustom && !string.IsNullOrWhiteSpace(profile.CommandLine))
+        {
+            _suppressCommandTextChanged = true;
+            CommandTextBox.Text = profile.CommandLine;
+            _suppressCommandTextChanged = false;
+        }
+
+        UpdateProfileHint();
+        UpdateTerminalChrome();
+    }
+
+    private void CommandTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppressCommandTextChanged)
+        {
+            return;
+        }
+
+        TerminalProfileDefinition matchedProfile = MatchProfileByCommandLine(CommandTextBox.Text) ?? _customProfile;
+        _suppressProfileSelectionChanged = true;
+        ProfileComboBox.SelectedItem = matchedProfile;
+        _suppressProfileSelectionChanged = false;
+        UpdateProfileHint();
+    }
+
+    private void WorkingDirectoryTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        UpdateTerminalChrome();
+    }
+
+    private void WorkingDirectoryHereButton_Click(object sender, RoutedEventArgs e)
+    {
+        WorkingDirectoryTextBox.Text = Environment.CurrentDirectory;
+        SetStatus("Working directory reset to the current process directory.");
+    }
+
+    private async void RestartButton_Click(object sender, RoutedEventArgs e)
+    {
+        _autoRecoveryAttempts = 0;
+        await StartTerminalAsync();
+    }
+
+    private void SaveTranscriptButton_Click(object sender, RoutedEventArgs e)
+    {
+        SaveTranscript();
+    }
+
+    private void FindToggleButton_Click(object sender, RoutedEventArgs e)
+    {
+        ToggleFindPanel();
+    }
+
+    private void CloseFindButton_Click(object sender, RoutedEventArgs e)
+    {
+        CloseFindPanel();
+    }
+
+    private void FindNextButton_Click(object sender, RoutedEventArgs e)
+    {
+        _ = TryFindInTerminal(forward: true);
+    }
+
+    private void FindPreviousButton_Click(object sender, RoutedEventArgs e)
+    {
+        _ = TryFindInTerminal(forward: false);
+    }
+
+    private void FindTextBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        Key key = GetEffectiveKey(e);
+        if (key == Key.Enter)
+        {
+            _ = TryFindInTerminal((Keyboard.Modifiers & ModifierKeys.Shift) == 0);
+            e.Handled = true;
+            return;
+        }
+
+        if (key == Key.Escape)
+        {
+            CloseFindPanel();
+            e.Handled = true;
+        }
+    }
+
+    private void FindTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        UpdateFindMatchCount();
+    }
+
+    private void FindOptions_Changed(object sender, RoutedEventArgs e)
+    {
+        UpdateFindMatchCount();
+    }
+
+    private void ZoomOutButton_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyTerminalFontSize(TerminalOutput.FontSize - 1);
+    }
+
+    private void ZoomResetButton_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyTerminalFontSize(DefaultTerminalFontSize);
+    }
+
+    private void ZoomInButton_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyTerminalFontSize(TerminalOutput.FontSize + 1);
+    }
+
+    private void LaunchInput_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (_session is not null || _isSessionTransitionActive || _isRecovering || _isClosingWindow)
+        {
+            return;
+        }
+
+        if (GetEffectiveKey(e) != Key.Enter)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        StartButton_Click(StartButton, new RoutedEventArgs(Button.ClickEvent));
+    }
+
+    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        ModifierKeys modifiers = Keyboard.Modifiers;
+        Key key = GetEffectiveKey(e);
+
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.F)
+        {
+            OpenFindPanel();
+            e.Handled = true;
+            return;
+        }
+
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.S)
+        {
+            SaveTranscript();
+            e.Handled = true;
+            return;
+        }
+
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.R)
+        {
+            RestartButton_Click(RestartButton, new RoutedEventArgs(Button.ClickEvent));
+            e.Handled = true;
+            return;
+        }
+
+        if (modifiers == ModifierKeys.Control && key is Key.Add or Key.OemPlus)
+        {
+            ApplyTerminalFontSize(TerminalOutput.FontSize + 1);
+            e.Handled = true;
+            return;
+        }
+
+        if (modifiers == ModifierKeys.Control && key is Key.Subtract or Key.OemMinus)
+        {
+            ApplyTerminalFontSize(TerminalOutput.FontSize - 1);
+            e.Handled = true;
+            return;
+        }
+
+        if (modifiers == ModifierKeys.Control && key is Key.D0 or Key.NumPad0)
+        {
+            ApplyTerminalFontSize(DefaultTerminalFontSize);
+            e.Handled = true;
+            return;
+        }
+
+        if (FindPanel.Visibility == Visibility.Visible && key == Key.F3)
+        {
+            _ = TryFindInTerminal((modifiers & ModifierKeys.Shift) == 0);
+            e.Handled = true;
+            return;
+        }
+
+        if (FindPanel.Visibility == Visibility.Visible && key == Key.Escape)
+        {
+            CloseFindPanel();
+            e.Handled = true;
+        }
+    }
+
+    private void ApplyTerminalFontSize(double fontSize, bool persist = true)
+    {
+        double clamped = Math.Round(Math.Clamp(fontSize, MinTerminalFontSize, MaxTerminalFontSize));
+        TerminalOutput.FontSize = clamped;
+        TerminalInputProxy.FontSize = clamped;
+        UpdateTerminalChrome();
+        RequestDocumentRender(immediate: true);
+        _ = Dispatcher.BeginInvoke(UpdateTerminalViewportSize, DispatcherPriority.Loaded);
+    }
+
+    public void ApplySettings(TerminalAppSettings settings)
+    {
+        string commandLine = string.IsNullOrWhiteSpace(settings.CommandLine)
+            ? TerminalProfileCatalog.BuildDefaultCommandLine()
+            : settings.CommandLine.Trim();
+        string workingDirectory = string.IsNullOrWhiteSpace(settings.WorkingDirectory)
+            ? Environment.CurrentDirectory
+            : settings.WorkingDirectory.Trim();
+
+        WorkingDirectoryTextBox.Text = workingDirectory;
+        ApplyTerminalFontSize(settings.FontSize <= 0 ? DefaultTerminalFontSize : settings.FontSize, persist: false);
+        SetSelectedProfile(settings.SelectedProfileId, commandLine);
+        UpdateWindowTitle();
+    }
+
+    private void ToggleFindPanel()
+    {
+        if (FindPanel.Visibility == Visibility.Visible)
+        {
+            CloseFindPanel();
+        }
+        else
+        {
+            OpenFindPanel();
+        }
+    }
+
+    private void OpenFindPanel()
+    {
+        FindPanel.Visibility = Visibility.Visible;
+        UpdateFindMatchCount();
+        FindTextBox.Focus();
+        FindTextBox.SelectAll();
+    }
+
+    private void CloseFindPanel()
+    {
+        FindPanel.Visibility = Visibility.Collapsed;
+        FindCountText.Text = "Find";
+        if (_session is not null)
+        {
+            FocusTerminalInput();
+        }
+    }
+
+    private bool TryFindInTerminal(bool forward)
+    {
+        string query = FindTextBox.Text;
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            FindCountText.Text = "Type to search";
+            return false;
+        }
+
+        StringComparison comparison = FindCaseSensitiveCheckBox.IsChecked == true
+            ? StringComparison.Ordinal
+            : StringComparison.OrdinalIgnoreCase;
+
+        bool wrapped = false;
+        TextPointer? matchStart;
+        TextPointer? matchEnd;
+        if (forward)
+        {
+            TextPointer searchStart = TerminalOutput.Selection.IsEmpty
+                ? TerminalOutput.Document.ContentStart
+                : TerminalOutput.Selection.End;
+            if (!TryFindForward(searchStart, query, comparison, out matchStart, out matchEnd))
+            {
+                wrapped = TryFindForward(TerminalOutput.Document.ContentStart, query, comparison, out matchStart, out matchEnd);
+            }
+        }
+        else
+        {
+            TextPointer limit = TerminalOutput.Selection.IsEmpty
+                ? TerminalOutput.Document.ContentEnd
+                : TerminalOutput.Selection.Start;
+            if (!TryFindBackward(limit, query, comparison, out matchStart, out matchEnd))
+            {
+                wrapped = TryFindBackward(TerminalOutput.Document.ContentEnd, query, comparison, out matchStart, out matchEnd);
+            }
+        }
+
+        if (matchStart is null || matchEnd is null)
+        {
+            FindCountText.Text = "No match";
+            return false;
+        }
+
+        TerminalOutput.Selection.Select(matchStart, matchEnd);
+        matchStart.Paragraph?.BringIntoView();
+        FindCountText.Text = wrapped ? "Wrapped" : "Match";
+        return true;
+    }
+
+    private static bool TryFindForward(
+        TextPointer start,
+        string query,
+        StringComparison comparison,
+        out TextPointer? matchStart,
+        out TextPointer? matchEnd)
+    {
+        for (TextPointer? navigator = start; navigator is not null; navigator = navigator.GetNextContextPosition(LogicalDirection.Forward))
+        {
+            if (navigator.GetPointerContext(LogicalDirection.Forward) != TextPointerContext.Text)
+            {
+                continue;
+            }
+
+            string run = navigator.GetTextInRun(LogicalDirection.Forward);
+            int index = run.IndexOf(query, comparison);
+            if (index < 0)
+            {
+                continue;
+            }
+
+            matchStart = navigator.GetPositionAtOffset(index);
+            matchEnd = matchStart?.GetPositionAtOffset(query.Length);
+            return matchStart is not null && matchEnd is not null;
+        }
+
+        matchStart = null;
+        matchEnd = null;
+        return false;
+    }
+
+    private bool TryFindBackward(
+        TextPointer limit,
+        string query,
+        StringComparison comparison,
+        out TextPointer? matchStart,
+        out TextPointer? matchEnd)
+    {
+        matchStart = null;
+        matchEnd = null;
+
+        for (TextPointer? navigator = TerminalOutput.Document.ContentStart;
+             navigator is not null && navigator.CompareTo(limit) < 0;
+             navigator = navigator.GetNextContextPosition(LogicalDirection.Forward))
+        {
+            if (navigator.GetPointerContext(LogicalDirection.Forward) != TextPointerContext.Text)
+            {
+                continue;
+            }
+
+            string run = navigator.GetTextInRun(LogicalDirection.Forward);
+            int searchIndex = 0;
+            while (searchIndex < run.Length)
+            {
+                int index = run.IndexOf(query, searchIndex, comparison);
+                if (index < 0)
+                {
+                    break;
+                }
+
+                TextPointer? candidateStart = navigator.GetPositionAtOffset(index);
+                TextPointer? candidateEnd = candidateStart?.GetPositionAtOffset(query.Length);
+                if (candidateStart is null || candidateEnd is null)
+                {
+                    break;
+                }
+
+                if (candidateEnd.CompareTo(limit) <= 0)
+                {
+                    matchStart = candidateStart;
+                    matchEnd = candidateEnd;
+                    searchIndex = index + 1;
+                    continue;
+                }
+
+                break;
+            }
+        }
+
+        return matchStart is not null && matchEnd is not null;
+    }
+
+    private void UpdateFindMatchCount()
+    {
+        if (FindPanel.Visibility != Visibility.Visible)
+        {
+            return;
+        }
+
+        string query = FindTextBox.Text;
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            FindCountText.Text = "Type to search";
+            return;
+        }
+
+        string transcript = _terminalBuffer.CreatePlainTextSnapshot();
+        StringComparison comparison = FindCaseSensitiveCheckBox.IsChecked == true
+            ? StringComparison.Ordinal
+            : StringComparison.OrdinalIgnoreCase;
+        int matchCount = CountMatches(transcript, query, comparison);
+        FindCountText.Text = matchCount == 1 ? "1 match" : $"{matchCount} matches";
+    }
+
+    private static int CountMatches(string text, string query, StringComparison comparison)
+    {
+        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(query))
+        {
+            return 0;
+        }
+
+        int count = 0;
+        int index = 0;
+        while (index < text.Length)
+        {
+            int foundIndex = text.IndexOf(query, index, comparison);
+            if (foundIndex < 0)
+            {
+                break;
+            }
+
+            count++;
+            index = foundIndex + query.Length;
+        }
+
+        return count;
+    }
+
+    private void SaveTranscript()
+    {
+        string transcript = _terminalBuffer.CreatePlainTextSnapshot();
+        var dialog = new SaveFileDialog
+        {
+            Filter = "Text files (*.txt)|*.txt|All files (*.*)|*.*",
+            FileName = BuildTranscriptFileName()
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        File.WriteAllText(dialog.FileName, transcript, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        SetStatus($"Saved transcript: {dialog.FileName}");
+    }
+
+    private string BuildTranscriptFileName()
+    {
+        string basis = _terminalBuffer.WindowTitle;
+        if (string.IsNullOrWhiteSpace(basis))
+        {
+            basis = string.IsNullOrWhiteSpace(_activeCommandLine)
+                ? GetSelectedProfile().DisplayName
+                : _activeCommandLine;
+        }
+
+        return $"{DateTime.Now:yyyyMMdd-HHmmss}-{SanitizeFileName(basis)}.txt";
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        var builder = new StringBuilder(name.Length);
+        foreach (char ch in name)
+        {
+            builder.Append(Path.GetInvalidFileNameChars().Contains(ch) ? '-' : ch);
+        }
+
+        string sanitized = builder.ToString().Trim();
+        return string.IsNullOrWhiteSpace(sanitized) ? "terminal" : sanitized;
+    }
+}

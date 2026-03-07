@@ -214,6 +214,16 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void CreatePlainTextSnapshotIncludesScrollbackAndVisibleScreen()
+    {
+        var buffer = new AnsiTerminalBuffer(8, 2);
+
+        buffer.Process("A\r\nB\r\nC");
+
+        Assert.Equal("A" + Environment.NewLine + "B" + Environment.NewLine + "C", buffer.CreatePlainTextSnapshot());
+    }
+
+    [Fact]
     public void DecPrivate12ControlsCursorBlinking()
     {
         var buffer = new AnsiTerminalBuffer(32, 10);
