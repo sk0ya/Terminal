@@ -9,6 +9,7 @@ public sealed class ProcessPipeSession : ITerminalSession
     private readonly object _syncRoot = new();
     private readonly string _commandLine;
     private Process? _process;
+    private Stream? _inputStream;
     private StreamWriter? _inputWriter;
     private CancellationTokenSource? _readCancellation;
     private Task? _outputReadTask;
@@ -77,6 +78,7 @@ public sealed class ProcessPipeSession : ITerminalSession
         }
 
         _inputWriter = _process.StandardInput;
+        _inputStream = _inputWriter.BaseStream;
         _inputWriter.AutoFlush = true;
         _readCancellation = new CancellationTokenSource();
         _outputReadTask = StartReadLoop(_process.StandardOutput, _readCancellation.Token);
@@ -86,8 +88,27 @@ public sealed class ProcessPipeSession : ITerminalSession
     public void Write(string input)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        _inputWriter?.Write(input);
-        _inputWriter?.Flush();
+        lock (_syncRoot)
+        {
+            _inputWriter?.Write(input);
+            _inputWriter?.Flush();
+        }
+    }
+
+    public void Write(byte[] input)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (input.Length == 0)
+        {
+            return;
+        }
+
+        lock (_syncRoot)
+        {
+            _inputWriter?.Flush();
+            _inputStream?.Write(input, 0, input.Length);
+            _inputStream?.Flush();
+        }
     }
 
     public void Resize(short columns, short rows)

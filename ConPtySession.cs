@@ -23,6 +23,7 @@ public sealed class ConPtySession : ITerminalSession
     private SafeFileHandle? _pseudoConsoleOutputWriteHandle;
     private SafeFileHandle? _inputWriteHandle;
     private SafeFileHandle? _outputReadHandle;
+    private Stream? _inputStream;
     private StreamWriter? _inputWriter;
     private StreamReader? _outputReader;
     private CancellationTokenSource? _readCancellation;
@@ -90,8 +91,27 @@ public sealed class ConPtySession : ITerminalSession
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        _inputWriter?.Write(input);
-        _inputWriter?.Flush();
+        lock (_syncRoot)
+        {
+            _inputWriter?.Write(input);
+            _inputWriter?.Flush();
+        }
+    }
+
+    public void Write(byte[] input)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (input.Length == 0)
+        {
+            return;
+        }
+
+        lock (_syncRoot)
+        {
+            _inputWriter?.Flush();
+            _inputStream?.Write(input, 0, input.Length);
+            _inputStream?.Flush();
+        }
     }
 
     public void Resize(short columns, short rows)
@@ -183,6 +203,7 @@ public sealed class ConPtySession : ITerminalSession
         }
 
         _inputWriter?.Dispose();
+        _inputStream?.Dispose();
 
         _pseudoConsoleInputReadHandle?.Dispose();
         _pseudoConsoleOutputWriteHandle?.Dispose();
@@ -386,9 +407,12 @@ public sealed class ConPtySession : ITerminalSession
             throw new InvalidOperationException("ConPTY pipes are not initialized.");
         }
 
+        _inputStream = new FileStream(_inputWriteHandle, FileAccess.Write, 4096, isAsync: false);
         _inputWriter = new StreamWriter(
-            new FileStream(_inputWriteHandle, FileAccess.Write, 4096, isAsync: false),
-            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
+            _inputStream,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            bufferSize: 4096,
+            leaveOpen: true)
         {
             AutoFlush = true
         };

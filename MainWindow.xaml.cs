@@ -559,6 +559,26 @@ public partial class MainWindow : Window
         }
     }
 
+    private bool SendTerminalInput(byte[] bytes)
+    {
+        if (_session is null || bytes.Length == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            _session.Write(bytes);
+            _cursorBlinkVisible = true;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Send failed: {ex.Message}");
+            return false;
+        }
+    }
+
     private void SendInterrupt()
     {
         _ = SendTerminalInput("\u0003");
@@ -830,8 +850,7 @@ public partial class MainWindow : Window
             return false;
         }
 
-        string sequence = EncodeMouseSequence(button.Value, column, row, released: !pressed, motion: false, wheel: false, wheelUp: false);
-        return SendTerminalInput(sequence);
+        return SendMouseSequence(button.Value, column, row, released: !pressed, motion: false, wheel: false, wheelUp: false);
     }
 
     private bool TrySendMouseMoveEvent(MouseEventArgs e)
@@ -862,8 +881,7 @@ public partial class MainWindow : Window
         }
 
         int button = ResolveCurrentMouseButton(e);
-        string sequence = EncodeMouseSequence(button, column, row, released: false, motion: true, wheel: false, wheelUp: false);
-        return SendTerminalInput(sequence);
+        return SendMouseSequence(button, column, row, released: false, motion: true, wheel: false, wheelUp: false);
     }
 
     private bool TrySendMouseWheelEvent(MouseWheelEventArgs e)
@@ -879,11 +897,10 @@ public partial class MainWindow : Window
         }
 
         bool wheelUp = e.Delta > 0;
-        string sequence = EncodeMouseSequence(0, column, row, released: false, motion: false, wheel: true, wheelUp: wheelUp);
-        return SendTerminalInput(sequence);
+        return SendMouseSequence(0, column, row, released: false, motion: false, wheel: true, wheelUp: wheelUp);
     }
 
-    private string EncodeMouseSequence(int button, int column, int row, bool released, bool motion, bool wheel, bool wheelUp)
+    private bool SendMouseSequence(int button, int column, int row, bool released, bool motion, bool wheel, bool wheelUp)
     {
         int code = button;
         if (wheel)
@@ -908,13 +925,23 @@ public partial class MainWindow : Window
         if (_terminalBuffer.UseSgrMouseEncoding)
         {
             char suffix = released && !motion && !wheel ? 'm' : 'M';
-            return $"\u001b[<{code};{column};{row}{suffix}";
+            return SendTerminalInput($"\u001b[<{code};{column};{row}{suffix}");
         }
 
-        int encodedButton = Math.Clamp(code + 32, 32, 127);
-        int encodedColumn = Math.Clamp(column + 32, 32, 127);
-        int encodedRow = Math.Clamp(row + 32, 32, 127);
-        return $"\u001b[M{(char)encodedButton}{(char)encodedColumn}{(char)encodedRow}";
+        return SendTerminalInput(EncodeLegacyMouseSequenceBytes(code, column, row));
+    }
+
+    private static byte[] EncodeLegacyMouseSequenceBytes(int code, int column, int row)
+    {
+        return
+        [
+            0x1B,
+            (byte)'[',
+            (byte)'M',
+            (byte)Math.Clamp(code + 32, 32, 255),
+            (byte)Math.Clamp(column + 32, 32, 255),
+            (byte)Math.Clamp(row + 32, 32, 255)
+        ];
     }
 
     private static int? MapMouseButton(MouseButton button)
