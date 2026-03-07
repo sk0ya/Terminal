@@ -44,12 +44,16 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _sessionWatchdog = new();
     private readonly DispatcherTimer _cursorBlinkTimer = new();
     private readonly DispatcherTimer _renderThrottleTimer = new();
+    private readonly SemaphoreSlim _sessionLifecycleGate = new(1, 1);
     private readonly object _pendingOutputLock = new();
     private readonly StringBuilder _pendingOutput = new();
     private ScrollViewer? _terminalScrollViewer;
     private HwndSource? _windowSource;
     private int _autoRecoveryAttempts;
     private bool _isRecovering;
+    private bool _isSessionTransitionActive;
+    private bool _isClosingWindow;
+    private bool _allowWindowClose;
     private bool _isImeComposing;
     private bool _isImeContextActive;
     private bool _imeCommitFlushScheduled;
@@ -92,12 +96,12 @@ public partial class MainWindow : Window
         TerminalOutput.SizeChanged += OnTerminalOutputSizeChanged;
     }
 
-    private void OnLoaded(object sender, RoutedEventArgs e)
+    private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         AttachTerminalScrollViewer();
         UpdateInputProxyPosition();
         RequestDocumentRender();
-        StartTerminal();
+        await StartTerminalAsync();
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
@@ -106,8 +110,20 @@ public partial class MainWindow : Window
         _windowSource?.AddHook(WindowProc);
     }
 
-    private void OnClosing(object? sender, CancelEventArgs e)
+    private async void OnClosing(object? sender, CancelEventArgs e)
     {
+        if (_allowWindowClose)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        if (_isClosingWindow)
+        {
+            return;
+        }
+
+        _isClosingWindow = true;
         _sessionWatchdog.Stop();
         _cursorBlinkTimer.Stop();
         _renderThrottleTimer.Stop();
@@ -118,7 +134,17 @@ public partial class MainWindow : Window
         }
 
         ClearImeComposition();
-        StopTerminal(reportStopped: false);
+        UpdateUiState(_session is not null);
+
+        try
+        {
+            await StopTerminalAsync(reportStopped: false);
+        }
+        finally
+        {
+            _allowWindowClose = true;
+            Close();
+        }
     }
 
     private void OnActivated(object? sender, EventArgs e)
@@ -131,22 +157,22 @@ public partial class MainWindow : Window
         EmitFocusReport(focused: false);
     }
 
-    private void StartButton_Click(object sender, RoutedEventArgs e)
+    private async void StartButton_Click(object sender, RoutedEventArgs e)
     {
         _autoRecoveryAttempts = 0;
         _useCompatibilityMode = false;
-        StartTerminal();
+        await StartTerminalAsync();
     }
 
-    private void StopButton_Click(object sender, RoutedEventArgs e)
+    private async void StopButton_Click(object sender, RoutedEventArgs e)
     {
         _autoRecoveryAttempts = 0;
-        StopTerminal(reportStopped: true);
+        await StopTerminalAsync(reportStopped: true);
     }
 
-    private void RecoverButton_Click(object sender, RoutedEventArgs e)
+    private async void RecoverButton_Click(object sender, RoutedEventArgs e)
     {
-        RecoverSession(isAutomatic: false);
+        await RecoverSessionAsync(isAutomatic: false);
     }
 
     private void TerminalOutput_RequestNavigate(object sender, RequestNavigateEventArgs e)
@@ -487,42 +513,73 @@ public partial class MainWindow : Window
         }
     }
 
-    private void StartTerminal()
+    private async Task StartTerminalAsync()
     {
-        StopTerminal(reportStopped: false);
-
         string commandLine = string.IsNullOrWhiteSpace(CommandTextBox.Text)
             ? BuildDefaultCommandLine()
             : CommandTextBox.Text.Trim();
 
-        (_currentColumns, _currentRows) = CalculateTerminalSize();
-        ReplaceTerminalBuffer(new AnsiTerminalBuffer(_currentColumns, _currentRows));
-        _cursorBlinkVisible = true;
-        _reportedUnsupportedResize = false;
-        RequestDocumentRender();
-
+        await _sessionLifecycleGate.WaitAsync();
         try
         {
-            if (_useCompatibilityMode)
+            _isSessionTransitionActive = true;
+            UpdateUiState(_session is not null);
+
+            ITerminalSession? previousSession = DetachCurrentSession();
+            Exception? stopError = await DisposeSessionAsync(previousSession);
+
+            ClearPendingOutput();
+            ClearImeComposition();
+            ResetInputProxyText();
+            (_currentColumns, _currentRows) = CalculateTerminalSize();
+            ReplaceTerminalBuffer(new AnsiTerminalBuffer(_currentColumns, _currentRows));
+            _cursorBlinkVisible = true;
+            _reportedUnsupportedResize = false;
+            UpdateOverlayState();
+            UpdateUiState(isRunning: false);
+            UpdateWindowTitle();
+            RequestDocumentRender();
+
+            if (stopError is not null)
             {
-                _session = new ProcessPipeSession(commandLine, _currentColumns, _currentRows);
-            }
-            else
-            {
-                try
-                {
-                    _session = new ConPtySession(_currentColumns, _currentRows, commandLine);
-                }
-                catch
-                {
-                    _useCompatibilityMode = true;
-                    _session = new ProcessPipeSession(commandLine, _currentColumns, _currentRows);
-                }
+                SetStatus($"Previous session cleanup failed: {FormatExceptionMessage(stopError)}");
             }
 
-            _session.OutputReceived += OnOutputReceived;
-            _session.Exited += OnProcessExited;
-            _session.Start();
+            if (_isClosingWindow)
+            {
+                return;
+            }
+
+            ITerminalSession session = await CreateSessionAsync(commandLine, _currentColumns, _currentRows);
+            session.OutputReceived += OnOutputReceived;
+            session.Exited += OnProcessExited;
+            _session = session;
+
+            try
+            {
+                await Task.Run(session.Start);
+            }
+            catch (Exception startException)
+            {
+                _ = DetachCurrentSession();
+                Exception? startCleanupError = await DisposeSessionAsync(session);
+                if (startCleanupError is not null)
+                {
+                    SetStatus($"Failed to start terminal: {FormatExceptionMessage(startException)} Cleanup: {FormatExceptionMessage(startCleanupError)}");
+                    return;
+                }
+
+                throw;
+            }
+
+            if (_isClosingWindow)
+            {
+                ITerminalSession? closingSession = DetachCurrentSession();
+                await DisposeSessionAsync(closingSession);
+                return;
+            }
+
+            _cursorBlinkVisible = true;
             UpdateUiState(isRunning: true);
             FocusTerminalInput();
             SetStatus(BuildSessionStartedMessage(commandLine));
@@ -530,53 +587,153 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             UpdateUiState(isRunning: false);
+            UpdateWindowTitle();
             SetStatus($"Failed to start terminal: {FormatExceptionMessage(ex)}");
+        }
+        finally
+        {
+            _isSessionTransitionActive = false;
+            UpdateUiState(_session is not null);
+            _sessionLifecycleGate.Release();
         }
     }
 
-    private void StopTerminal(bool reportStopped)
+    private async Task StopTerminalAsync(bool reportStopped, string? statusOverride = null, ITerminalSession? expectedSession = null)
     {
-        if (_session is null)
+        await _sessionLifecycleGate.WaitAsync();
+        try
         {
+            if (expectedSession is not null && !ReferenceEquals(expectedSession, _session))
+            {
+                return;
+            }
+
+            _isSessionTransitionActive = true;
+            UpdateUiState(_session is not null);
+
+            ITerminalSession? session = DetachCurrentSession();
             ClearPendingOutput();
             ClearImeComposition();
             ResetInputProxyText();
             UpdateOverlayState();
             UpdateUiState(isRunning: false);
             UpdateWindowTitle();
-            return;
+
+            Exception? stopError = await DisposeSessionAsync(session);
+            if (stopError is not null)
+            {
+                statusOverride = $"Failed to stop terminal: {FormatExceptionMessage(stopError)}";
+            }
+
+            if (statusOverride is not null)
+            {
+                SetStatus(statusOverride);
+            }
+            else if (reportStopped)
+            {
+                SetStatus("Stopped.");
+            }
+        }
+        finally
+        {
+            _isSessionTransitionActive = false;
+            UpdateUiState(_session is not null);
+            _sessionLifecycleGate.Release();
+        }
+    }
+
+    private ITerminalSession? DetachCurrentSession()
+    {
+        ITerminalSession? session = _session;
+        if (session is null)
+        {
+            return null;
         }
 
-        _session.OutputReceived -= OnOutputReceived;
-        _session.Exited -= OnProcessExited;
-        _session.Dispose();
+        session.OutputReceived -= OnOutputReceived;
+        session.Exited -= OnProcessExited;
         _session = null;
+        return session;
+    }
 
-        ClearPendingOutput();
-        ClearImeComposition();
-        ResetInputProxyText();
-        UpdateOverlayState();
-        UpdateUiState(isRunning: false);
-        UpdateWindowTitle();
-        if (reportStopped)
+    private async Task<ITerminalSession> CreateSessionAsync(string commandLine, short columns, short rows)
+    {
+        if (_useCompatibilityMode)
         {
-            SetStatus("Stopped.");
+            return await Task.Run(() => (ITerminalSession)new ProcessPipeSession(commandLine, columns, rows));
+        }
+
+        try
+        {
+            return await Task.Run(() => (ITerminalSession)new ConPtySession(columns, rows, commandLine));
+        }
+        catch
+        {
+            _useCompatibilityMode = true;
+            return await Task.Run(() => (ITerminalSession)new ProcessPipeSession(commandLine, columns, rows));
+        }
+    }
+
+    private static async Task<Exception?> DisposeSessionAsync(ITerminalSession? session)
+    {
+        if (session is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            await session.DisposeAsync();
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex;
         }
     }
 
     private void OnOutputReceived(object? sender, string text)
     {
+        if (sender is not ITerminalSession session || !ReferenceEquals(session, _session))
+        {
+            return;
+        }
+
         QueueTerminalOutput(text);
     }
 
     private void OnProcessExited(object? sender, int exitCode)
     {
-        Dispatcher.Invoke(() =>
+        if (sender is not ITerminalSession session)
         {
+            return;
+        }
+
+        _ = Dispatcher.InvokeAsync(() =>
+        {
+            _ = HandleProcessExitedAsync(session, exitCode);
+        }, DispatcherPriority.Normal);
+    }
+
+    private async Task HandleProcessExitedAsync(ITerminalSession session, int exitCode)
+    {
+        try
+        {
+            if (!ReferenceEquals(session, _session))
+            {
+                return;
+            }
+
             FlushPendingOutput();
-            SetStatus($"Process exited with code {exitCode}.");
-            StopTerminal(reportStopped: false);
-        });
+            await StopTerminalAsync(
+                reportStopped: false,
+                statusOverride: $"Process exited with code {exitCode}.",
+                expectedSession: session);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Exit handling failed: {FormatExceptionMessage(ex)}");
+        }
     }
 
     private void CursorBlinkTimer_Tick(object? sender, EventArgs e)
@@ -758,12 +915,13 @@ public partial class MainWindow : Window
 
     private void UpdateUiState(bool isRunning)
     {
-        StartButton.IsEnabled = !isRunning;
-        StopButton.IsEnabled = isRunning;
-        RecoverButton.IsEnabled = isRunning;
-        PasteButton.IsEnabled = isRunning;
-        InterruptButton.IsEnabled = isRunning && SupportsTerminalInput();
-        CommandTextBox.IsEnabled = !isRunning;
+        bool isBusy = _isSessionTransitionActive || _isRecovering || _isClosingWindow;
+        StartButton.IsEnabled = !isRunning && !isBusy;
+        StopButton.IsEnabled = isRunning && !isBusy;
+        RecoverButton.IsEnabled = isRunning && !isBusy;
+        PasteButton.IsEnabled = isRunning && !isBusy;
+        InterruptButton.IsEnabled = isRunning && !isBusy && SupportsTerminalInput();
+        CommandTextBox.IsEnabled = !isRunning && !isBusy;
     }
 
     private void RequestDocumentRender()
@@ -1617,7 +1775,7 @@ public partial class MainWindow : Window
 
     private void SessionWatchdog_Tick(object? sender, EventArgs e)
     {
-        if (_session is null || _isRecovering)
+        if (_session is null || _isRecovering || _isSessionTransitionActive)
         {
             return;
         }
@@ -1636,10 +1794,10 @@ public partial class MainWindow : Window
         }
 
         _autoRecoveryAttempts++;
-        RecoverSession(isAutomatic: true);
+        _ = RecoverSessionAsync(isAutomatic: true);
     }
 
-    private void RecoverSession(bool isAutomatic)
+    private async Task RecoverSessionAsync(bool isAutomatic)
     {
         if (_session is null || _isRecovering)
         {
@@ -1647,9 +1805,16 @@ public partial class MainWindow : Window
         }
 
         _isRecovering = true;
+        UpdateUiState(_session is not null);
         try
         {
-            _session.TryForceUnlock();
+            ITerminalSession? session = _session;
+            if (session is null)
+            {
+                return;
+            }
+
+            _ = await Task.Run(() => session.TryForceUnlock());
             if (!_useCompatibilityMode)
             {
                 _useCompatibilityMode = true;
@@ -1658,7 +1823,7 @@ public partial class MainWindow : Window
             SetStatus(isAutomatic
                 ? "Output stalled. Unlocking and restarting in compatibility mode..."
                 : "Recover requested. Unlocking and restarting in compatibility mode...");
-            StartTerminal();
+            await StartTerminalAsync();
         }
         catch (Exception ex)
         {
@@ -1667,6 +1832,7 @@ public partial class MainWindow : Window
         finally
         {
             _isRecovering = false;
+            UpdateUiState(_session is not null);
         }
     }
 
