@@ -926,6 +926,9 @@ internal sealed class AnsiTerminalBuffer
                 case 25:
                     _cursorVisible = enabled;
                     break;
+                case 12:
+                    _cursorBlinkEnabled = enabled;
+                    break;
                 case 47:
                 case 1047:
                     if (enabled)

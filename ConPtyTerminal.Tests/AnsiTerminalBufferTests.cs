@@ -199,4 +199,16 @@ public sealed class AnsiTerminalBufferTests
         Assert.Equal("main", buffer.GetScreenLineText(0).TrimEnd());
         Assert.Equal("\u001b[2;4R", emitted);
     }
+
+    [Fact]
+    public void DecPrivate12ControlsCursorBlinking()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("\u001b[?12l");
+        Assert.False(buffer.CursorBlinkEnabled);
+
+        buffer.Process("\u001b[?12h");
+        Assert.True(buffer.CursorBlinkEnabled);
+    }
 }
