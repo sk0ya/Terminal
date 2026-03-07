@@ -124,6 +124,8 @@ public partial class MainWindow : Window
         }
 
         _isClosingWindow = true;
+        Hide();
+        ShowInTaskbar = false;
         _sessionWatchdog.Stop();
         _cursorBlinkTimer.Stop();
         _renderThrottleTimer.Stop();
@@ -683,7 +685,7 @@ public partial class MainWindow : Window
 
         try
         {
-            await session.DisposeAsync();
+            await Task.Run(() => session.DisposeAsync().AsTask());
             return null;
         }
         catch (Exception ex)
