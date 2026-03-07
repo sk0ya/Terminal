@@ -109,6 +109,8 @@ internal sealed class AnsiTerminalBuffer
     private TerminalCharacterSet _g1CharacterSet = TerminalCharacterSet.Ascii;
     private TerminalCharacterSet _savedG0CharacterSet = TerminalCharacterSet.Ascii;
     private TerminalCharacterSet _savedG1CharacterSet = TerminalCharacterSet.Ascii;
+    private string? _currentHyperlink;
+    private string? _savedHyperlink;
     private string _windowTitle = string.Empty;
 
     public event EventHandler<string>? InputSequenceGenerated;
@@ -244,6 +246,31 @@ internal sealed class AnsiTerminalBuffer
         _scrollback.Clear();
     }
 
+    internal string GetScreenLineText(int row)
+    {
+        if (row < 0 || row >= _screen.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(row));
+        }
+
+        return ExtractLineText(_screen[row]);
+    }
+
+    internal string? GetCellHyperlink(int row, int column)
+    {
+        if (row < 0 || row >= _screen.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(row));
+        }
+
+        if (column < 0 || column >= _screen[row].Cells.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(column));
+        }
+
+        return _screen[row].Cells[column].Hyperlink;
+    }
+
     private static List<TerminalLine> CreateScreen(int rows, int columns, TerminalStyle blankStyle)
     {
         var screen = new List<TerminalLine>(rows);
@@ -331,6 +358,8 @@ internal sealed class AnsiTerminalBuffer
         _g1CharacterSet = TerminalCharacterSet.Ascii;
         _savedG0CharacterSet = TerminalCharacterSet.Ascii;
         _savedG1CharacterSet = TerminalCharacterSet.Ascii;
+        _currentHyperlink = null;
+        _savedHyperlink = null;
         _windowTitle = string.Empty;
         _state = ParserState.Normal;
         _csiBuffer.Clear();
@@ -559,10 +588,28 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
+        if (command == "8")
+        {
+            DispatchOscHyperlink(value);
+            return;
+        }
+
         if (command == "52")
         {
             DispatchOscClipboard(value);
         }
+    }
+
+    private void DispatchOscHyperlink(string value)
+    {
+        int separatorIndex = value.IndexOf(';');
+        if (separatorIndex < 0)
+        {
+            return;
+        }
+
+        string uri = value[(separatorIndex + 1)..];
+        _currentHyperlink = string.IsNullOrEmpty(uri) ? null : uri;
     }
 
     private void DispatchOscClipboard(string value)
@@ -728,6 +775,7 @@ internal sealed class AnsiTerminalBuffer
         _savedInsertMode = _insertMode;
         _savedOriginMode = _originMode;
         _savedAutoWrapEnabled = _autoWrapEnabled;
+        _savedHyperlink = _currentHyperlink;
     }
 
     private void RestoreCursorState()
@@ -741,6 +789,7 @@ internal sealed class AnsiTerminalBuffer
         _insertMode = _savedInsertMode;
         _originMode = _savedOriginMode;
         _autoWrapEnabled = _savedAutoWrapEnabled;
+        _currentHyperlink = _savedHyperlink;
     }
 
     private void ReverseIndex()
@@ -951,7 +1000,9 @@ internal sealed class AnsiTerminalBuffer
             _scrollTop,
             _scrollBottom,
             _currentStyle,
-            _savedStyle);
+            _savedStyle,
+            _currentHyperlink,
+            _savedHyperlink);
 
         _screen = CreateScreen(_rows, _columns, TerminalStyle.Default);
         _cursorRow = 0;
@@ -960,6 +1011,8 @@ internal sealed class AnsiTerminalBuffer
         _savedCursorColumn = 0;
         _currentStyle = TerminalStyle.Default;
         _savedStyle = TerminalStyle.Default;
+        _currentHyperlink = null;
+        _savedHyperlink = null;
         ResetMargins();
     }
 
@@ -979,6 +1032,8 @@ internal sealed class AnsiTerminalBuffer
         _scrollBottom = _primaryScreenBackup.ScrollBottom;
         _currentStyle = _primaryScreenBackup.Style;
         _savedStyle = _primaryScreenBackup.SavedStyle;
+        _currentHyperlink = _primaryScreenBackup.CurrentHyperlink;
+        _savedHyperlink = _primaryScreenBackup.SavedHyperlink;
         _primaryScreenBackup = null;
     }
 
@@ -1415,7 +1470,7 @@ internal sealed class AnsiTerminalBuffer
         }
 
         ClearWideOverlap(line, _cursorColumn);
-        line.Cells[_cursorColumn] = new TerminalCell(text, _currentStyle, IsContinuation: false, Width: normalizedWidth);
+        line.Cells[_cursorColumn] = new TerminalCell(text, _currentStyle, _currentHyperlink, IsContinuation: false, Width: normalizedWidth);
 
         if (normalizedWidth == 2)
         {
@@ -1425,7 +1480,7 @@ internal sealed class AnsiTerminalBuffer
                 return;
             }
 
-            line.Cells[_cursorColumn + 1] = new TerminalCell(string.Empty, _currentStyle, IsContinuation: true, Width: 0);
+            line.Cells[_cursorColumn + 1] = new TerminalCell(string.Empty, _currentStyle, _currentHyperlink, IsContinuation: true, Width: 0);
         }
 
         _cursorColumn += normalizedWidth;
@@ -1591,9 +1646,28 @@ internal sealed class AnsiTerminalBuffer
             {
                 return false;
             }
+
+            if (cell.Hyperlink is not null)
+            {
+                return false;
+            }
         }
 
         return true;
+    }
+
+    private static string ExtractLineText(TerminalLine line)
+    {
+        var builder = new StringBuilder(line.Cells.Length);
+        foreach (TerminalCell cell in line.Cells)
+        {
+            if (!cell.IsContinuation)
+            {
+                builder.Append(cell.Text);
+            }
+        }
+
+        return builder.ToString();
     }
 
     private void AppendLine(InlineCollection inlines, TerminalLine line, int cursorColumn, bool showCursor, ref bool isFirstLine)
@@ -1621,7 +1695,7 @@ internal sealed class AnsiTerminalBuffer
             }
 
             bool isCursor = showCursor && cursorColumn == column;
-            ResolvedStyle style = ResolveStyle(cell.Style, isCursor);
+            ResolvedStyle style = ResolveStyle(cell.Style, cell.Hyperlink, isCursor);
             if (currentStyle is null || currentStyle.Value != style)
             {
                 FlushRun(inlines, text, currentStyle);
@@ -1642,7 +1716,8 @@ internal sealed class AnsiTerminalBuffer
             if (column == cursorColumn ||
                 cell.IsContinuation ||
                 cell.Text != " " ||
-                cell.Style != TerminalStyle.Default)
+                cell.Style != TerminalStyle.Default ||
+                cell.Hyperlink is not null)
             {
                 return column + 1;
             }
@@ -1658,12 +1733,31 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
-        var run = new Run(text.ToString())
+        var run = new Run(text.ToString());
+        if (style.Value.Hyperlink is not null &&
+            Uri.TryCreate(style.Value.Hyperlink, UriKind.Absolute, out Uri? navigateUri))
         {
-            Foreground = GetBrush(style.Value.Foreground),
-            Background = GetBrush(style.Value.Background),
-            FontWeight = style.Value.Bold ? FontWeights.SemiBold : FontWeights.Regular
-        };
+            var hyperlink = new Hyperlink(run)
+            {
+                NavigateUri = navigateUri,
+                Foreground = GetBrush(style.Value.Foreground),
+                Background = GetBrush(style.Value.Background),
+                FontWeight = style.Value.Bold ? FontWeights.SemiBold : FontWeights.Regular
+            };
+
+            if (style.Value.Underline)
+            {
+                hyperlink.TextDecorations = TextDecorations.Underline;
+            }
+
+            inlines.Add(hyperlink);
+            text.Clear();
+            return;
+        }
+
+        run.Foreground = GetBrush(style.Value.Foreground);
+        run.Background = GetBrush(style.Value.Background);
+        run.FontWeight = style.Value.Bold ? FontWeights.SemiBold : FontWeights.Regular;
 
         if (style.Value.Underline)
         {
@@ -1674,7 +1768,7 @@ internal sealed class AnsiTerminalBuffer
         text.Clear();
     }
 
-    private static ResolvedStyle ResolveStyle(TerminalStyle style, bool isCursor)
+    private static ResolvedStyle ResolveStyle(TerminalStyle style, string? hyperlink, bool isCursor)
     {
         Color foreground = style.Foreground ?? DefaultForeground;
         Color background = style.Background ?? DefaultBackground;
@@ -1694,12 +1788,12 @@ internal sealed class AnsiTerminalBuffer
             }
         }
 
-        return new ResolvedStyle(foreground, background, style.Bold, style.Underline);
+        return new ResolvedStyle(foreground, background, style.Bold, style.Underline, hyperlink);
     }
 
     private static TerminalCell CreateBlankCell(TerminalStyle style)
     {
-        return new TerminalCell(" ", style, IsContinuation: false, Width: 1);
+        return new TerminalCell(" ", style, Hyperlink: null, IsContinuation: false, Width: 1);
     }
 
     private Rune MapActiveRune(Rune rune)
@@ -1870,11 +1964,14 @@ internal sealed class AnsiTerminalBuffer
         int ScrollTop,
         int ScrollBottom,
         TerminalStyle Style,
-        TerminalStyle SavedStyle);
+        TerminalStyle SavedStyle,
+        string? CurrentHyperlink,
+        string? SavedHyperlink);
 
     private readonly record struct TerminalCell(
         string Text,
         TerminalStyle Style,
+        string? Hyperlink,
         bool IsContinuation,
         int Width);
 
@@ -1892,5 +1989,6 @@ internal sealed class AnsiTerminalBuffer
         Color Foreground,
         Color Background,
         bool Bold,
-        bool Underline);
+        bool Underline,
+        string? Hyperlink);
 }

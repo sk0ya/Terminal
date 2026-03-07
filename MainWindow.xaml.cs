@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -7,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Navigation;
 using System.Windows.Threading;
 
 namespace ConPtyTerminal;
@@ -58,6 +60,7 @@ public partial class MainWindow : Window
 
         TextCompositionManager.AddPreviewTextInputStartHandler(TerminalInputProxy, TerminalInputProxy_PreviewTextInputStart);
         TextCompositionManager.AddPreviewTextInputUpdateHandler(TerminalInputProxy, TerminalInputProxy_PreviewTextInputUpdate);
+        TerminalOutput.AddHandler(Hyperlink.RequestNavigateEvent, new RequestNavigateEventHandler(TerminalOutput_RequestNavigate));
 
         Loaded += OnLoaded;
         Closing += OnClosing;
@@ -108,6 +111,22 @@ public partial class MainWindow : Window
     private void RecoverButton_Click(object sender, RoutedEventArgs e)
     {
         RecoverSession(isAutomatic: false);
+    }
+
+    private void TerminalOutput_RequestNavigate(object sender, RequestNavigateEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri)
+            {
+                UseShellExecute = true
+            });
+            e.Handled = true;
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Failed to open link: {ex.Message}");
+        }
     }
 
     private void PasteButton_Click(object sender, RoutedEventArgs e)

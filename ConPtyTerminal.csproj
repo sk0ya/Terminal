@@ -8,4 +8,10 @@
     <UseWPF>true</UseWPF>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Compile Remove="ConPtyTerminal.Tests\**\*.cs" />
+    <EmbeddedResource Remove="ConPtyTerminal.Tests\**\*" />
+    <None Remove="ConPtyTerminal.Tests\**\*" />
+  </ItemGroup>
+
 </Project>
