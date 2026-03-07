@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -13,6 +14,7 @@ public partial class MainWindow : Window
 {
     private const string BaseWindowTitle = "ConPTY Terminal";
     private const int MaxAutoRecoveryAttempts = 1;
+    private const double AutoFollowThreshold = 2.0;
 
     private static readonly TimeSpan InitialOutputTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan IdleOutputTimeout = TimeSpan.FromSeconds(20);
@@ -24,9 +26,11 @@ public partial class MainWindow : Window
     private short _currentRows = 30;
     private readonly DispatcherTimer _sessionWatchdog = new();
     private readonly DispatcherTimer _cursorBlinkTimer = new();
+    private ScrollViewer? _terminalScrollViewer;
     private int _autoRecoveryAttempts;
     private bool _isRecovering;
     private bool _isRenderingTerminal;
+    private bool _followTerminalOutput = true;
     private bool _useCompatibilityMode;
     private bool _cursorBlinkVisible = true;
 
@@ -52,6 +56,7 @@ public partial class MainWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        AttachTerminalScrollViewer();
         RenderTerminal();
         StartTerminal();
     }
@@ -528,7 +533,9 @@ public partial class MainWindow : Window
             return;
         }
 
+        AttachTerminalScrollViewer();
         bool shouldRestoreFocus = TerminalOutput.IsKeyboardFocusWithin;
+        double preservedDistanceFromBottom = GetDistanceFromBottom();
         _isRenderingTerminal = true;
         try
         {
@@ -536,12 +543,13 @@ public partial class MainWindow : Window
                 TerminalOutput.FontFamily,
                 TerminalOutput.FontSize,
                 showCursor: ShouldShowCursor());
+            TerminalOutput.UpdateLayout();
             if (shouldRestoreFocus && !TerminalOutput.IsKeyboardFocusWithin)
             {
                 Keyboard.Focus(TerminalOutput);
             }
 
-            TerminalOutput.ScrollToEnd();
+            RestoreTerminalViewport(preservedDistanceFromBottom);
             UpdateWindowTitle();
         }
         finally
@@ -553,6 +561,100 @@ public partial class MainWindow : Window
     private bool ShouldShowCursor()
     {
         return _session is not null && TerminalOutput.IsKeyboardFocusWithin && _cursorBlinkVisible;
+    }
+
+    private void AttachTerminalScrollViewer()
+    {
+        if (_terminalScrollViewer is not null)
+        {
+            return;
+        }
+
+        TerminalOutput.ApplyTemplate();
+        TerminalOutput.UpdateLayout();
+        _terminalScrollViewer = FindDescendant<ScrollViewer>(TerminalOutput);
+        if (_terminalScrollViewer is null)
+        {
+            return;
+        }
+
+        _terminalScrollViewer.ScrollChanged += TerminalScrollViewer_ScrollChanged;
+        UpdateFollowOutputState();
+    }
+
+    private void TerminalScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (_isRenderingTerminal)
+        {
+            return;
+        }
+
+        UpdateFollowOutputState();
+    }
+
+    private double GetDistanceFromBottom()
+    {
+        if (_terminalScrollViewer is null)
+        {
+            return 0;
+        }
+
+        return Math.Max(
+            0,
+            _terminalScrollViewer.ExtentHeight - _terminalScrollViewer.VerticalOffset - _terminalScrollViewer.ViewportHeight);
+    }
+
+    private void RestoreTerminalViewport(double preservedDistanceFromBottom)
+    {
+        if (_terminalScrollViewer is null)
+        {
+            if (_followTerminalOutput)
+            {
+                TerminalOutput.ScrollToEnd();
+            }
+
+            return;
+        }
+
+        if (_followTerminalOutput || preservedDistanceFromBottom <= AutoFollowThreshold)
+        {
+            _terminalScrollViewer.ScrollToBottom();
+        }
+        else
+        {
+            double targetOffset = Math.Max(
+                0,
+                _terminalScrollViewer.ExtentHeight - _terminalScrollViewer.ViewportHeight - preservedDistanceFromBottom);
+            _terminalScrollViewer.ScrollToVerticalOffset(targetOffset);
+        }
+
+        UpdateFollowOutputState();
+    }
+
+    private void UpdateFollowOutputState()
+    {
+        _followTerminalOutput = _terminalScrollViewer is null || GetDistanceFromBottom() <= AutoFollowThreshold;
+    }
+
+    private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
+    {
+        int childCount = VisualTreeHelper.GetChildrenCount(root);
+        for (int index = 0; index < childCount; index++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(root, index);
+            if (child is T match)
+            {
+                return match;
+            }
+
+            T? nested = FindDescendant<T>(child);
+            if (nested is not null)
+            {
+                return nested;
+            }
+        }
+
+        return null;
     }
 
     private void ReplaceTerminalBuffer(AnsiTerminalBuffer nextBuffer)
