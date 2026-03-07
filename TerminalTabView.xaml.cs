@@ -23,6 +23,7 @@ public partial class TerminalTabView : UserControl
     private static readonly TimeSpan IdleOutputTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan CursorBlinkInterval = TimeSpan.FromMilliseconds(530);
     private static readonly TimeSpan MinDocumentRenderInterval = TimeSpan.FromMilliseconds(33);
+    private static readonly TimeSpan CloseShutdownTimeout = TimeSpan.FromSeconds(2);
     private static readonly Brush BlockCursorBrush = CreateFrozenBrush(Color.FromArgb(0xA0, 0xE3, 0xE3, 0xE3));
     private static readonly Brush AccentCursorBrush = CreateFrozenBrush(Color.FromRgb(0x5F, 0xAF, 0xFF));
 
@@ -131,7 +132,13 @@ public partial class TerminalTabView : UserControl
         _renderThrottleTimer.Stop();
         ResetInputProxyText();
         UpdateUiState(_session is not null);
-        await StopTerminalAsync(reportStopped: false);
+        try
+        {
+            await StopTerminalAsync(reportStopped: false, forceTerminate: true).WaitAsync(CloseShutdownTimeout);
+        }
+        catch (TimeoutException)
+        {
+        }
     }
 
     private void OnActivated(object? sender, EventArgs e)
@@ -674,7 +681,11 @@ public partial class TerminalTabView : UserControl
         }
     }
 
-    private async Task StopTerminalAsync(bool reportStopped, string? statusOverride = null, ITerminalSession? expectedSession = null)
+    private async Task StopTerminalAsync(
+        bool reportStopped,
+        string? statusOverride = null,
+        ITerminalSession? expectedSession = null,
+        bool forceTerminate = false)
     {
         await _sessionLifecycleGate.WaitAsync();
         try
@@ -695,6 +706,11 @@ public partial class TerminalTabView : UserControl
             UpdateOverlayState();
             UpdateUiState(isRunning: false);
             UpdateWindowTitle();
+
+            if (forceTerminate && session is not null)
+            {
+                _ = await Task.Run(() => session.TryForceUnlock());
+            }
 
             Exception? stopError = await DisposeSessionAsync(session);
             if (stopError is not null)

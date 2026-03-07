@@ -119,6 +119,21 @@ public sealed class SessionSmokeTests
         await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
     }
 
+    [Fact]
+    public async Task ConPtySessionTryForceUnlockStopsNestedBashSession()
+    {
+        var session = new ConPtySession(120, 30, BuildInteractiveCommandLine());
+        int processId = session.ProcessId;
+
+        session.Start();
+        session.Write("bash\r\n");
+        await Task.Delay(1500);
+
+        Assert.True(session.TryForceUnlock());
+        await WaitForProcessExitAsync(processId, TimeSpan.FromSeconds(5));
+        await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
     private static async Task VerifyInteractiveEchoAsync(Func<ITerminalSession> sessionFactory, string expectedOutput)
     {
         using ITerminalSession session = sessionFactory();

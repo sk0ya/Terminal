@@ -73,19 +73,7 @@ internal static class TerminalProfileCatalog
 
     private static bool TryBuildGitBashCommandLine(out string commandLine)
     {
-        string? executablePath = TryFindExecutable("bash.exe");
-        if (executablePath is null)
-        {
-            string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-            string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-            string[] candidates =
-            [
-                Path.Combine(programFiles, "Git", "bin", "bash.exe"),
-                Path.Combine(programFilesX86, "Git", "bin", "bash.exe")
-            ];
-
-            executablePath = candidates.FirstOrDefault(File.Exists);
-        }
+        string? executablePath = ResolveGitBashExecutable();
 
         if (executablePath is null)
         {
@@ -97,7 +85,46 @@ internal static class TerminalProfileCatalog
         return true;
     }
 
-    private static string? TryFindExecutable(string executableName)
+    internal static string? ResolveGitBashExecutable(
+        string? pathValue = null,
+        string? programFiles = null,
+        string? programFilesX86 = null)
+    {
+        foreach (string candidate in EnumerateGitBashInstallCandidates(programFiles, programFilesX86))
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return TryFindExecutable("bash.exe", pathValue, candidate => !IsWindowsSystemBash(candidate));
+    }
+
+    private static IEnumerable<string> EnumerateGitBashInstallCandidates(string? programFiles, string? programFilesX86)
+    {
+        string resolvedProgramFiles = string.IsNullOrWhiteSpace(programFiles)
+            ? Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles)
+            : programFiles.Trim();
+        string resolvedProgramFilesX86 = string.IsNullOrWhiteSpace(programFilesX86)
+            ? Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86)
+            : programFilesX86.Trim();
+
+        if (!string.IsNullOrWhiteSpace(resolvedProgramFiles))
+        {
+            yield return Path.Combine(resolvedProgramFiles, "Git", "bin", "bash.exe");
+        }
+
+        if (!string.IsNullOrWhiteSpace(resolvedProgramFilesX86))
+        {
+            yield return Path.Combine(resolvedProgramFilesX86, "Git", "bin", "bash.exe");
+        }
+    }
+
+    private static string? TryFindExecutable(
+        string executableName,
+        string? pathValue = null,
+        Func<string, bool>? predicate = null)
     {
         if (string.IsNullOrWhiteSpace(executableName))
         {
@@ -109,13 +136,15 @@ internal static class TerminalProfileCatalog
             return File.Exists(executableName) ? Path.GetFullPath(executableName) : null;
         }
 
-        string? pathValue = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrWhiteSpace(pathValue))
+        string? effectivePathValue = string.IsNullOrWhiteSpace(pathValue)
+            ? Environment.GetEnvironmentVariable("PATH")
+            : pathValue;
+        if (string.IsNullOrWhiteSpace(effectivePathValue))
         {
             return null;
         }
 
-        foreach (string rawDirectory in pathValue.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        foreach (string rawDirectory in effectivePathValue.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
         {
             string directory = rawDirectory.Trim().Trim('"');
             if (directory.Length == 0)
@@ -124,13 +153,32 @@ internal static class TerminalProfileCatalog
             }
 
             string candidatePath = Path.Combine(directory, executableName);
-            if (File.Exists(candidatePath))
+            if (File.Exists(candidatePath) && (predicate is null || predicate(candidatePath)))
             {
                 return candidatePath;
             }
         }
 
         return null;
+    }
+
+    private static bool IsWindowsSystemBash(string executablePath)
+    {
+        if (string.IsNullOrWhiteSpace(executablePath))
+        {
+            return false;
+        }
+
+        try
+        {
+            string candidatePath = Path.GetFullPath(executablePath);
+            string systemBashPath = Path.GetFullPath(Path.Combine(Environment.SystemDirectory, "bash.exe"));
+            return string.Equals(candidatePath, systemBashPath, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static string QuoteCommand(string path)

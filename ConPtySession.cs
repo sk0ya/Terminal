@@ -178,6 +178,11 @@ public sealed class ConPtySession : ITerminalSession
             return false;
         }
 
+        if (_jobHandle != IntPtr.Zero)
+        {
+            return TerminateJobObject(_jobHandle, exitCode);
+        }
+
         return TerminateProcess(_processHandle, exitCode);
     }
 
