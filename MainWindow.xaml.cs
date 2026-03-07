@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     private const string BaseWindowTitle = "ConPTY Terminal";
     private const int MaxAutoRecoveryAttempts = 1;
     private const double AutoFollowThreshold = 2.0;
+    private const bool PreferDocumentCursorRendering = false;
     private const int WmInputLangChange = 0x0051;
     private const int WmImeSetContext = 0x0281;
     private const int WmImeNotify = 0x0282;
@@ -41,10 +42,11 @@ public partial class MainWindow : Window
     private AnsiTerminalBuffer _terminalBuffer = new(120, 30);
     private short _currentColumns = 120;
     private short _currentRows = 30;
-    private readonly DispatcherTimer _sessionWatchdog = new();
-    private readonly DispatcherTimer _cursorBlinkTimer = new();
-    private readonly DispatcherTimer _renderThrottleTimer = new();
+    private readonly DispatcherTimer _sessionWatchdog = new(DispatcherPriority.Background);
+    private readonly DispatcherTimer _cursorBlinkTimer = new(DispatcherPriority.Background);
+    private readonly DispatcherTimer _renderThrottleTimer = new(DispatcherPriority.Background);
     private readonly SemaphoreSlim _sessionLifecycleGate = new(1, 1);
+    private readonly TerminalDocumentRenderer _documentRenderer = new();
     private readonly object _pendingOutputLock = new();
     private readonly StringBuilder _pendingOutput = new();
     private ScrollViewer? _terminalScrollViewer;
@@ -58,20 +60,26 @@ public partial class MainWindow : Window
     private bool _isImeComposing;
     private bool _isImeContextActive;
     private bool _imeCommitFlushScheduled;
+    private bool _postRenderUiSyncScheduled;
     private bool _suppressProxyTextChanges;
     private bool _isRenderingTerminal;
     private bool _documentRenderScheduled;
     private bool _outputFlushScheduled;
+    private bool _prioritizeInitialOutputRender;
+    private bool _cursorAnchorLayoutPending;
     private bool _followTerminalOutput = true;
     private bool _useCompatibilityMode;
     private bool _cursorBlinkVisible = true;
     private bool _reportedUnsupportedResize;
+    private bool _pendingRestoreFocusAfterRender;
     private string _imeCompositionText = string.Empty;
+    private double _pendingDistanceFromBottom;
     private DateTime _lastDocumentRenderUtc = DateTime.MinValue;
 
     public MainWindow()
     {
         InitializeComponent();
+        TerminalOutput.Document = _documentRenderer.Document;
         CommandTextBox.Text = BuildDefaultCommandLine();
 
         _sessionWatchdog.Interval = TimeSpan.FromSeconds(1);
@@ -538,10 +546,11 @@ public partial class MainWindow : Window
             ReplaceTerminalBuffer(new AnsiTerminalBuffer(_currentColumns, _currentRows));
             _cursorBlinkVisible = true;
             _reportedUnsupportedResize = false;
+            _prioritizeInitialOutputRender = true;
             UpdateOverlayState();
             UpdateUiState(isRunning: false);
             UpdateWindowTitle();
-            RequestDocumentRender();
+            RenderTerminal();
 
             if (stopError is not null)
             {
@@ -618,6 +627,7 @@ public partial class MainWindow : Window
             ClearPendingOutput();
             ClearImeComposition();
             ResetInputProxyText();
+            _prioritizeInitialOutputRender = false;
             UpdateOverlayState();
             UpdateUiState(isRunning: false);
             UpdateWindowTitle();
@@ -798,6 +808,7 @@ public partial class MainWindow : Window
         }
 
         bool shouldSchedule = false;
+        DispatcherPriority priority = DispatcherPriority.Normal;
         lock (_pendingOutputLock)
         {
             _pendingOutput.Append(text);
@@ -805,12 +816,16 @@ public partial class MainWindow : Window
             {
                 _outputFlushScheduled = true;
                 shouldSchedule = true;
+                if (_prioritizeInitialOutputRender)
+                {
+                    priority = DispatcherPriority.Normal;
+                }
             }
         }
 
         if (shouldSchedule)
         {
-            _ = Dispatcher.BeginInvoke(FlushPendingOutput, DispatcherPriority.Render);
+            _ = Dispatcher.BeginInvoke(FlushPendingOutput, priority);
         }
     }
 
@@ -831,7 +846,9 @@ public partial class MainWindow : Window
         if (!string.IsNullOrEmpty(nextBatch))
         {
             _terminalBuffer.Process(nextBatch);
-            RequestDocumentRender();
+            bool prioritizeRender = _prioritizeInitialOutputRender;
+            _prioritizeInitialOutputRender = false;
+            RequestDocumentRender(immediate: prioritizeRender);
         }
 
         bool shouldReschedule = false;
@@ -846,7 +863,7 @@ public partial class MainWindow : Window
 
         if (shouldReschedule)
         {
-            _ = Dispatcher.BeginInvoke(FlushPendingOutput, DispatcherPriority.Render);
+            _ = Dispatcher.BeginInvoke(FlushPendingOutput, DispatcherPriority.Normal);
         }
     }
 
@@ -933,8 +950,23 @@ public partial class MainWindow : Window
         CommandTextBox.IsEnabled = !isRunning && !isBusy;
     }
 
-    private void RequestDocumentRender()
+    private void RequestDocumentRender(bool immediate = false)
     {
+        if (immediate)
+        {
+            _renderThrottleTimer.Stop();
+            if (Dispatcher.CheckAccess())
+            {
+                _documentRenderScheduled = false;
+                PerformDocumentRender();
+                return;
+            }
+
+            _documentRenderScheduled = true;
+            _ = Dispatcher.BeginInvoke(PerformDocumentRender, DispatcherPriority.Normal);
+            return;
+        }
+
         if (_documentRenderScheduled || _renderThrottleTimer.IsEnabled)
         {
             return;
@@ -985,20 +1017,16 @@ public partial class MainWindow : Window
         try
         {
             bool showDocumentCursor = ShouldRenderBlockCursorInDocument();
-            AnsiTerminalBuffer.TerminalDocumentSnapshot snapshot = _terminalBuffer.CreateDocument(
+            AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = _terminalBuffer.CreateRenderSnapshot(showDocumentCursor);
+            _documentRenderer.Update(
+                snapshot,
                 TerminalOutput.FontFamily,
                 TerminalOutput.FontSize,
-                showCursor: showDocumentCursor);
-            _cursorAnchorElement = snapshot.CursorAnchor;
-            TerminalOutput.Document = snapshot.Document;
-            TerminalOutput.UpdateLayout();
+                TerminalOutput.Background);
+            _cursorAnchorElement = _documentRenderer.CursorAnchor;
+            _cursorAnchorLayoutPending = _cursorAnchorElement is not null;
             UpdateInputProxyPosition();
-            if (shouldRestoreFocus && !HasTerminalInputFocus())
-            {
-                FocusTerminalInput();
-            }
-
-            RestoreTerminalViewport(preservedDistanceFromBottom);
+            SchedulePostRenderUiSync(shouldRestoreFocus, preservedDistanceFromBottom);
             UpdateWindowTitle();
         }
         finally
@@ -1017,7 +1045,8 @@ public partial class MainWindow : Window
 
     private bool UsesDocumentCursorRendering()
     {
-        return _terminalBuffer.CursorShape == TerminalCursorShape.Block;
+        return PreferDocumentCursorRendering &&
+            _terminalBuffer.CursorShape == TerminalCursorShape.Block;
     }
 
     private bool ShouldRenderBlockCursorInDocument()
@@ -1078,10 +1107,15 @@ public partial class MainWindow : Window
     {
         var (charWidth, charHeight) = MeasureCharacterCell();
         TerminalViewportMetrics viewport = GetTerminalViewportMetrics();
-        TerminalInputProxy.Width = Math.Max(2, charWidth);
-        TerminalInputProxy.Height = Math.Max(2, charHeight);
+        Size compositionTextSize = MeasureImeCompositionText();
+        double proxyWidth = ResolveInputProxyWidth(charWidth, compositionTextSize);
+        double proxyHeight = ResolveInputProxyHeight(charHeight, compositionTextSize);
+        TerminalInputProxy.Width = proxyWidth;
+        TerminalInputProxy.Height = proxyHeight;
         TerminalInputProxy.FontFamily = TerminalOutput.FontFamily;
         TerminalInputProxy.FontSize = TerminalOutput.FontSize;
+        TerminalInputProxy.TextAlignment = TextAlignment.Left;
+        TerminalInputProxy.FlowDirection = FlowDirection.LeftToRight;
 
         if (!TryGetCursorAnchorPosition(out double left, out double top))
         {
@@ -1089,13 +1123,12 @@ public partial class MainWindow : Window
             top = viewport.ContentTop + (_terminalBuffer.CursorRow * charHeight);
         }
 
-        double maxLeft = Math.Max(viewport.ViewportLeft, viewport.ViewportRight - TerminalInputProxy.Width);
-        double maxTop = Math.Max(viewport.ViewportTop, viewport.ViewportBottom - TerminalInputProxy.Height);
+        (double proxyLeft, double proxyTop) = ClampToViewport(left, top, proxyWidth, proxyHeight, viewport);
 
-        Canvas.SetLeft(TerminalInputProxy, Math.Clamp(left, viewport.ViewportLeft, maxLeft));
-        Canvas.SetTop(TerminalInputProxy, Math.Clamp(top, viewport.ViewportTop, maxTop));
-        UpdateCursorOverlay(left, top, charWidth, charHeight, viewport, maxLeft, maxTop);
-        UpdateImeCompositionOverlay(left, top, charHeight, viewport, maxLeft, maxTop);
+        Canvas.SetLeft(TerminalInputProxy, proxyLeft);
+        Canvas.SetTop(TerminalInputProxy, proxyTop);
+        UpdateCursorOverlay(left, top, charWidth, charHeight, viewport);
+        UpdateImeCompositionOverlay(proxyLeft, proxyTop, charHeight, compositionTextSize);
         UpdateNativeImeWindow();
     }
 
@@ -1105,6 +1138,11 @@ public partial class MainWindow : Window
         top = 0;
 
         if (_cursorAnchorElement is null)
+        {
+            return false;
+        }
+
+        if (_cursorAnchorLayoutPending)
         {
             return false;
         }
@@ -1171,7 +1209,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void UpdateImeCompositionOverlay(double left, double top, double charHeight, TerminalViewportMetrics viewport, double maxLeft, double maxTop)
+    private void UpdateImeCompositionOverlay(double left, double top, double charHeight, Size compositionTextSize)
     {
         if (!_isImeComposing || string.IsNullOrEmpty(_imeCompositionText) || !HasTerminalInputFocus())
         {
@@ -1183,21 +1221,22 @@ public partial class MainWindow : Window
         ImeCompositionTextBlock.FontFamily = TerminalOutput.FontFamily;
         ImeCompositionTextBlock.FontSize = TerminalOutput.FontSize;
         ImeCompositionTextBlock.Text = _imeCompositionText;
+        ImeCompositionTextBlock.FlowDirection = FlowDirection.LeftToRight;
 
-        Size textSize = MeasureTerminalText(_imeCompositionText);
+        Size textSize = compositionTextSize.Width > 0 && compositionTextSize.Height > 0
+            ? compositionTextSize
+            : MeasureTerminalText(_imeCompositionText);
         double overlayWidth = Math.Max(textSize.Width + 4, 8);
         double overlayHeight = Math.Max(textSize.Height, charHeight);
-        double overlayLeft = Math.Clamp(left, viewport.ViewportLeft, Math.Max(viewport.ViewportLeft, maxLeft - overlayWidth + TerminalInputProxy.Width));
-        double overlayTop = Math.Clamp(top, viewport.ViewportTop, Math.Max(viewport.ViewportTop, maxTop - overlayHeight));
 
         ImeCompositionOverlay.Width = overlayWidth;
         ImeCompositionOverlay.Height = overlayHeight;
-        Canvas.SetLeft(ImeCompositionOverlay, overlayLeft);
-        Canvas.SetTop(ImeCompositionOverlay, overlayTop);
+        Canvas.SetLeft(ImeCompositionOverlay, left);
+        Canvas.SetTop(ImeCompositionOverlay, top);
         ImeCompositionOverlay.Visibility = Visibility.Visible;
     }
 
-    private void UpdateCursorOverlay(double left, double top, double charWidth, double charHeight, TerminalViewportMetrics viewport, double maxLeft, double maxTop)
+    private void UpdateCursorOverlay(double left, double top, double charWidth, double charHeight, TerminalViewportMetrics viewport)
     {
         if (!ShouldShowCursorOverlay())
         {
@@ -1222,8 +1261,7 @@ public partial class MainWindow : Window
                 break;
         }
 
-        double overlayLeft = Math.Clamp(left, viewport.ViewportLeft, Math.Max(viewport.ViewportLeft, maxLeft - overlayWidth + TerminalInputProxy.Width));
-        double overlayTop = Math.Clamp(top, viewport.ViewportTop, Math.Max(viewport.ViewportTop, maxTop - overlayHeight));
+        (double overlayLeft, double overlayTop) = ClampToViewport(left, top, overlayWidth, overlayHeight, viewport);
 
         TerminalCursorOverlay.Width = overlayWidth;
         TerminalCursorOverlay.Height = overlayHeight;
@@ -1231,6 +1269,74 @@ public partial class MainWindow : Window
         Canvas.SetLeft(TerminalCursorOverlay, overlayLeft);
         Canvas.SetTop(TerminalCursorOverlay, overlayTop);
         TerminalCursorOverlay.Visibility = Visibility.Visible;
+    }
+
+    private Size MeasureImeCompositionText()
+    {
+        return string.IsNullOrEmpty(_imeCompositionText)
+            ? new Size(0, 0)
+            : MeasureTerminalText(_imeCompositionText);
+    }
+
+    private static double ResolveInputProxyWidth(double charWidth, Size compositionTextSize)
+    {
+        double minimumWidth = Math.Max(2, charWidth);
+        if (compositionTextSize.Width <= 0)
+        {
+            return minimumWidth;
+        }
+
+        return Math.Max(minimumWidth, Math.Ceiling(compositionTextSize.Width + 4));
+    }
+
+    private static double ResolveInputProxyHeight(double charHeight, Size compositionTextSize)
+    {
+        double minimumHeight = Math.Max(2, charHeight);
+        if (compositionTextSize.Height <= 0)
+        {
+            return minimumHeight;
+        }
+
+        return Math.Max(minimumHeight, Math.Ceiling(compositionTextSize.Height));
+    }
+
+    private static (double Left, double Top) ClampToViewport(double left, double top, double width, double height, TerminalViewportMetrics viewport)
+    {
+        double maxLeft = Math.Max(viewport.ViewportLeft, viewport.ViewportRight - width);
+        double maxTop = Math.Max(viewport.ViewportTop, viewport.ViewportBottom - height);
+        return (
+            Math.Clamp(left, viewport.ViewportLeft, maxLeft),
+            Math.Clamp(top, viewport.ViewportTop, maxTop));
+    }
+
+    private void SchedulePostRenderUiSync(bool shouldRestoreFocus, double preservedDistanceFromBottom)
+    {
+        _pendingRestoreFocusAfterRender |= shouldRestoreFocus;
+        _pendingDistanceFromBottom = preservedDistanceFromBottom;
+        if (_postRenderUiSyncScheduled)
+        {
+            return;
+        }
+
+        _postRenderUiSyncScheduled = true;
+        _ = Dispatcher.BeginInvoke(ApplyPostRenderUiSync, DispatcherPriority.Loaded);
+    }
+
+    private void ApplyPostRenderUiSync()
+    {
+        _postRenderUiSyncScheduled = false;
+        bool shouldRestoreFocus = _pendingRestoreFocusAfterRender;
+        double preservedDistanceFromBottom = _pendingDistanceFromBottom;
+        _pendingRestoreFocusAfterRender = false;
+        _cursorAnchorLayoutPending = false;
+
+        UpdateInputProxyPosition();
+        if (shouldRestoreFocus && !HasTerminalInputFocus())
+        {
+            FocusTerminalInput();
+        }
+
+        RestoreTerminalViewport(preservedDistanceFromBottom);
     }
 
     private bool ShouldShowCursorOverlay()

@@ -97,7 +97,8 @@
                     <TextBlock x:Name="ImeCompositionTextBlock"
                                Foreground="#E3E3E3"
                                FontFamily="Cascadia Mono"
-                               FontSize="14" />
+                               FontSize="14"
+                               FlowDirection="LeftToRight" />
                 </Border>
 
                 <TextBox x:Name="TerminalInputProxy"
@@ -108,6 +109,9 @@
                          Background="Transparent"
                          Foreground="Transparent"
                          CaretBrush="Transparent"
+                         Padding="0"
+                         TextAlignment="Left"
+                         FlowDirection="LeftToRight"
                          AcceptsReturn="False"
                          AcceptsTab="False"
                          IsUndoEnabled="False"

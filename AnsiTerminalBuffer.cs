@@ -216,6 +216,25 @@ internal sealed class AnsiTerminalBuffer
         FlushPendingCluster();
     }
 
+    public TerminalRenderSnapshot CreateRenderSnapshot(bool showCursor)
+    {
+        var lines = new List<TerminalRenderLineSnapshot>(_scrollback.Count + _rows);
+        foreach (TerminalLine line in _scrollback)
+        {
+            lines.Add(CreateLineSnapshot(line, -1, -1, showCursor: false));
+        }
+
+        int lastScreenRow = FindLastVisibleScreenRow(showCursor);
+        for (int row = 0; row <= lastScreenRow; row++)
+        {
+            int cursorColumn = showCursor && _cursorVisible && row == _cursorRow ? _cursorColumn : -1;
+            int anchorColumn = row == _cursorRow ? _cursorColumn : -1;
+            lines.Add(CreateLineSnapshot(_screen[row], cursorColumn, anchorColumn, showCursor));
+        }
+
+        return new TerminalRenderSnapshot(lines.ToArray());
+    }
+
     public TerminalDocumentSnapshot CreateDocument(FontFamily fontFamily, double fontSize, bool showCursor)
     {
         var document = new FlowDocument
@@ -234,17 +253,9 @@ internal sealed class AnsiTerminalBuffer
         FrameworkElement? cursorAnchor = null;
 
         bool isFirstLine = true;
-        foreach (TerminalLine line in _scrollback)
+        foreach (TerminalRenderLineSnapshot lineSnapshot in CreateRenderSnapshot(showCursor).Lines)
         {
-            AppendLine(paragraph.Inlines, line, -1, -1, showCursor: false, ref isFirstLine, ref cursorAnchor);
-        }
-
-        int lastScreenRow = FindLastVisibleScreenRow(showCursor);
-        for (int row = 0; row <= lastScreenRow; row++)
-        {
-            int cursorColumn = showCursor && _cursorVisible && row == _cursorRow ? _cursorColumn : -1;
-            int anchorColumn = row == _cursorRow ? _cursorColumn : -1;
-            AppendLine(paragraph.Inlines, _screen[row], cursorColumn, anchorColumn, showCursor, ref isFirstLine, ref cursorAnchor);
+            AppendLineSnapshot(paragraph.Inlines, lineSnapshot, ref isFirstLine, ref cursorAnchor);
         }
 
         if (paragraph.Inlines.Count == 0)
@@ -304,7 +315,7 @@ internal sealed class AnsiTerminalBuffer
         return clone;
     }
 
-    private static SolidColorBrush GetBrush(Color color)
+    internal static SolidColorBrush GetBrush(Color color)
     {
         if (BrushCache.TryGetValue(color, out SolidColorBrush? existing))
         {
@@ -1955,6 +1966,88 @@ internal sealed class AnsiTerminalBuffer
         return builder.ToString();
     }
 
+    private TerminalRenderLineSnapshot CreateLineSnapshot(TerminalLine line, int cursorColumn, int anchorColumn, bool showCursor)
+    {
+        int visibleLength = FindVisibleLength(line, cursorColumn);
+        if (visibleLength == 0)
+        {
+            return new TerminalRenderLineSnapshot(
+                anchorColumn == 0 ? 0 : -1,
+                Array.Empty<TerminalRenderSegmentSnapshot>());
+        }
+
+        var text = new StringBuilder();
+        var segments = new List<TerminalRenderSegmentSnapshot>();
+        ResolvedStyle? currentStyle = null;
+        int anchorSegmentIndex = -1;
+        for (int column = 0; column < visibleLength; column++)
+        {
+            if (anchorColumn == column)
+            {
+                FlushSegment(segments, text, currentStyle);
+                anchorSegmentIndex = segments.Count;
+            }
+
+            TerminalCell cell = line.Cells[column];
+            if (cell.IsContinuation)
+            {
+                continue;
+            }
+
+            bool isCursor = showCursor && cursorColumn == column;
+            ResolvedStyle style = ResolveStyle(cell.Style, cell.Hyperlink, isCursor);
+            if (currentStyle is null || currentStyle.Value != style)
+            {
+                FlushSegment(segments, text, currentStyle);
+                currentStyle = style;
+            }
+
+            text.Append(cell.Text);
+        }
+
+        FlushSegment(segments, text, currentStyle);
+        if (anchorColumn == visibleLength)
+        {
+            anchorSegmentIndex = segments.Count;
+        }
+
+        return new TerminalRenderLineSnapshot(anchorSegmentIndex, segments.ToArray());
+    }
+
+    private static void AppendLineSnapshot(InlineCollection inlines, TerminalRenderLineSnapshot lineSnapshot, ref bool isFirstLine, ref FrameworkElement? cursorAnchor)
+    {
+        if (!isFirstLine)
+        {
+            inlines.Add(new LineBreak());
+        }
+
+        isFirstLine = false;
+        if (lineSnapshot.Segments.Length == 0)
+        {
+            if (lineSnapshot.AnchorSegmentIndex == 0)
+            {
+                InsertCursorAnchor(inlines, ref cursorAnchor);
+            }
+
+            return;
+        }
+
+        for (int index = 0; index < lineSnapshot.Segments.Length; index++)
+        {
+            if (lineSnapshot.AnchorSegmentIndex == index)
+            {
+                InsertCursorAnchor(inlines, ref cursorAnchor);
+            }
+
+            AppendSegment(inlines, lineSnapshot.Segments[index]);
+        }
+
+        if (lineSnapshot.AnchorSegmentIndex == lineSnapshot.Segments.Length)
+        {
+            InsertCursorAnchor(inlines, ref cursorAnchor);
+        }
+    }
+
     private void AppendLine(InlineCollection inlines, TerminalLine line, int cursorColumn, int anchorColumn, bool showCursor, ref bool isFirstLine, ref FrameworkElement? cursorAnchor)
     {
         if (!isFirstLine)
@@ -2026,6 +2119,58 @@ internal sealed class AnsiTerminalBuffer
         return cursorColumn >= 0 ? cursorColumn + 1 : 0;
     }
 
+    private static void FlushSegment(List<TerminalRenderSegmentSnapshot> segments, StringBuilder text, ResolvedStyle? style)
+    {
+        if (text.Length == 0 || style is null)
+        {
+            return;
+        }
+
+        segments.Add(new TerminalRenderSegmentSnapshot(
+            text.ToString(),
+            style.Value.Foreground,
+            style.Value.Background,
+            style.Value.Bold,
+            style.Value.Underline,
+            style.Value.Hyperlink));
+        text.Clear();
+    }
+
+    internal static void AppendSegment(InlineCollection inlines, TerminalRenderSegmentSnapshot segment)
+    {
+        var run = new Run(segment.Text);
+        if (segment.Hyperlink is not null &&
+            Uri.TryCreate(segment.Hyperlink, UriKind.Absolute, out Uri? navigateUri))
+        {
+            var hyperlink = new Hyperlink(run)
+            {
+                NavigateUri = navigateUri,
+                Foreground = GetBrush(segment.Foreground),
+                Background = GetBrush(segment.Background),
+                FontWeight = segment.Bold ? FontWeights.SemiBold : FontWeights.Regular
+            };
+
+            if (segment.Underline)
+            {
+                hyperlink.TextDecorations = TextDecorations.Underline;
+            }
+
+            inlines.Add(hyperlink);
+            return;
+        }
+
+        run.Foreground = GetBrush(segment.Foreground);
+        run.Background = GetBrush(segment.Background);
+        run.FontWeight = segment.Bold ? FontWeights.SemiBold : FontWeights.Regular;
+
+        if (segment.Underline)
+        {
+            run.TextDecorations = TextDecorations.Underline;
+        }
+
+        inlines.Add(run);
+    }
+
     private static void FlushRun(InlineCollection inlines, StringBuilder text, ResolvedStyle? style)
     {
         if (text.Length == 0 || style is null)
@@ -2068,7 +2213,7 @@ internal sealed class AnsiTerminalBuffer
         text.Clear();
     }
 
-    private static void InsertCursorAnchor(InlineCollection inlines, ref FrameworkElement? cursorAnchor)
+    internal static void InsertCursorAnchor(InlineCollection inlines, ref FrameworkElement? cursorAnchor)
     {
         if (cursorAnchor is not null)
         {
@@ -2322,6 +2467,41 @@ internal sealed class AnsiTerminalBuffer
     }
 
     private readonly record struct ResolvedStyle(
+        Color Foreground,
+        Color Background,
+        bool Bold,
+        bool Underline,
+        string? Hyperlink);
+
+    internal readonly record struct TerminalRenderSnapshot(
+        TerminalRenderLineSnapshot[] Lines);
+
+    internal readonly record struct TerminalRenderLineSnapshot(
+        int AnchorSegmentIndex,
+        TerminalRenderSegmentSnapshot[] Segments)
+    {
+        public bool ContentEquals(TerminalRenderLineSnapshot other)
+        {
+            if (AnchorSegmentIndex != other.AnchorSegmentIndex ||
+                Segments.Length != other.Segments.Length)
+            {
+                return false;
+            }
+
+            for (int index = 0; index < Segments.Length; index++)
+            {
+                if (Segments[index] != other.Segments[index])
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
+
+    internal readonly record struct TerminalRenderSegmentSnapshot(
+        string Text,
         Color Foreground,
         Color Background,
         bool Bold,
