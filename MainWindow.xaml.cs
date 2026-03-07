@@ -34,6 +34,7 @@ public partial class MainWindow : Window
     private bool _isRecovering;
     private bool _isImeComposing;
     private bool _isRenderingTerminal;
+    private bool _documentRenderScheduled;
     private bool _outputFlushScheduled;
     private bool _followTerminalOutput = true;
     private bool _useCompatibilityMode;
@@ -67,7 +68,7 @@ public partial class MainWindow : Window
     {
         AttachTerminalScrollViewer();
         UpdateInputProxyPosition();
-        RenderTerminal();
+        RequestDocumentRender();
         StartTerminal();
     }
 
@@ -120,7 +121,7 @@ public partial class MainWindow : Window
     private void ClearButton_Click(object sender, RoutedEventArgs e)
     {
         _terminalBuffer.ClearScrollback();
-        RenderTerminal();
+        RequestDocumentRender();
         SetStatus("Cleared local scrollback.");
     }
 
@@ -473,7 +474,7 @@ public partial class MainWindow : Window
         _currentColumns = columns;
         _currentRows = rows;
         _terminalBuffer.Resize(columns, rows);
-        RenderTerminal();
+        RequestDocumentRender();
 
         if (_session is null)
         {
@@ -501,7 +502,7 @@ public partial class MainWindow : Window
         (_currentColumns, _currentRows) = CalculateTerminalSize();
         ReplaceTerminalBuffer(new AnsiTerminalBuffer(_currentColumns, _currentRows));
         _cursorBlinkVisible = true;
-        RenderTerminal();
+        RequestDocumentRender();
 
         try
         {
@@ -658,7 +659,7 @@ public partial class MainWindow : Window
         if (!string.IsNullOrEmpty(nextBatch))
         {
             _terminalBuffer.Process(nextBatch);
-            RenderTerminal();
+            RequestDocumentRender();
         }
 
         bool shouldReschedule = false;
@@ -753,10 +754,28 @@ public partial class MainWindow : Window
         CommandTextBox.IsEnabled = !isRunning;
     }
 
+    private void RequestDocumentRender()
+    {
+        if (_documentRenderScheduled)
+        {
+            return;
+        }
+
+        _documentRenderScheduled = true;
+        _ = Dispatcher.BeginInvoke(PerformDocumentRender, DispatcherPriority.Background);
+    }
+
+    private void PerformDocumentRender()
+    {
+        _documentRenderScheduled = false;
+        RenderTerminal();
+    }
+
     private void RenderTerminal()
     {
         if (_isRenderingTerminal)
         {
+            RequestDocumentRender();
             return;
         }
 
