@@ -174,12 +174,19 @@ public partial class MainWindow : Window
 
     private void TerminalOutput_PreviewTextInput(object sender, TextCompositionEventArgs e)
     {
-        if (string.IsNullOrEmpty(e.Text))
+        string text = string.IsNullOrEmpty(e.Text) ? e.SystemText : e.Text;
+        if (string.IsNullOrEmpty(text))
         {
             return;
         }
 
-        if (SendTerminalInput(e.Text))
+        ModifierKeys modifiers = GetTerminalModifiers();
+        if ((modifiers & ModifierKeys.Alt) != 0 && (modifiers & ModifierKeys.Control) == 0)
+        {
+            text = $"\u001b{text}";
+        }
+
+        if (SendTerminalInput(text))
         {
             e.Handled = true;
         }
@@ -226,7 +233,7 @@ public partial class MainWindow : Window
 
     private bool TryHandleControlShortcut(KeyEventArgs e)
     {
-        if (Keyboard.Modifiers != ModifierKeys.Control)
+        if (GetTerminalModifiers() != ModifierKeys.Control)
         {
             return false;
         }
@@ -258,40 +265,36 @@ public partial class MainWindow : Window
 
     private bool TryHandleSpecialKey(KeyEventArgs e)
     {
-        ModifierKeys modifiers = Keyboard.Modifiers;
-        if (modifiers is not ModifierKeys.None and not ModifierKeys.Shift)
-        {
-            return false;
-        }
+        ModifierKeys modifiers = GetTerminalModifiers();
 
         string? sequence = e.Key switch
         {
-            Key.Enter => "\r",
-            Key.Back => "\b",
-            Key.Tab => modifiers == ModifierKeys.Shift ? "\u001b[Z" : "\t",
-            Key.Escape => "\u001b",
-            Key.Up => _terminalBuffer.ApplicationCursorKeysEnabled ? "\u001bOA" : "\u001b[A",
-            Key.Down => _terminalBuffer.ApplicationCursorKeysEnabled ? "\u001bOB" : "\u001b[B",
-            Key.Right => _terminalBuffer.ApplicationCursorKeysEnabled ? "\u001bOC" : "\u001b[C",
-            Key.Left => _terminalBuffer.ApplicationCursorKeysEnabled ? "\u001bOD" : "\u001b[D",
-            Key.Home => _terminalBuffer.ApplicationCursorKeysEnabled ? "\u001bOH" : "\u001b[H",
-            Key.End => _terminalBuffer.ApplicationCursorKeysEnabled ? "\u001bOF" : "\u001b[F",
-            Key.Insert => "\u001b[2~",
-            Key.Delete => "\u001b[3~",
-            Key.PageUp => "\u001b[5~",
-            Key.PageDown => "\u001b[6~",
-            Key.F1 => "\u001bOP",
-            Key.F2 => "\u001bOQ",
-            Key.F3 => "\u001bOR",
-            Key.F4 => "\u001bOS",
-            Key.F5 => "\u001b[15~",
-            Key.F6 => "\u001b[17~",
-            Key.F7 => "\u001b[18~",
-            Key.F8 => "\u001b[19~",
-            Key.F9 => "\u001b[20~",
-            Key.F10 => "\u001b[21~",
-            Key.F11 => "\u001b[23~",
-            Key.F12 => "\u001b[24~",
+            Key.Enter => EncodePrefixedControl("\r", modifiers),
+            Key.Back => EncodePrefixedControl("\b", modifiers),
+            Key.Tab => EncodeTabKey(modifiers),
+            Key.Escape => EncodePrefixedControl("\u001b", modifiers),
+            Key.Up => EncodeCursorKey('A', modifiers),
+            Key.Down => EncodeCursorKey('B', modifiers),
+            Key.Right => EncodeCursorKey('C', modifiers),
+            Key.Left => EncodeCursorKey('D', modifiers),
+            Key.Home => EncodeHomeEndKey('H', modifiers),
+            Key.End => EncodeHomeEndKey('F', modifiers),
+            Key.Insert => EncodeTildeKey(2, modifiers),
+            Key.Delete => EncodeTildeKey(3, modifiers),
+            Key.PageUp => EncodeTildeKey(5, modifiers),
+            Key.PageDown => EncodeTildeKey(6, modifiers),
+            Key.F1 => EncodeSs3FunctionKey('P', modifiers),
+            Key.F2 => EncodeSs3FunctionKey('Q', modifiers),
+            Key.F3 => EncodeSs3FunctionKey('R', modifiers),
+            Key.F4 => EncodeSs3FunctionKey('S', modifiers),
+            Key.F5 => EncodeTildeKey(15, modifiers),
+            Key.F6 => EncodeTildeKey(17, modifiers),
+            Key.F7 => EncodeTildeKey(18, modifiers),
+            Key.F8 => EncodeTildeKey(19, modifiers),
+            Key.F9 => EncodeTildeKey(20, modifiers),
+            Key.F10 => EncodeTildeKey(21, modifiers),
+            Key.F11 => EncodeTildeKey(23, modifiers),
+            Key.F12 => EncodeTildeKey(24, modifiers),
             _ => null
         };
 
@@ -327,6 +330,83 @@ public partial class MainWindow : Window
         };
 
         return sequence is not null && SendTerminalInput(sequence);
+    }
+
+    private string? EncodePrefixedControl(string text, ModifierKeys modifiers)
+    {
+        return modifiers switch
+        {
+            ModifierKeys.None or ModifierKeys.Shift => text,
+            ModifierKeys.Alt or (ModifierKeys.Alt | ModifierKeys.Shift) => $"\u001b{text}",
+            _ => null
+        };
+    }
+
+    private string? EncodeTabKey(ModifierKeys modifiers)
+    {
+        return modifiers switch
+        {
+            ModifierKeys.None => "\t",
+            ModifierKeys.Shift => "\u001b[Z",
+            ModifierKeys.Alt => "\u001b\t",
+            ModifierKeys.Alt | ModifierKeys.Shift => $"\u001b[1;{GetCsiModifierParameter(modifiers)}Z",
+            _ => null
+        };
+    }
+
+    private string EncodeCursorKey(char final, ModifierKeys modifiers)
+    {
+        if (modifiers == ModifierKeys.None)
+        {
+            return _terminalBuffer.ApplicationCursorKeysEnabled ? $"\u001bO{final}" : $"\u001b[{final}";
+        }
+
+        return $"\u001b[1;{GetCsiModifierParameter(modifiers)}{final}";
+    }
+
+    private string EncodeHomeEndKey(char final, ModifierKeys modifiers)
+    {
+        if (modifiers == ModifierKeys.None)
+        {
+            return _terminalBuffer.ApplicationCursorKeysEnabled ? $"\u001bO{final}" : $"\u001b[{final}";
+        }
+
+        return $"\u001b[1;{GetCsiModifierParameter(modifiers)}{final}";
+    }
+
+    private static string EncodeSs3FunctionKey(char final, ModifierKeys modifiers)
+    {
+        return modifiers == ModifierKeys.None
+            ? $"\u001bO{final}"
+            : $"\u001b[1;{GetCsiModifierParameter(modifiers)}{final}";
+    }
+
+    private static string EncodeTildeKey(int code, ModifierKeys modifiers)
+    {
+        return modifiers == ModifierKeys.None
+            ? $"\u001b[{code}~"
+            : $"\u001b[{code};{GetCsiModifierParameter(modifiers)}~";
+    }
+
+    private static int GetCsiModifierParameter(ModifierKeys modifiers)
+    {
+        int parameter = 1;
+        if ((modifiers & ModifierKeys.Shift) != 0)
+        {
+            parameter += 1;
+        }
+
+        if ((modifiers & ModifierKeys.Alt) != 0)
+        {
+            parameter += 2;
+        }
+
+        if ((modifiers & ModifierKeys.Control) != 0)
+        {
+            parameter += 4;
+        }
+
+        return parameter;
     }
 
     private void OnTerminalOutputSizeChanged(object sender, SizeChangedEventArgs e)
@@ -847,9 +927,14 @@ public partial class MainWindow : Window
         return 3;
     }
 
+    private static ModifierKeys GetTerminalModifiers()
+    {
+        return Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control | ModifierKeys.Alt);
+    }
+
     private static int GetMouseModifierBits()
     {
-        ModifierKeys modifiers = Keyboard.Modifiers;
+        ModifierKeys modifiers = GetTerminalModifiers();
         int bits = 0;
         if ((modifiers & ModifierKeys.Shift) != 0)
         {
