@@ -644,7 +644,7 @@ public partial class MainWindow : Window
 
         if (shouldSchedule)
         {
-            _ = Dispatcher.BeginInvoke(FlushPendingOutput, DispatcherPriority.Background);
+            _ = Dispatcher.BeginInvoke(FlushPendingOutput, DispatcherPriority.Render);
         }
     }
 
@@ -680,7 +680,7 @@ public partial class MainWindow : Window
 
         if (shouldReschedule)
         {
-            _ = Dispatcher.BeginInvoke(FlushPendingOutput, DispatcherPriority.Background);
+            _ = Dispatcher.BeginInvoke(FlushPendingOutput, DispatcherPriority.Render);
         }
     }
 
@@ -777,7 +777,7 @@ public partial class MainWindow : Window
         if (elapsed >= MinDocumentRenderInterval || _lastDocumentRenderUtc == DateTime.MinValue)
         {
             _documentRenderScheduled = true;
-            _ = Dispatcher.BeginInvoke(PerformDocumentRender, DispatcherPriority.Background);
+            _ = Dispatcher.BeginInvoke(PerformDocumentRender, DispatcherPriority.Render);
             return;
         }
 
@@ -800,7 +800,7 @@ public partial class MainWindow : Window
         }
 
         _documentRenderScheduled = true;
-        _ = Dispatcher.BeginInvoke(PerformDocumentRender, DispatcherPriority.Background);
+        _ = Dispatcher.BeginInvoke(PerformDocumentRender, DispatcherPriority.Render);
     }
 
     private void RenderTerminal()
