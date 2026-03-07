@@ -251,13 +251,22 @@ public partial class MainWindow : Window
 
     private void TerminalInputProxy_PreviewTextInputStart(object sender, TextCompositionEventArgs e)
     {
-        _isImeContextActive = true;
+        if (string.IsNullOrEmpty(e.TextComposition.CompositionText))
+        {
+            return;
+        }
+
         UpdateImeComposition(e.TextComposition.CompositionText);
         UpdateNativeImeWindow();
     }
 
     private void TerminalInputProxy_PreviewTextInputUpdate(object sender, TextCompositionEventArgs e)
     {
+        if (string.IsNullOrEmpty(e.TextComposition.CompositionText))
+        {
+            return;
+        }
+
         UpdateImeComposition(e.TextComposition.CompositionText);
         UpdateNativeImeWindow();
     }
@@ -294,7 +303,13 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_isImeComposing || _isImeContextActive || !string.IsNullOrEmpty(e.TextComposition.CompositionText))
+        if (!string.IsNullOrEmpty(e.TextComposition.CompositionText))
+        {
+            UpdateImeComposition(e.TextComposition.CompositionText);
+            return;
+        }
+
+        if (_isImeContextActive)
         {
             return;
         }
