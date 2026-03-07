@@ -82,6 +82,18 @@
 
             <Canvas IsHitTestVisible="False"
                     Panel.ZIndex="1">
+                <Border x:Name="ImeCompositionOverlay"
+                        Visibility="Collapsed"
+                        Background="#111111"
+                        BorderBrush="#5FAFFF"
+                        BorderThickness="0,0,0,1"
+                        Padding="1,0">
+                    <TextBlock x:Name="ImeCompositionTextBlock"
+                               Foreground="#E3E3E3"
+                               FontFamily="Cascadia Mono"
+                               FontSize="14" />
+                </Border>
+
                 <TextBox x:Name="TerminalInputProxy"
                          Width="2"
                          Height="20"

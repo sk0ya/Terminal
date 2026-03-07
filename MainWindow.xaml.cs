@@ -29,10 +29,12 @@ public partial class MainWindow : Window
     private ScrollViewer? _terminalScrollViewer;
     private int _autoRecoveryAttempts;
     private bool _isRecovering;
+    private bool _isImeComposing;
     private bool _isRenderingTerminal;
     private bool _followTerminalOutput = true;
     private bool _useCompatibilityMode;
     private bool _cursorBlinkVisible = true;
+    private string _imeCompositionText = string.Empty;
 
     public MainWindow()
     {
@@ -46,6 +48,9 @@ public partial class MainWindow : Window
         _cursorBlinkTimer.Interval = CursorBlinkInterval;
         _cursorBlinkTimer.Tick += CursorBlinkTimer_Tick;
         _cursorBlinkTimer.Start();
+
+        TextCompositionManager.AddPreviewTextInputStartHandler(TerminalInputProxy, TerminalInputProxy_PreviewTextInputStart);
+        TextCompositionManager.AddPreviewTextInputUpdateHandler(TerminalInputProxy, TerminalInputProxy_PreviewTextInputUpdate);
 
         Loaded += OnLoaded;
         Closing += OnClosing;
@@ -66,6 +71,7 @@ public partial class MainWindow : Window
     {
         _sessionWatchdog.Stop();
         _cursorBlinkTimer.Stop();
+        ClearImeComposition();
         StopTerminal();
     }
 
@@ -177,7 +183,18 @@ public partial class MainWindow : Window
             return;
         }
 
+        ClearImeComposition();
         UpdateTerminalFocusState(focused: false);
+    }
+
+    private void TerminalInputProxy_PreviewTextInputStart(object sender, TextCompositionEventArgs e)
+    {
+        UpdateImeComposition(e.TextComposition.CompositionText);
+    }
+
+    private void TerminalInputProxy_PreviewTextInputUpdate(object sender, TextCompositionEventArgs e)
+    {
+        UpdateImeComposition(e.TextComposition.CompositionText);
     }
 
     private void TerminalOutput_PreviewTextInput(object sender, TextCompositionEventArgs e)
@@ -196,6 +213,7 @@ public partial class MainWindow : Window
 
         if (SendTerminalInput(text))
         {
+            ClearImeComposition();
             ResetInputProxyText();
             e.Handled = true;
         }
@@ -208,7 +226,18 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (TryHandleClipboardShortcut(e) || TryHandleControlShortcut(e) || TryHandleApplicationKeypad(e) || TryHandleSpecialKey(e))
+        if (TryHandleClipboardShortcut(e))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        if (IsImeInputInProgress(e))
+        {
+            return;
+        }
+
+        if (TryHandleControlShortcut(e) || TryHandleApplicationKeypad(e) || TryHandleSpecialKey(e))
         {
             e.Handled = true;
         }
@@ -238,6 +267,17 @@ public partial class MainWindow : Window
         }
 
         return false;
+    }
+
+    private bool IsImeInputInProgress(KeyEventArgs e)
+    {
+        return _isImeComposing ||
+            e.ImeProcessedKey != Key.None ||
+            e.Key == Key.ImeProcessed ||
+            e.Key == Key.ImeConvert ||
+            e.Key == Key.ImeNonConvert ||
+            e.Key == Key.ImeAccept ||
+            e.Key == Key.ImeModeChange;
     }
 
     private bool TryHandleControlShortcut(KeyEventArgs e)
@@ -500,6 +540,8 @@ public partial class MainWindow : Window
     {
         if (_session is null)
         {
+            ClearImeComposition();
+            ResetInputProxyText();
             UpdateUiState(isRunning: false);
             UpdateWindowTitle();
             return;
@@ -510,6 +552,8 @@ public partial class MainWindow : Window
         _session.Dispose();
         _session = null;
 
+        ClearImeComposition();
+        ResetInputProxyText();
         UpdateUiState(isRunning: false);
         UpdateWindowTitle();
         SetStatus("Stopped.");
@@ -726,6 +770,7 @@ public partial class MainWindow : Window
 
         Canvas.SetLeft(TerminalInputProxy, Math.Clamp(left, TerminalOutput.Padding.Left, maxLeft));
         Canvas.SetTop(TerminalInputProxy, Math.Clamp(top, TerminalOutput.Padding.Top, maxTop));
+        UpdateImeCompositionOverlay(left, top, charHeight, maxLeft, maxTop);
     }
 
     private void ResetInputProxyText()
@@ -736,6 +781,47 @@ public partial class MainWindow : Window
         }
 
         TerminalInputProxy.Clear();
+    }
+
+    private void UpdateImeComposition(string? compositionText)
+    {
+        _imeCompositionText = compositionText ?? string.Empty;
+        _isImeComposing = _imeCompositionText.Length > 0;
+        UpdateInputProxyPosition();
+    }
+
+    private void ClearImeComposition()
+    {
+        _imeCompositionText = string.Empty;
+        _isImeComposing = false;
+        ImeCompositionOverlay.Visibility = Visibility.Collapsed;
+        ImeCompositionTextBlock.Text = string.Empty;
+    }
+
+    private void UpdateImeCompositionOverlay(double left, double top, double charHeight, double maxLeft, double maxTop)
+    {
+        if (!_isImeComposing || string.IsNullOrEmpty(_imeCompositionText) || !HasTerminalInputFocus())
+        {
+            ImeCompositionOverlay.Visibility = Visibility.Collapsed;
+            ImeCompositionTextBlock.Text = string.Empty;
+            return;
+        }
+
+        ImeCompositionTextBlock.FontFamily = TerminalOutput.FontFamily;
+        ImeCompositionTextBlock.FontSize = TerminalOutput.FontSize;
+        ImeCompositionTextBlock.Text = _imeCompositionText;
+
+        Size textSize = MeasureTerminalText(_imeCompositionText);
+        double overlayWidth = Math.Max(textSize.Width + 4, 8);
+        double overlayHeight = Math.Max(textSize.Height, charHeight);
+        double overlayLeft = Math.Clamp(left, TerminalOutput.Padding.Left, Math.Max(TerminalOutput.Padding.Left, maxLeft - overlayWidth + TerminalInputProxy.Width));
+        double overlayTop = Math.Clamp(top, TerminalOutput.Padding.Top, Math.Max(TerminalOutput.Padding.Top, maxTop - overlayHeight));
+
+        ImeCompositionOverlay.Width = overlayWidth;
+        ImeCompositionOverlay.Height = overlayHeight;
+        Canvas.SetLeft(ImeCompositionOverlay, overlayLeft);
+        Canvas.SetTop(ImeCompositionOverlay, overlayTop);
+        ImeCompositionOverlay.Visibility = Visibility.Visible;
     }
 
     private void AttachTerminalScrollViewer()
@@ -1094,6 +1180,14 @@ public partial class MainWindow : Window
 
     private (double Width, double Height) MeasureCharacterCell()
     {
+        Size size = MeasureTerminalText("W");
+        return (
+            Math.Max(size.Width, 1.0),
+            Math.Max(size.Height, 1.0));
+    }
+
+    private Size MeasureTerminalText(string text)
+    {
         var typeface = new Typeface(
             TerminalOutput.FontFamily,
             TerminalOutput.FontStyle,
@@ -1101,7 +1195,7 @@ public partial class MainWindow : Window
             TerminalOutput.FontStretch);
 
         var sample = new FormattedText(
-            "W",
+            string.IsNullOrEmpty(text) ? " " : text,
             CultureInfo.CurrentCulture,
             FlowDirection.LeftToRight,
             typeface,
@@ -1109,7 +1203,7 @@ public partial class MainWindow : Window
             Brushes.White,
             VisualTreeHelper.GetDpi(this).PixelsPerDip);
 
-        return (
+        return new Size(
             Math.Max(sample.WidthIncludingTrailingWhitespace, 1.0),
             Math.Max(sample.Height, 1.0));
     }
