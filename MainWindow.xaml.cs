@@ -309,11 +309,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_isImeContextActive)
-        {
-            return;
-        }
-
         if (SendTerminalText(text, prefixAltIfNeeded: true))
         {
             ClearImeComposition();
@@ -375,7 +370,6 @@ public partial class MainWindow : Window
     private bool IsImeInputInProgress(KeyEventArgs e)
     {
         return _isImeComposing ||
-            _isImeContextActive ||
             e.ImeProcessedKey != Key.None ||
             e.Key == Key.ImeProcessed ||
             e.Key == Key.ImeConvert ||
