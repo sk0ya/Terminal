@@ -1519,6 +1519,11 @@ internal sealed class AnsiTerminalBuffer
             return 0;
         }
 
+        if (IsZeroWidthExtension(rune))
+        {
+            return 0;
+        }
+
         if (rune.IsAscii)
         {
             return 1;
@@ -1542,6 +1547,17 @@ internal sealed class AnsiTerminalBuffer
         }
 
         return 1;
+    }
+
+    private static bool IsZeroWidthExtension(Rune rune)
+    {
+        int value = rune.Value;
+        return value is
+            0x200D or
+            0xFE0E or
+            0xFE0F or
+            >= 0x1F3FB and <= 0x1F3FF or
+            >= 0xE0100 and <= 0xE01EF;
     }
 
     private static int?[] ParseParameters(string paramText)
