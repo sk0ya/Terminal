@@ -14,10 +14,25 @@ internal enum TerminalMouseTrackingMode
     AnyEvent
 }
 
+internal enum TerminalMouseEncoding
+{
+    Default,
+    Utf8,
+    Sgr,
+    Urxvt
+}
+
 internal enum TerminalCharacterSet
 {
     Ascii,
     DecSpecialGraphics
+}
+
+internal enum TerminalCursorShape
+{
+    Block,
+    Underline,
+    Bar
 }
 
 internal sealed class AnsiTerminalBuffer
@@ -49,6 +64,7 @@ internal sealed class AnsiTerminalBuffer
         Color.FromRgb(0xF2, 0xF2, 0xF2)
     };
     private static readonly Dictionary<Color, SolidColorBrush> BrushCache = [];
+    private static readonly char[] CsiIntermediateCharacters = [' ', '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/'];
 
     private readonly int _scrollbackLimit;
     private readonly List<TerminalLine> _scrollback = [];
@@ -70,6 +86,7 @@ internal sealed class AnsiTerminalBuffer
     private TerminalStyle _currentStyle = TerminalStyle.Default;
     private TerminalStyle _savedStyle = TerminalStyle.Default;
     private bool _cursorVisible = true;
+    private bool _cursorBlinkEnabled = true;
     private int _charsetDesignationTarget;
     private bool _applicationCursorKeys;
     private bool _applicationKeypad;
@@ -79,10 +96,19 @@ internal sealed class AnsiTerminalBuffer
     private bool _bracketedPasteEnabled;
     private bool _focusReportingEnabled;
     private bool _useG1CharacterSet;
+    private bool _savedUseG1CharacterSet;
+    private bool _savedInsertMode;
+    private bool _savedOriginMode;
+    private bool _savedAutoWrapEnabled = true;
+    private bool _useUtf8MouseEncoding;
     private bool _useSgrMouseEncoding;
+    private bool _useUrxvtMouseEncoding;
     private TerminalMouseTrackingMode _mouseTrackingMode;
+    private TerminalCursorShape _cursorShape = TerminalCursorShape.Block;
     private TerminalCharacterSet _g0CharacterSet = TerminalCharacterSet.Ascii;
     private TerminalCharacterSet _g1CharacterSet = TerminalCharacterSet.Ascii;
+    private TerminalCharacterSet _savedG0CharacterSet = TerminalCharacterSet.Ascii;
+    private TerminalCharacterSet _savedG1CharacterSet = TerminalCharacterSet.Ascii;
     private string _windowTitle = string.Empty;
 
     public event EventHandler<string>? InputSequenceGenerated;
@@ -105,9 +131,11 @@ internal sealed class AnsiTerminalBuffer
     public bool BracketedPasteEnabled => _bracketedPasteEnabled;
     public int CursorRow => _cursorRow;
     public int CursorColumn => Math.Clamp(_cursorColumn, 0, _columns - 1);
+    public bool CursorBlinkEnabled => _cursorBlinkEnabled;
+    public TerminalCursorShape CursorShape => _cursorShape;
     public bool CursorVisible => _cursorVisible;
     public bool FocusReportingEnabled => _focusReportingEnabled;
-    public bool UseSgrMouseEncoding => _useSgrMouseEncoding;
+    public TerminalMouseEncoding MouseEncoding => ResolveMouseEncoding();
     public TerminalMouseTrackingMode MouseTrackingMode => _mouseTrackingMode;
 
     public void Resize(short columns, short rows)
@@ -280,6 +308,8 @@ internal sealed class AnsiTerminalBuffer
         _currentStyle = TerminalStyle.Default;
         _savedStyle = TerminalStyle.Default;
         _cursorVisible = true;
+        _cursorBlinkEnabled = true;
+        _cursorShape = TerminalCursorShape.Block;
         _charsetDesignationTarget = 0;
         _applicationCursorKeys = false;
         _applicationKeypad = false;
@@ -289,10 +319,18 @@ internal sealed class AnsiTerminalBuffer
         _bracketedPasteEnabled = false;
         _focusReportingEnabled = false;
         _useG1CharacterSet = false;
+        _savedUseG1CharacterSet = false;
+        _savedInsertMode = false;
+        _savedOriginMode = false;
+        _savedAutoWrapEnabled = true;
+        _useUtf8MouseEncoding = false;
         _useSgrMouseEncoding = false;
+        _useUrxvtMouseEncoding = false;
         _mouseTrackingMode = TerminalMouseTrackingMode.Off;
         _g0CharacterSet = TerminalCharacterSet.Ascii;
         _g1CharacterSet = TerminalCharacterSet.Ascii;
+        _savedG0CharacterSet = TerminalCharacterSet.Ascii;
+        _savedG1CharacterSet = TerminalCharacterSet.Ascii;
         _windowTitle = string.Empty;
         _state = ParserState.Normal;
         _csiBuffer.Clear();
@@ -565,7 +603,10 @@ internal sealed class AnsiTerminalBuffer
         char prefix = rawParams.Length > 0 && (rawParams[0] == '?' || rawParams[0] == '>') ? rawParams[0] : '\0';
         bool isPrivate = prefix == '?';
         bool isSecondary = prefix == '>';
-        string paramText = prefix == '\0' ? rawParams : rawParams[1..];
+        string parameterSection = prefix == '\0' ? rawParams : rawParams[1..];
+        int intermediateIndex = parameterSection.IndexOfAny(CsiIntermediateCharacters);
+        string intermediate = intermediateIndex >= 0 ? parameterSection[intermediateIndex..] : string.Empty;
+        string paramText = intermediateIndex >= 0 ? parameterSection[..intermediateIndex] : parameterSection;
         int?[] parameters = ParseParameters(paramText);
 
         switch (command)
@@ -657,6 +698,13 @@ internal sealed class AnsiTerminalBuffer
             case 'n':
                 DispatchDeviceStatusReport(parameters, isPrivate);
                 break;
+            case 'q':
+                if (intermediate == " ")
+                {
+                    SetCursorStyle(GetParameter(parameters, 0, 0));
+                }
+
+                break;
             case 'r':
                 SetScrollRegion(parameters);
                 break;
@@ -674,6 +722,12 @@ internal sealed class AnsiTerminalBuffer
         _savedCursorRow = _cursorRow;
         _savedCursorColumn = _cursorColumn;
         _savedStyle = _currentStyle;
+        _savedUseG1CharacterSet = _useG1CharacterSet;
+        _savedG0CharacterSet = _g0CharacterSet;
+        _savedG1CharacterSet = _g1CharacterSet;
+        _savedInsertMode = _insertMode;
+        _savedOriginMode = _originMode;
+        _savedAutoWrapEnabled = _autoWrapEnabled;
     }
 
     private void RestoreCursorState()
@@ -681,6 +735,12 @@ internal sealed class AnsiTerminalBuffer
         _cursorRow = Math.Clamp(_savedCursorRow, 0, _rows - 1);
         _cursorColumn = Math.Clamp(_savedCursorColumn, 0, _columns - 1);
         _currentStyle = _savedStyle;
+        _useG1CharacterSet = _savedUseG1CharacterSet;
+        _g0CharacterSet = _savedG0CharacterSet;
+        _g1CharacterSet = _savedG1CharacterSet;
+        _insertMode = _savedInsertMode;
+        _originMode = _savedOriginMode;
+        _autoWrapEnabled = _savedAutoWrapEnabled;
     }
 
     private void ReverseIndex()
@@ -742,6 +802,26 @@ internal sealed class AnsiTerminalBuffer
             : payload.PadRight(payload.Length + (4 - remainder), '=');
     }
 
+    private TerminalMouseEncoding ResolveMouseEncoding()
+    {
+        if (_useSgrMouseEncoding)
+        {
+            return TerminalMouseEncoding.Sgr;
+        }
+
+        if (_useUrxvtMouseEncoding)
+        {
+            return TerminalMouseEncoding.Urxvt;
+        }
+
+        if (_useUtf8MouseEncoding)
+        {
+            return TerminalMouseEncoding.Utf8;
+        }
+
+        return TerminalMouseEncoding.Default;
+    }
+
     private void SetPrivateMode(int?[] parameters, bool enabled)
     {
         foreach (int? parameter in parameters)
@@ -791,8 +871,14 @@ internal sealed class AnsiTerminalBuffer
                 case 1004:
                     _focusReportingEnabled = enabled;
                     break;
+                case 1005:
+                    _useUtf8MouseEncoding = enabled;
+                    break;
                 case 1006:
                     _useSgrMouseEncoding = enabled;
+                    break;
+                case 1015:
+                    _useUrxvtMouseEncoding = enabled;
                     break;
                 case 66:
                     _applicationKeypad = enabled;
@@ -814,6 +900,38 @@ internal sealed class AnsiTerminalBuffer
                     _insertMode = enabled;
                     break;
             }
+        }
+    }
+
+    private void SetCursorStyle(int parameter)
+    {
+        switch (parameter)
+        {
+            case 0:
+            case 1:
+                _cursorShape = TerminalCursorShape.Block;
+                _cursorBlinkEnabled = true;
+                break;
+            case 2:
+                _cursorShape = TerminalCursorShape.Block;
+                _cursorBlinkEnabled = false;
+                break;
+            case 3:
+                _cursorShape = TerminalCursorShape.Underline;
+                _cursorBlinkEnabled = true;
+                break;
+            case 4:
+                _cursorShape = TerminalCursorShape.Underline;
+                _cursorBlinkEnabled = false;
+                break;
+            case 5:
+                _cursorShape = TerminalCursorShape.Bar;
+                _cursorBlinkEnabled = true;
+                break;
+            case 6:
+                _cursorShape = TerminalCursorShape.Bar;
+                _cursorBlinkEnabled = false;
+                break;
         }
     }
 

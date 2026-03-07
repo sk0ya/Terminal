@@ -20,6 +20,8 @@ public partial class MainWindow : Window
     private static readonly TimeSpan InitialOutputTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan IdleOutputTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan CursorBlinkInterval = TimeSpan.FromMilliseconds(530);
+    private static readonly Brush BlockCursorBrush = CreateFrozenBrush(Color.FromArgb(0xA0, 0xE3, 0xE3, 0xE3));
+    private static readonly Brush AccentCursorBrush = CreateFrozenBrush(Color.FromRgb(0x5F, 0xAF, 0xFF));
 
     private ITerminalSession? _session;
     private AnsiTerminalBuffer _terminalBuffer = new(120, 30);
@@ -323,32 +325,32 @@ public partial class MainWindow : Window
 
         string? sequence = e.Key switch
         {
-            Key.Enter => EncodePrefixedControl("\r", modifiers),
-            Key.Back => EncodePrefixedControl("\b", modifiers),
-            Key.Tab => EncodeTabKey(modifiers),
-            Key.Escape => EncodePrefixedControl("\u001b", modifiers),
-            Key.Up => EncodeCursorKey('A', modifiers),
-            Key.Down => EncodeCursorKey('B', modifiers),
-            Key.Right => EncodeCursorKey('C', modifiers),
-            Key.Left => EncodeCursorKey('D', modifiers),
-            Key.Home => EncodeHomeEndKey('H', modifiers),
-            Key.End => EncodeHomeEndKey('F', modifiers),
-            Key.Insert => EncodeTildeKey(2, modifiers),
-            Key.Delete => EncodeTildeKey(3, modifiers),
-            Key.PageUp => EncodeTildeKey(5, modifiers),
-            Key.PageDown => EncodeTildeKey(6, modifiers),
-            Key.F1 => EncodeSs3FunctionKey('P', modifiers),
-            Key.F2 => EncodeSs3FunctionKey('Q', modifiers),
-            Key.F3 => EncodeSs3FunctionKey('R', modifiers),
-            Key.F4 => EncodeSs3FunctionKey('S', modifiers),
-            Key.F5 => EncodeTildeKey(15, modifiers),
-            Key.F6 => EncodeTildeKey(17, modifiers),
-            Key.F7 => EncodeTildeKey(18, modifiers),
-            Key.F8 => EncodeTildeKey(19, modifiers),
-            Key.F9 => EncodeTildeKey(20, modifiers),
-            Key.F10 => EncodeTildeKey(21, modifiers),
-            Key.F11 => EncodeTildeKey(23, modifiers),
-            Key.F12 => EncodeTildeKey(24, modifiers),
+            Key.Enter => TerminalInputEncoder.EncodePrefixedControl("\r", modifiers),
+            Key.Back => TerminalInputEncoder.EncodePrefixedControl("\b", modifiers),
+            Key.Tab => TerminalInputEncoder.EncodeTabKey(modifiers),
+            Key.Escape => TerminalInputEncoder.EncodePrefixedControl("\u001b", modifiers),
+            Key.Up => TerminalInputEncoder.EncodeCursorKey('A', modifiers, _terminalBuffer.ApplicationCursorKeysEnabled),
+            Key.Down => TerminalInputEncoder.EncodeCursorKey('B', modifiers, _terminalBuffer.ApplicationCursorKeysEnabled),
+            Key.Right => TerminalInputEncoder.EncodeCursorKey('C', modifiers, _terminalBuffer.ApplicationCursorKeysEnabled),
+            Key.Left => TerminalInputEncoder.EncodeCursorKey('D', modifiers, _terminalBuffer.ApplicationCursorKeysEnabled),
+            Key.Home => TerminalInputEncoder.EncodeHomeEndKey('H', modifiers, _terminalBuffer.ApplicationCursorKeysEnabled),
+            Key.End => TerminalInputEncoder.EncodeHomeEndKey('F', modifiers, _terminalBuffer.ApplicationCursorKeysEnabled),
+            Key.Insert => TerminalInputEncoder.EncodeTildeKey(2, modifiers),
+            Key.Delete => TerminalInputEncoder.EncodeTildeKey(3, modifiers),
+            Key.PageUp => TerminalInputEncoder.EncodeTildeKey(5, modifiers),
+            Key.PageDown => TerminalInputEncoder.EncodeTildeKey(6, modifiers),
+            Key.F1 => TerminalInputEncoder.EncodeSs3FunctionKey('P', modifiers),
+            Key.F2 => TerminalInputEncoder.EncodeSs3FunctionKey('Q', modifiers),
+            Key.F3 => TerminalInputEncoder.EncodeSs3FunctionKey('R', modifiers),
+            Key.F4 => TerminalInputEncoder.EncodeSs3FunctionKey('S', modifiers),
+            Key.F5 => TerminalInputEncoder.EncodeTildeKey(15, modifiers),
+            Key.F6 => TerminalInputEncoder.EncodeTildeKey(17, modifiers),
+            Key.F7 => TerminalInputEncoder.EncodeTildeKey(18, modifiers),
+            Key.F8 => TerminalInputEncoder.EncodeTildeKey(19, modifiers),
+            Key.F9 => TerminalInputEncoder.EncodeTildeKey(20, modifiers),
+            Key.F10 => TerminalInputEncoder.EncodeTildeKey(21, modifiers),
+            Key.F11 => TerminalInputEncoder.EncodeTildeKey(23, modifiers),
+            Key.F12 => TerminalInputEncoder.EncodeTildeKey(24, modifiers),
             _ => null
         };
 
@@ -384,83 +386,6 @@ public partial class MainWindow : Window
         };
 
         return sequence is not null && SendTerminalInput(sequence);
-    }
-
-    private string? EncodePrefixedControl(string text, ModifierKeys modifiers)
-    {
-        return modifiers switch
-        {
-            ModifierKeys.None or ModifierKeys.Shift => text,
-            ModifierKeys.Alt or (ModifierKeys.Alt | ModifierKeys.Shift) => $"\u001b{text}",
-            _ => null
-        };
-    }
-
-    private string? EncodeTabKey(ModifierKeys modifiers)
-    {
-        return modifiers switch
-        {
-            ModifierKeys.None => "\t",
-            ModifierKeys.Shift => "\u001b[Z",
-            ModifierKeys.Alt => "\u001b\t",
-            ModifierKeys.Alt | ModifierKeys.Shift => $"\u001b[1;{GetCsiModifierParameter(modifiers)}Z",
-            _ => null
-        };
-    }
-
-    private string EncodeCursorKey(char final, ModifierKeys modifiers)
-    {
-        if (modifiers == ModifierKeys.None)
-        {
-            return _terminalBuffer.ApplicationCursorKeysEnabled ? $"\u001bO{final}" : $"\u001b[{final}";
-        }
-
-        return $"\u001b[1;{GetCsiModifierParameter(modifiers)}{final}";
-    }
-
-    private string EncodeHomeEndKey(char final, ModifierKeys modifiers)
-    {
-        if (modifiers == ModifierKeys.None)
-        {
-            return _terminalBuffer.ApplicationCursorKeysEnabled ? $"\u001bO{final}" : $"\u001b[{final}";
-        }
-
-        return $"\u001b[1;{GetCsiModifierParameter(modifiers)}{final}";
-    }
-
-    private static string EncodeSs3FunctionKey(char final, ModifierKeys modifiers)
-    {
-        return modifiers == ModifierKeys.None
-            ? $"\u001bO{final}"
-            : $"\u001b[1;{GetCsiModifierParameter(modifiers)}{final}";
-    }
-
-    private static string EncodeTildeKey(int code, ModifierKeys modifiers)
-    {
-        return modifiers == ModifierKeys.None
-            ? $"\u001b[{code}~"
-            : $"\u001b[{code};{GetCsiModifierParameter(modifiers)}~";
-    }
-
-    private static int GetCsiModifierParameter(ModifierKeys modifiers)
-    {
-        int parameter = 1;
-        if ((modifiers & ModifierKeys.Shift) != 0)
-        {
-            parameter += 1;
-        }
-
-        if ((modifiers & ModifierKeys.Alt) != 0)
-        {
-            parameter += 2;
-        }
-
-        if ((modifiers & ModifierKeys.Control) != 0)
-        {
-            parameter += 4;
-        }
-
-        return parameter;
     }
 
     private void OnTerminalOutputSizeChanged(object sender, SizeChangedEventArgs e)
@@ -585,9 +510,19 @@ public partial class MainWindow : Window
 
     private void CursorBlinkTimer_Tick(object? sender, EventArgs e)
     {
-        bool nextVisible = HasTerminalInputFocus() && _session is not null
-            ? !_cursorBlinkVisible
-            : false;
+        bool nextVisible;
+        if (_session is null || !HasTerminalInputFocus())
+        {
+            nextVisible = false;
+        }
+        else if (!_terminalBuffer.CursorBlinkEnabled)
+        {
+            nextVisible = true;
+        }
+        else
+        {
+            nextVisible = !_cursorBlinkVisible;
+        }
 
         if (_cursorBlinkVisible == nextVisible)
         {
@@ -807,7 +742,9 @@ public partial class MainWindow : Window
 
     private bool ShouldShowCursor()
     {
-        return _session is not null && HasTerminalInputFocus() && _cursorBlinkVisible;
+        return _session is not null &&
+            HasTerminalInputFocus() &&
+            (!_terminalBuffer.CursorBlinkEnabled || _cursorBlinkVisible);
     }
 
     private bool HasTerminalInputFocus()
@@ -817,7 +754,7 @@ public partial class MainWindow : Window
 
     private void UpdateTerminalFocusState(bool focused)
     {
-        _cursorBlinkVisible = focused;
+        _cursorBlinkVisible = focused || !_terminalBuffer.CursorBlinkEnabled;
         if (_isRenderingTerminal)
         {
             return;
@@ -932,11 +869,27 @@ public partial class MainWindow : Window
 
         double overlayWidth = Math.Max(2, Math.Ceiling(charWidth));
         double overlayHeight = Math.Max(2, Math.Ceiling(charHeight));
+        Brush background = BlockCursorBrush;
+
+        switch (_terminalBuffer.CursorShape)
+        {
+            case TerminalCursorShape.Underline:
+                overlayHeight = Math.Max(2, Math.Ceiling(charHeight / 6));
+                top += Math.Max(0, charHeight - overlayHeight);
+                background = AccentCursorBrush;
+                break;
+            case TerminalCursorShape.Bar:
+                overlayWidth = Math.Max(2, Math.Ceiling(charWidth / 6));
+                background = AccentCursorBrush;
+                break;
+        }
+
         double overlayLeft = Math.Clamp(left, TerminalOutput.Padding.Left, Math.Max(TerminalOutput.Padding.Left, maxLeft - overlayWidth + TerminalInputProxy.Width));
         double overlayTop = Math.Clamp(top, TerminalOutput.Padding.Top, Math.Max(TerminalOutput.Padding.Top, maxTop - overlayHeight));
 
         TerminalCursorOverlay.Width = overlayWidth;
         TerminalCursorOverlay.Height = overlayHeight;
+        TerminalCursorOverlay.Background = background;
         Canvas.SetLeft(TerminalCursorOverlay, overlayLeft);
         Canvas.SetTop(TerminalCursorOverlay, overlayTop);
         TerminalCursorOverlay.Visibility = Visibility.Visible;
@@ -1214,28 +1167,11 @@ public partial class MainWindow : Window
             }
         }
 
-        code += GetMouseModifierBits();
+        code += TerminalInputEncoder.GetMouseModifierBits(GetTerminalModifiers());
 
-        if (_terminalBuffer.UseSgrMouseEncoding)
-        {
-            char suffix = released && !motion && !wheel ? 'm' : 'M';
-            return SendTerminalInput($"\u001b[<{code};{column};{row}{suffix}");
-        }
-
-        return SendTerminalInput(EncodeLegacyMouseSequenceBytes(code, column, row));
-    }
-
-    private static byte[] EncodeLegacyMouseSequenceBytes(int code, int column, int row)
-    {
-        return
-        [
-            0x1B,
-            (byte)'[',
-            (byte)'M',
-            (byte)Math.Clamp(code + 32, 32, 255),
-            (byte)Math.Clamp(column + 32, 32, 255),
-            (byte)Math.Clamp(row + 32, 32, 255)
-        ];
+        bool sgrRelease = released && !motion && !wheel;
+        byte[] sequence = TerminalInputEncoder.EncodeMouseSequence(_terminalBuffer.MouseEncoding, code, column, row, sgrRelease);
+        return SendTerminalInput(sequence);
     }
 
     private static int? MapMouseButton(MouseButton button)
@@ -1277,28 +1213,6 @@ public partial class MainWindow : Window
     private static string NormalizeClipboardSelectionTargets(string? selectionTargets)
     {
         return string.IsNullOrWhiteSpace(selectionTargets) ? "c" : selectionTargets.Trim();
-    }
-
-    private static int GetMouseModifierBits()
-    {
-        ModifierKeys modifiers = GetTerminalModifiers();
-        int bits = 0;
-        if ((modifiers & ModifierKeys.Shift) != 0)
-        {
-            bits += 4;
-        }
-
-        if ((modifiers & ModifierKeys.Alt) != 0)
-        {
-            bits += 8;
-        }
-
-        if ((modifiers & ModifierKeys.Control) != 0)
-        {
-            bits += 16;
-        }
-
-        return bits;
     }
 
     private bool TryGetMouseCell(Point position, out int column, out int row)
@@ -1363,6 +1277,13 @@ public partial class MainWindow : Window
         }
 
         return "cmd.exe /K";
+    }
+
+    private static Brush CreateFrozenBrush(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
     }
 
     private static string FormatExceptionMessage(Exception ex)
