@@ -57,6 +57,7 @@ public partial class MainWindow : Window
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         AttachTerminalScrollViewer();
+        UpdateInputProxyPosition();
         RenderTerminal();
         StartTerminal();
     }
@@ -115,11 +116,6 @@ public partial class MainWindow : Window
 
     private void TerminalOutput_PreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (!TerminalOutput.IsKeyboardFocusWithin)
-        {
-            Keyboard.Focus(TerminalOutput);
-        }
-
         if (TrySendMouseButtonEvent(e, pressed: true))
         {
             e.Handled = true;
@@ -128,6 +124,8 @@ public partial class MainWindow : Window
 
     private void TerminalOutput_PreviewMouseUp(object sender, MouseButtonEventArgs e)
     {
+        QueueTerminalInputFocus();
+
         if (TrySendMouseButtonEvent(e, pressed: false))
         {
             e.Handled = true;
@@ -152,24 +150,34 @@ public partial class MainWindow : Window
 
     private void TerminalOutput_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
-        _cursorBlinkVisible = true;
-        if (_isRenderingTerminal)
-        {
-            return;
-        }
-
-        RenderTerminal();
+        QueueTerminalInputFocus();
+        UpdateTerminalFocusState(focused: true);
     }
 
     private void TerminalOutput_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
-        _cursorBlinkVisible = false;
-        if (_isRenderingTerminal)
+        if (TerminalInputProxy.IsKeyboardFocusWithin)
         {
             return;
         }
 
-        RenderTerminal();
+        UpdateTerminalFocusState(focused: false);
+    }
+
+    private void TerminalInputProxy_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        UpdateInputProxyPosition();
+        UpdateTerminalFocusState(focused: true);
+    }
+
+    private void TerminalInputProxy_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (TerminalOutput.IsKeyboardFocusWithin)
+        {
+            return;
+        }
+
+        UpdateTerminalFocusState(focused: false);
     }
 
     private void TerminalOutput_PreviewTextInput(object sender, TextCompositionEventArgs e)
@@ -188,6 +196,7 @@ public partial class MainWindow : Window
 
         if (SendTerminalInput(text))
         {
+            ResetInputProxyText();
             e.Handled = true;
         }
     }
@@ -477,7 +486,7 @@ public partial class MainWindow : Window
             _session.Exited += OnProcessExited;
             _session.Start();
             UpdateUiState(isRunning: true);
-            TerminalOutput.Focus();
+            FocusTerminalInput();
             SetStatus($"Started ({modeLabel}): {commandLine}");
         }
         catch (Exception ex)
@@ -526,7 +535,7 @@ public partial class MainWindow : Window
 
     private void CursorBlinkTimer_Tick(object? sender, EventArgs e)
     {
-        bool nextVisible = TerminalOutput.IsKeyboardFocusWithin && _session is not null
+        bool nextVisible = HasTerminalInputFocus() && _session is not null
             ? !_cursorBlinkVisible
             : false;
 
@@ -634,7 +643,7 @@ public partial class MainWindow : Window
         }
 
         AttachTerminalScrollViewer();
-        bool shouldRestoreFocus = TerminalOutput.IsKeyboardFocusWithin;
+        bool shouldRestoreFocus = HasTerminalInputFocus();
         double preservedDistanceFromBottom = GetDistanceFromBottom();
         _isRenderingTerminal = true;
         try
@@ -644,9 +653,10 @@ public partial class MainWindow : Window
                 TerminalOutput.FontSize,
                 showCursor: ShouldShowCursor());
             TerminalOutput.UpdateLayout();
-            if (shouldRestoreFocus && !TerminalOutput.IsKeyboardFocusWithin)
+            UpdateInputProxyPosition();
+            if (shouldRestoreFocus && !HasTerminalInputFocus())
             {
-                Keyboard.Focus(TerminalOutput);
+                FocusTerminalInput();
             }
 
             RestoreTerminalViewport(preservedDistanceFromBottom);
@@ -660,7 +670,72 @@ public partial class MainWindow : Window
 
     private bool ShouldShowCursor()
     {
-        return _session is not null && TerminalOutput.IsKeyboardFocusWithin && _cursorBlinkVisible;
+        return _session is not null && HasTerminalInputFocus() && _cursorBlinkVisible;
+    }
+
+    private bool HasTerminalInputFocus()
+    {
+        return TerminalInputProxy.IsKeyboardFocusWithin || TerminalOutput.IsKeyboardFocusWithin;
+    }
+
+    private void UpdateTerminalFocusState(bool focused)
+    {
+        _cursorBlinkVisible = focused;
+        if (_isRenderingTerminal)
+        {
+            return;
+        }
+
+        RenderTerminal();
+    }
+
+    private void QueueTerminalInputFocus()
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(FocusTerminalInput, DispatcherPriority.Input);
+    }
+
+    private void FocusTerminalInput()
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        ResetInputProxyText();
+        UpdateInputProxyPosition();
+        Keyboard.Focus(TerminalInputProxy);
+    }
+
+    private void UpdateInputProxyPosition()
+    {
+        var (charWidth, charHeight) = MeasureCharacterCell();
+        TerminalInputProxy.Width = Math.Max(2, charWidth);
+        TerminalInputProxy.Height = Math.Max(2, charHeight);
+        TerminalInputProxy.FontFamily = TerminalOutput.FontFamily;
+        TerminalInputProxy.FontSize = TerminalOutput.FontSize;
+
+        double left = TerminalOutput.Padding.Left + (_terminalBuffer.CursorColumn * charWidth);
+        double top = TerminalOutput.Padding.Top + (_terminalBuffer.CursorRow * charHeight);
+        double maxLeft = Math.Max(TerminalOutput.Padding.Left, TerminalOutput.ActualWidth - TerminalOutput.Padding.Right - TerminalInputProxy.Width);
+        double maxTop = Math.Max(TerminalOutput.Padding.Top, TerminalOutput.ActualHeight - TerminalOutput.Padding.Bottom - TerminalInputProxy.Height);
+
+        Canvas.SetLeft(TerminalInputProxy, Math.Clamp(left, TerminalOutput.Padding.Left, maxLeft));
+        Canvas.SetTop(TerminalInputProxy, Math.Clamp(top, TerminalOutput.Padding.Top, maxTop));
+    }
+
+    private void ResetInputProxyText()
+    {
+        if (TerminalInputProxy.Text.Length == 0)
+        {
+            return;
+        }
+
+        TerminalInputProxy.Clear();
     }
 
     private void AttachTerminalScrollViewer()
