@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Windows;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -10,26 +11,38 @@ namespace ConPtyTerminal;
 
 public partial class MainWindow : Window
 {
+    private const string BaseWindowTitle = "ConPTY Terminal";
+    private const int MaxAutoRecoveryAttempts = 1;
+
+    private static readonly TimeSpan InitialOutputTimeout = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan IdleOutputTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan CursorBlinkInterval = TimeSpan.FromMilliseconds(530);
+
     private ITerminalSession? _session;
     private AnsiTerminalBuffer _terminalBuffer = new(120, 30);
     private short _currentColumns = 120;
     private short _currentRows = 30;
     private readonly DispatcherTimer _sessionWatchdog = new();
+    private readonly DispatcherTimer _cursorBlinkTimer = new();
     private int _autoRecoveryAttempts;
     private bool _isRecovering;
+    private bool _isRenderingTerminal;
     private bool _useCompatibilityMode;
-
-    private const int MaxAutoRecoveryAttempts = 1;
-    private static readonly TimeSpan InitialOutputTimeout = TimeSpan.FromSeconds(4);
-    private static readonly TimeSpan IdleOutputTimeout = TimeSpan.FromSeconds(20);
+    private bool _cursorBlinkVisible = true;
 
     public MainWindow()
     {
         InitializeComponent();
         CommandTextBox.Text = BuildDefaultCommandLine();
+
         _sessionWatchdog.Interval = TimeSpan.FromSeconds(1);
         _sessionWatchdog.Tick += SessionWatchdog_Tick;
         _sessionWatchdog.Start();
+
+        _cursorBlinkTimer.Interval = CursorBlinkInterval;
+        _cursorBlinkTimer.Tick += CursorBlinkTimer_Tick;
+        _cursorBlinkTimer.Start();
+
         Loaded += OnLoaded;
         Closing += OnClosing;
         TerminalOutput.SizeChanged += OnTerminalOutputSizeChanged;
@@ -37,12 +50,14 @@ public partial class MainWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        RenderTerminal();
         StartTerminal();
     }
 
     private void OnClosing(object? sender, CancelEventArgs e)
     {
         _sessionWatchdog.Stop();
+        _cursorBlinkTimer.Stop();
         StopTerminal();
     }
 
@@ -64,18 +79,178 @@ public partial class MainWindow : Window
         RecoverSession(isAutomatic: false);
     }
 
-    private void SendButton_Click(object sender, RoutedEventArgs e)
+    private void PasteButton_Click(object sender, RoutedEventArgs e)
     {
-        SendInput();
+        PasteFromClipboard();
     }
 
-    private void InputTextBox_KeyDown(object sender, KeyEventArgs e)
+    private void InterruptButton_Click(object sender, RoutedEventArgs e)
     {
-        if (e.Key == Key.Enter)
+        SendInterrupt();
+    }
+
+    private void ClearButton_Click(object sender, RoutedEventArgs e)
+    {
+        _terminalBuffer.ClearScrollback();
+        RenderTerminal();
+        SetStatus("Cleared local scrollback.");
+    }
+
+    private void TerminalOutput_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!TerminalOutput.IsKeyboardFocusWithin)
         {
             e.Handled = true;
-            SendInput();
+            Keyboard.Focus(TerminalOutput);
         }
+    }
+
+    private void TerminalOutput_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        _cursorBlinkVisible = true;
+        if (_isRenderingTerminal)
+        {
+            return;
+        }
+
+        RenderTerminal();
+    }
+
+    private void TerminalOutput_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        _cursorBlinkVisible = false;
+        if (_isRenderingTerminal)
+        {
+            return;
+        }
+
+        RenderTerminal();
+    }
+
+    private void TerminalOutput_PreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (string.IsNullOrEmpty(e.Text))
+        {
+            return;
+        }
+
+        if (SendTerminalInput(e.Text))
+        {
+            e.Handled = true;
+        }
+    }
+
+    private void TerminalOutput_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        if (TryHandleClipboardShortcut(e) || TryHandleControlShortcut(e) || TryHandleSpecialKey(e))
+        {
+            e.Handled = true;
+        }
+    }
+
+    private bool TryHandleClipboardShortcut(KeyEventArgs e)
+    {
+        ModifierKeys modifiers = Keyboard.Modifiers;
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.C)
+        {
+            CopySelectionToClipboard();
+            return true;
+        }
+
+        if (modifiers == ModifierKeys.Control && e.Key == Key.Insert)
+        {
+            CopySelectionToClipboard();
+            return true;
+        }
+
+        if ((modifiers == ModifierKeys.Control && e.Key == Key.V) ||
+            (modifiers == ModifierKeys.Shift && e.Key == Key.Insert) ||
+            (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.V))
+        {
+            PasteFromClipboard();
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryHandleControlShortcut(KeyEventArgs e)
+    {
+        if (Keyboard.Modifiers != ModifierKeys.Control)
+        {
+            return false;
+        }
+
+        if (e.Key == Key.C)
+        {
+            SendInterrupt();
+            return true;
+        }
+
+        if (e.Key == Key.Space)
+        {
+            return SendTerminalInput("\0");
+        }
+
+        if (e.Key == Key.Oem4)
+        {
+            return SendTerminalInput("\u001b");
+        }
+
+        if (e.Key >= Key.A && e.Key <= Key.Z)
+        {
+            char control = (char)(e.Key - Key.A + 1);
+            return SendTerminalInput(control.ToString());
+        }
+
+        return false;
+    }
+
+    private bool TryHandleSpecialKey(KeyEventArgs e)
+    {
+        ModifierKeys modifiers = Keyboard.Modifiers;
+        if (modifiers is not ModifierKeys.None and not ModifierKeys.Shift)
+        {
+            return false;
+        }
+
+        string? sequence = e.Key switch
+        {
+            Key.Enter => "\r",
+            Key.Back => "\b",
+            Key.Tab => "\t",
+            Key.Escape => "\u001b",
+            Key.Up => "\u001b[A",
+            Key.Down => "\u001b[B",
+            Key.Right => "\u001b[C",
+            Key.Left => "\u001b[D",
+            Key.Home => "\u001b[H",
+            Key.End => "\u001b[F",
+            Key.Insert => "\u001b[2~",
+            Key.Delete => "\u001b[3~",
+            Key.PageUp => "\u001b[5~",
+            Key.PageDown => "\u001b[6~",
+            Key.F1 => "\u001bOP",
+            Key.F2 => "\u001bOQ",
+            Key.F3 => "\u001bOR",
+            Key.F4 => "\u001bOS",
+            Key.F5 => "\u001b[15~",
+            Key.F6 => "\u001b[17~",
+            Key.F7 => "\u001b[18~",
+            Key.F8 => "\u001b[19~",
+            Key.F9 => "\u001b[20~",
+            Key.F10 => "\u001b[21~",
+            Key.F11 => "\u001b[23~",
+            Key.F12 => "\u001b[24~",
+            _ => null
+        };
+
+        return sequence is not null && SendTerminalInput(sequence);
     }
 
     private void OnTerminalOutputSizeChanged(object sender, SizeChangedEventArgs e)
@@ -116,6 +291,7 @@ public partial class MainWindow : Window
 
         (_currentColumns, _currentRows) = CalculateTerminalSize();
         _terminalBuffer = new AnsiTerminalBuffer(_currentColumns, _currentRows);
+        _cursorBlinkVisible = true;
         RenderTerminal();
 
         try
@@ -145,7 +321,7 @@ public partial class MainWindow : Window
             _session.Exited += OnProcessExited;
             _session.Start();
             UpdateUiState(isRunning: true);
-            InputTextBox.Focus();
+            TerminalOutput.Focus();
             SetStatus($"Started ({modeLabel}): {commandLine}");
         }
         catch (Exception ex)
@@ -160,6 +336,7 @@ public partial class MainWindow : Window
         if (_session is null)
         {
             UpdateUiState(isRunning: false);
+            UpdateWindowTitle();
             return;
         }
 
@@ -169,6 +346,7 @@ public partial class MainWindow : Window
         _session = null;
 
         UpdateUiState(isRunning: false);
+        UpdateWindowTitle();
         SetStatus("Stopped.");
     }
 
@@ -190,23 +368,69 @@ public partial class MainWindow : Window
         });
     }
 
-    private void SendInput()
+    private void CursorBlinkTimer_Tick(object? sender, EventArgs e)
     {
-        if (_session is null)
+        bool nextVisible = TerminalOutput.IsKeyboardFocusWithin && _session is not null
+            ? !_cursorBlinkVisible
+            : false;
+
+        if (_cursorBlinkVisible == nextVisible)
         {
             return;
         }
 
-        string input = InputTextBox.Text;
-        InputTextBox.Clear();
+        _cursorBlinkVisible = nextVisible;
+        RenderTerminal();
+    }
+
+    private bool SendTerminalInput(string text)
+    {
+        if (_session is null || string.IsNullOrEmpty(text))
+        {
+            return false;
+        }
 
         try
         {
-            _session.Write(input + Environment.NewLine);
+            _session.Write(text);
+            _cursorBlinkVisible = true;
+            return true;
         }
         catch (Exception ex)
         {
             SetStatus($"Send failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private void SendInterrupt()
+    {
+        _ = SendTerminalInput("\u0003");
+    }
+
+    private void PasteFromClipboard()
+    {
+        if (_session is null || !Clipboard.ContainsText())
+        {
+            return;
+        }
+
+        _ = SendTerminalInput(Clipboard.GetText());
+    }
+
+    private void CopySelectionToClipboard()
+    {
+        TextSelection selection = TerminalOutput.Selection;
+        if (selection.IsEmpty)
+        {
+            return;
+        }
+
+        string text = new TextRange(selection.Start, selection.End).Text;
+        if (!string.IsNullOrEmpty(text))
+        {
+            Clipboard.SetText(text);
+            SetStatus("Copied selection.");
         }
     }
 
@@ -215,16 +439,51 @@ public partial class MainWindow : Window
         StartButton.IsEnabled = !isRunning;
         StopButton.IsEnabled = isRunning;
         RecoverButton.IsEnabled = isRunning;
-        SendButton.IsEnabled = isRunning;
-        InputTextBox.IsEnabled = isRunning;
+        PasteButton.IsEnabled = isRunning;
+        InterruptButton.IsEnabled = isRunning;
         CommandTextBox.IsEnabled = !isRunning;
     }
 
     private void RenderTerminal()
     {
-        TerminalOutput.Text = _terminalBuffer.GetDisplayText();
-        TerminalOutput.CaretIndex = TerminalOutput.Text.Length;
-        TerminalOutput.ScrollToEnd();
+        if (_isRenderingTerminal)
+        {
+            return;
+        }
+
+        bool shouldRestoreFocus = TerminalOutput.IsKeyboardFocusWithin;
+        _isRenderingTerminal = true;
+        try
+        {
+            TerminalOutput.Document = _terminalBuffer.CreateDocument(
+                TerminalOutput.FontFamily,
+                TerminalOutput.FontSize,
+                showCursor: ShouldShowCursor());
+            if (shouldRestoreFocus && !TerminalOutput.IsKeyboardFocusWithin)
+            {
+                Keyboard.Focus(TerminalOutput);
+            }
+
+            TerminalOutput.ScrollToEnd();
+            UpdateWindowTitle();
+        }
+        finally
+        {
+            _isRenderingTerminal = false;
+        }
+    }
+
+    private bool ShouldShowCursor()
+    {
+        return _session is not null && TerminalOutput.IsKeyboardFocusWithin && _cursorBlinkVisible;
+    }
+
+    private void UpdateWindowTitle()
+    {
+        string terminalTitle = _terminalBuffer.WindowTitle;
+        Title = string.IsNullOrWhiteSpace(terminalTitle)
+            ? BaseWindowTitle
+            : $"{terminalTitle} - {BaseWindowTitle}";
     }
 
     private void SetStatus(string message)
