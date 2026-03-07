@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -26,11 +27,14 @@ public partial class MainWindow : Window
     private short _currentRows = 30;
     private readonly DispatcherTimer _sessionWatchdog = new();
     private readonly DispatcherTimer _cursorBlinkTimer = new();
+    private readonly object _pendingOutputLock = new();
+    private readonly StringBuilder _pendingOutput = new();
     private ScrollViewer? _terminalScrollViewer;
     private int _autoRecoveryAttempts;
     private bool _isRecovering;
     private bool _isImeComposing;
     private bool _isRenderingTerminal;
+    private bool _outputFlushScheduled;
     private bool _followTerminalOutput = true;
     private bool _useCompatibilityMode;
     private bool _cursorBlinkVisible = true;
@@ -540,6 +544,7 @@ public partial class MainWindow : Window
     {
         if (_session is null)
         {
+            ClearPendingOutput();
             ClearImeComposition();
             ResetInputProxyText();
             UpdateUiState(isRunning: false);
@@ -552,6 +557,7 @@ public partial class MainWindow : Window
         _session.Dispose();
         _session = null;
 
+        ClearPendingOutput();
         ClearImeComposition();
         ResetInputProxyText();
         UpdateUiState(isRunning: false);
@@ -561,17 +567,14 @@ public partial class MainWindow : Window
 
     private void OnOutputReceived(object? sender, string text)
     {
-        Dispatcher.Invoke(() =>
-        {
-            _terminalBuffer.Process(text);
-            RenderTerminal();
-        });
+        QueueTerminalOutput(text);
     }
 
     private void OnProcessExited(object? sender, int exitCode)
     {
         Dispatcher.Invoke(() =>
         {
+            FlushPendingOutput();
             SetStatus($"Process exited with code {exitCode}.");
             StopTerminal();
         });
@@ -609,6 +612,75 @@ public partial class MainWindow : Window
         {
             SetStatus($"Send failed: {ex.Message}");
             return false;
+        }
+    }
+
+    private void QueueTerminalOutput(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        bool shouldSchedule = false;
+        lock (_pendingOutputLock)
+        {
+            _pendingOutput.Append(text);
+            if (!_outputFlushScheduled)
+            {
+                _outputFlushScheduled = true;
+                shouldSchedule = true;
+            }
+        }
+
+        if (shouldSchedule)
+        {
+            _ = Dispatcher.BeginInvoke(FlushPendingOutput, DispatcherPriority.Background);
+        }
+    }
+
+    private void FlushPendingOutput()
+    {
+        string? nextBatch = null;
+        lock (_pendingOutputLock)
+        {
+            if (_pendingOutput.Length > 0)
+            {
+                nextBatch = _pendingOutput.ToString();
+                _pendingOutput.Clear();
+            }
+
+            _outputFlushScheduled = false;
+        }
+
+        if (!string.IsNullOrEmpty(nextBatch))
+        {
+            _terminalBuffer.Process(nextBatch);
+            RenderTerminal();
+        }
+
+        bool shouldReschedule = false;
+        lock (_pendingOutputLock)
+        {
+            if (_pendingOutput.Length > 0 && !_outputFlushScheduled)
+            {
+                _outputFlushScheduled = true;
+                shouldReschedule = true;
+            }
+        }
+
+        if (shouldReschedule)
+        {
+            _ = Dispatcher.BeginInvoke(FlushPendingOutput, DispatcherPriority.Background);
+        }
+    }
+
+    private void ClearPendingOutput()
+    {
+        lock (_pendingOutputLock)
+        {
+            _pendingOutput.Clear();
+            _outputFlushScheduled = false;
         }
     }
 
