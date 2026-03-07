@@ -12,13 +12,16 @@ public sealed class ConPtySession : ITerminalSession
     private const uint HandleFlagInherit = 0x00000001;
     private const int StartfUseStdHandles = 0x00000100;
     private const int ProcThreadAttributePseudoConsole = 0x00020016;
-    private const uint Infinite = 0xFFFFFFFF;
+    private const int JobObjectExtendedLimitInformation = 9;
+    private const uint JobObjectLimitKillOnJobClose = 0x00002000;
     private const uint WaitTimeout = 0x00000102;
 
     private readonly object _syncRoot = new();
     private IntPtr _pseudoConsole;
     private IntPtr _processHandle;
     private IntPtr _threadHandle;
+    private IntPtr _jobHandle;
+    private int _processId;
     private SafeFileHandle? _pseudoConsoleInputReadHandle;
     private SafeFileHandle? _pseudoConsoleOutputWriteHandle;
     private SafeFileHandle? _inputWriteHandle;
@@ -40,6 +43,8 @@ public sealed class ConPtySession : ITerminalSession
         TerminalSessionKind.ConPty,
         SupportsResize: true,
         SupportsTerminalInput: true);
+
+    internal int ProcessId => _processId;
 
     public event EventHandler<string>? OutputReceived;
     public event EventHandler<int>? Exited;
@@ -189,6 +194,7 @@ public sealed class ConPtySession : ITerminalSession
         IntPtr pseudoConsole;
         IntPtr processHandle;
         IntPtr threadHandle;
+        IntPtr jobHandle;
 
         lock (_syncRoot)
         {
@@ -213,6 +219,7 @@ public sealed class ConPtySession : ITerminalSession
             pseudoConsole = _pseudoConsole;
             processHandle = _processHandle;
             threadHandle = _threadHandle;
+            jobHandle = _jobHandle;
 
             _inputWriter = null;
             _inputStream = null;
@@ -228,28 +235,17 @@ public sealed class ConPtySession : ITerminalSession
             _pseudoConsole = IntPtr.Zero;
             _processHandle = IntPtr.Zero;
             _threadHandle = IntPtr.Zero;
+            _jobHandle = IntPtr.Zero;
         }
 
         TryWriteExit(inputWriter);
 
         readCancellation?.Cancel();
         exitMonitorCancellation?.Cancel();
-        DisposeQuietly(outputReader);
-
-        await WaitForTaskAsync(readTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
-        await WaitForTaskAsync(exitMonitorTask, TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
-
-        if (processHandle != IntPtr.Zero && !await WaitForProcessExitAsync(processHandle, TimeSpan.FromMilliseconds(250)).ConfigureAwait(false))
-        {
-            _ = TerminateProcess(processHandle, 1);
-            _ = await WaitForProcessExitAsync(processHandle, TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
-        }
-
-        await WaitForTaskAsync(readTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
-        await WaitForTaskAsync(exitMonitorTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
 
         DisposeQuietly(inputWriter);
         DisposeQuietly(inputStream);
+        DisposeQuietly(outputReader);
         DisposeQuietly(pseudoConsoleInputReadHandle);
         DisposeQuietly(pseudoConsoleOutputWriteHandle);
         DisposeQuietly(inputWriteHandle);
@@ -260,6 +256,26 @@ public sealed class ConPtySession : ITerminalSession
             ClosePseudoConsoleHandle(pseudoConsole);
         }
 
+        await WaitForTaskAsync(readTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
+        await WaitForTaskAsync(exitMonitorTask, TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
+
+        if (processHandle != IntPtr.Zero && !await WaitForProcessExitAsync(processHandle, TimeSpan.FromMilliseconds(250)).ConfigureAwait(false))
+        {
+            if (jobHandle != IntPtr.Zero)
+            {
+                _ = TerminateJobObject(jobHandle, 1);
+            }
+            else
+            {
+                _ = TerminateProcess(processHandle, 1);
+            }
+
+            _ = await WaitForProcessExitAsync(processHandle, TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+        }
+
+        await WaitForTaskAsync(readTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
+        await WaitForTaskAsync(exitMonitorTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
+
         if (threadHandle != IntPtr.Zero)
         {
             CloseHandle(threadHandle);
@@ -268,6 +284,11 @@ public sealed class ConPtySession : ITerminalSession
         if (processHandle != IntPtr.Zero)
         {
             CloseHandle(processHandle);
+        }
+
+        if (jobHandle != IntPtr.Zero)
+        {
+            CloseHandle(jobHandle);
         }
 
         DisposeQuietly(readCancellation);
@@ -429,6 +450,8 @@ public sealed class ConPtySession : ITerminalSession
 
             _processHandle = processInfo.hProcess;
             _threadHandle = processInfo.hThread;
+            _processId = processInfo.dwProcessId;
+            ConfigureProcessJob(_processHandle);
 
             _pseudoConsoleInputReadHandle?.Dispose();
             _pseudoConsoleInputReadHandle = null;
@@ -525,6 +548,65 @@ public sealed class ConPtySession : ITerminalSession
                 return;
             }
         }, cancellationToken);
+    }
+
+    private void ConfigureProcessJob(IntPtr processHandle)
+    {
+        if (processHandle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        if (!IsProcessInJob(processHandle, IntPtr.Zero, out bool isInJob))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to query process job membership.");
+        }
+
+        if (isInJob)
+        {
+            return;
+        }
+
+        IntPtr jobHandle = CreateJobObject(IntPtr.Zero, null);
+        if (jobHandle == IntPtr.Zero)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to create process job.");
+        }
+
+        try
+        {
+            var jobInfo = new JobObjectExtendedLimitInformationState
+            {
+                BasicLimitInformation = new JobObjectBasicLimitInformation
+                {
+                    LimitFlags = JobObjectLimitKillOnJobClose
+                }
+            };
+
+            if (!SetInformationJobObject(
+                    jobHandle,
+                    JobObjectExtendedLimitInformation,
+                    ref jobInfo,
+                    (uint)Marshal.SizeOf<JobObjectExtendedLimitInformationState>()))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to configure process job.");
+            }
+
+            if (!AssignProcessToJobObject(jobHandle, processHandle))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to assign process to job.");
+            }
+
+            _jobHandle = jobHandle;
+            jobHandle = IntPtr.Zero;
+        }
+        finally
+        {
+            if (jobHandle != IntPtr.Zero)
+            {
+                CloseHandle(jobHandle);
+            }
+        }
     }
 
     private static void TryWriteExit(TextWriter? writer)
@@ -680,6 +762,29 @@ public sealed class ConPtySession : ITerminalSession
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr hObject);
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string? lpName);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetInformationJobObject(
+        IntPtr hJob,
+        int jobObjectInfoClass,
+        ref JobObjectExtendedLimitInformationState lpJobObjectInfo,
+        uint cbJobObjectInfoLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateJobObject(IntPtr hJob, uint uExitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsProcessInJob(IntPtr processHandle, IntPtr jobHandle, out bool result);
+
     [StructLayout(LayoutKind.Sequential)]
     private struct Coord
     {
@@ -739,5 +844,41 @@ public sealed class ConPtySession : ITerminalSession
         public IntPtr hThread;
         public int dwProcessId;
         public int dwThreadId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectBasicLimitInformation
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoCounters
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectExtendedLimitInformationState
+    {
+        public JobObjectBasicLimitInformation BasicLimitInformation;
+        public IoCounters IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
     }
 }

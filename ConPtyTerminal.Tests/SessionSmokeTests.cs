@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 
 namespace ConPtyTerminal.Tests;
@@ -65,6 +66,17 @@ public sealed class SessionSmokeTests
     }
 
     [Fact]
+    public async Task ConPtySessionDisposeAsyncExitsTrackedProcess()
+    {
+        var session = new ConPtySession(120, 30, BuildInteractiveCommandLine());
+        int processId = session.ProcessId;
+        session.Start();
+
+        await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitForProcessExitAsync(processId, TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public async Task ProcessPipeSessionDisposeAsyncStopsRunningSession()
     {
         ITerminalSession session = new ProcessPipeSession(BuildInteractiveCommandLine());
@@ -104,5 +116,34 @@ public sealed class SessionSmokeTests
     {
         string commandPath = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
         return $"\"{commandPath}\" /C echo TERM=%TERM% COLUMNS=%COLUMNS% LINES=%LINES%";
+    }
+
+    private static async Task WaitForProcessExitAsync(int processId, TimeSpan timeout)
+    {
+        DateTime deadlineUtc = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadlineUtc)
+        {
+            if (!IsProcessRunning(processId))
+            {
+                return;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert.False(IsProcessRunning(processId), $"Process {processId} was still running after {timeout}.");
+    }
+
+    private static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
