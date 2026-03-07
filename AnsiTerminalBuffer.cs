@@ -85,6 +85,7 @@ internal sealed class AnsiTerminalBuffer
 
     public event EventHandler<string>? InputSequenceGenerated;
     public event EventHandler<string>? ClipboardSetRequested;
+    public event EventHandler<string>? ClipboardQueryRequested;
 
     public AnsiTerminalBuffer(short columns, short rows, int scrollbackLimit = DefaultScrollbackLimit)
     {
@@ -514,9 +515,11 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
+        string selectionTargets = value[..separatorIndex];
         string payload = value[(separatorIndex + 1)..];
         if (payload == "?")
         {
+            ClipboardQueryRequested?.Invoke(this, string.IsNullOrEmpty(selectionTargets) ? "c" : selectionTargets);
             return;
         }
 

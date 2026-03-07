@@ -741,9 +741,11 @@ public partial class MainWindow : Window
     {
         _terminalBuffer.InputSequenceGenerated -= TerminalBuffer_InputSequenceGenerated;
         _terminalBuffer.ClipboardSetRequested -= TerminalBuffer_ClipboardSetRequested;
+        _terminalBuffer.ClipboardQueryRequested -= TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer = nextBuffer;
         _terminalBuffer.InputSequenceGenerated += TerminalBuffer_InputSequenceGenerated;
         _terminalBuffer.ClipboardSetRequested += TerminalBuffer_ClipboardSetRequested;
+        _terminalBuffer.ClipboardQueryRequested += TerminalBuffer_ClipboardQueryRequested;
     }
 
     private void TerminalBuffer_InputSequenceGenerated(object? sender, string text)
@@ -773,6 +775,25 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             SetStatus($"Clipboard update failed: {ex.Message}");
+        }
+    }
+
+    private void TerminalBuffer_ClipboardQueryRequested(object? sender, string selectionTargets)
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        try
+        {
+            string text = Clipboard.ContainsText() ? Clipboard.GetText() : string.Empty;
+            string encodedText = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
+            _session.Write($"\u001b]52;{NormalizeClipboardSelectionTargets(selectionTargets)};{encodedText}\u0007");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Clipboard query failed: {ex.Message}");
         }
     }
 
@@ -930,6 +951,11 @@ public partial class MainWindow : Window
     private static ModifierKeys GetTerminalModifiers()
     {
         return Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control | ModifierKeys.Alt);
+    }
+
+    private static string NormalizeClipboardSelectionTargets(string? selectionTargets)
+    {
+        return string.IsNullOrWhiteSpace(selectionTargets) ? "c" : selectionTargets.Trim();
     }
 
     private static int GetMouseModifierBits()
