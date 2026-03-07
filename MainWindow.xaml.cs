@@ -313,65 +313,28 @@ public partial class MainWindow : Window
             return false;
         }
 
+        string? chord = TerminalKeyChordTranslator.TranslateCtrlChord(e.Key);
+        if (chord is null)
+        {
+            return false;
+        }
+
         if (e.Key == Key.C)
         {
             SendInterrupt();
             return true;
         }
 
-        if (e.Key == Key.Space)
-        {
-            return SendTerminalInput("\0");
-        }
-
-        if (e.Key == Key.Oem4)
-        {
-            return SendTerminalInput("\u001b");
-        }
-
-        if (e.Key >= Key.A && e.Key <= Key.Z)
-        {
-            char control = (char)(e.Key - Key.A + 1);
-            return SendTerminalInput(control.ToString());
-        }
-
-        return false;
+        return SendTerminalInput(chord);
     }
 
     private bool TryHandleSpecialKey(KeyEventArgs e)
     {
         ModifierKeys modifiers = GetTerminalModifiers();
-
-        string? sequence = e.Key switch
-        {
-            Key.Enter => TerminalInputEncoder.EncodePrefixedControl("\r", modifiers),
-            Key.Back => TerminalInputEncoder.EncodePrefixedControl("\b", modifiers),
-            Key.Tab => TerminalInputEncoder.EncodeTabKey(modifiers),
-            Key.Escape => TerminalInputEncoder.EncodePrefixedControl("\u001b", modifiers),
-            Key.Up => TerminalInputEncoder.EncodeCursorKey('A', modifiers, _terminalBuffer.ApplicationCursorKeysEnabled),
-            Key.Down => TerminalInputEncoder.EncodeCursorKey('B', modifiers, _terminalBuffer.ApplicationCursorKeysEnabled),
-            Key.Right => TerminalInputEncoder.EncodeCursorKey('C', modifiers, _terminalBuffer.ApplicationCursorKeysEnabled),
-            Key.Left => TerminalInputEncoder.EncodeCursorKey('D', modifiers, _terminalBuffer.ApplicationCursorKeysEnabled),
-            Key.Home => TerminalInputEncoder.EncodeHomeEndKey('H', modifiers, _terminalBuffer.ApplicationCursorKeysEnabled),
-            Key.End => TerminalInputEncoder.EncodeHomeEndKey('F', modifiers, _terminalBuffer.ApplicationCursorKeysEnabled),
-            Key.Insert => TerminalInputEncoder.EncodeTildeKey(2, modifiers),
-            Key.Delete => TerminalInputEncoder.EncodeTildeKey(3, modifiers),
-            Key.PageUp => TerminalInputEncoder.EncodeTildeKey(5, modifiers),
-            Key.PageDown => TerminalInputEncoder.EncodeTildeKey(6, modifiers),
-            Key.F1 => TerminalInputEncoder.EncodeSs3FunctionKey('P', modifiers),
-            Key.F2 => TerminalInputEncoder.EncodeSs3FunctionKey('Q', modifiers),
-            Key.F3 => TerminalInputEncoder.EncodeSs3FunctionKey('R', modifiers),
-            Key.F4 => TerminalInputEncoder.EncodeSs3FunctionKey('S', modifiers),
-            Key.F5 => TerminalInputEncoder.EncodeTildeKey(15, modifiers),
-            Key.F6 => TerminalInputEncoder.EncodeTildeKey(17, modifiers),
-            Key.F7 => TerminalInputEncoder.EncodeTildeKey(18, modifiers),
-            Key.F8 => TerminalInputEncoder.EncodeTildeKey(19, modifiers),
-            Key.F9 => TerminalInputEncoder.EncodeTildeKey(20, modifiers),
-            Key.F10 => TerminalInputEncoder.EncodeTildeKey(21, modifiers),
-            Key.F11 => TerminalInputEncoder.EncodeTildeKey(23, modifiers),
-            Key.F12 => TerminalInputEncoder.EncodeTildeKey(24, modifiers),
-            _ => null
-        };
+        string? sequence = TerminalKeyChordTranslator.TranslateSpecialKey(
+            e.Key,
+            modifiers,
+            _terminalBuffer.ApplicationCursorKeysEnabled);
 
         return sequence is not null && SendTerminalInput(sequence);
     }
