@@ -1,13 +1,19 @@
-﻿using System.Configuration;
-using System.Data;
 using System.Windows;
 
 namespace ConPtyTerminal;
 
-/// <summary>
-/// Interaction logic for App.xaml
-/// </summary>
 public partial class App : Application
 {
-}
+    internal TsfUiElementManager? TsfUiElements { get; }
 
+    public App()
+    {
+        TsfUiElements = TsfUiElementManager.TryInitialize();
+        Exit += OnExit;
+    }
+
+    private void OnExit(object sender, ExitEventArgs e)
+    {
+        TsfUiElements?.Dispose();
+    }
+}

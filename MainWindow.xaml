@@ -101,28 +101,28 @@
                                FlowDirection="LeftToRight" />
                 </Border>
 
-                <TextBox x:Name="TerminalInputProxy"
-                         Width="2"
-                         Height="20"
-                         Opacity="0.01"
-                         BorderThickness="0"
-                         Background="Transparent"
-                         Foreground="Transparent"
-                         CaretBrush="Transparent"
-                         Padding="0"
-                         TextAlignment="Left"
-                         FlowDirection="LeftToRight"
-                         AcceptsReturn="False"
-                         AcceptsTab="False"
-                         IsUndoEnabled="False"
-                         Focusable="True"
-                         IsTabStop="False"
-                         PreviewKeyDown="TerminalOutput_PreviewKeyDown"
-                         PreviewTextInput="TerminalOutput_PreviewTextInput"
-                         GotKeyboardFocus="TerminalInputProxy_GotKeyboardFocus"
-                         LostKeyboardFocus="TerminalInputProxy_LostKeyboardFocus"
-                         InputMethod.IsInputMethodEnabled="True"
-                         InputMethod.PreferredImeState="On" />
+                <Border x:Name="ImeCandidateOverlay"
+                        Visibility="Collapsed"
+                        Background="#111111"
+                        BorderBrush="#5FAFFF"
+                        BorderThickness="1"
+                        Padding="4,3">
+                    <StackPanel x:Name="ImeCandidatePanel" />
+                </Border>
+
+                <Border x:Name="TerminalInputProxy"
+                        Width="2"
+                        Height="20"
+                        Opacity="0"
+                        Background="Transparent"
+                        Focusable="True"
+                        KeyboardNavigation.IsTabStop="False"
+                        PreviewKeyDown="TerminalOutput_PreviewKeyDown"
+                        PreviewTextInput="TerminalOutput_PreviewTextInput"
+                        GotKeyboardFocus="TerminalInputProxy_GotKeyboardFocus"
+                        LostKeyboardFocus="TerminalInputProxy_LostKeyboardFocus"
+                        InputMethod.IsInputMethodEnabled="True"
+                        InputMethod.PreferredImeState="On" />
             </Canvas>
         </Grid>
 
