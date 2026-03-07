@@ -187,7 +187,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (TryHandleClipboardShortcut(e) || TryHandleControlShortcut(e) || TryHandleSpecialKey(e))
+        if (TryHandleClipboardShortcut(e) || TryHandleControlShortcut(e) || TryHandleApplicationKeypad(e) || TryHandleSpecialKey(e))
         {
             e.Handled = true;
         }
@@ -287,6 +287,37 @@ public partial class MainWindow : Window
             Key.F10 => "\u001b[21~",
             Key.F11 => "\u001b[23~",
             Key.F12 => "\u001b[24~",
+            _ => null
+        };
+
+        return sequence is not null && SendTerminalInput(sequence);
+    }
+
+    private bool TryHandleApplicationKeypad(KeyEventArgs e)
+    {
+        if (!_terminalBuffer.ApplicationKeypadEnabled || Keyboard.Modifiers != ModifierKeys.None)
+        {
+            return false;
+        }
+
+        string? sequence = e.Key switch
+        {
+            Key.NumPad0 => "\u001bOp",
+            Key.NumPad1 => "\u001bOq",
+            Key.NumPad2 => "\u001bOr",
+            Key.NumPad3 => "\u001bOs",
+            Key.NumPad4 => "\u001bOt",
+            Key.NumPad5 => "\u001bOu",
+            Key.NumPad6 => "\u001bOv",
+            Key.NumPad7 => "\u001bOw",
+            Key.NumPad8 => "\u001bOx",
+            Key.NumPad9 => "\u001bOy",
+            Key.Multiply => "\u001bOj",
+            Key.Add => "\u001bOk",
+            Key.Separator => "\u001bOl",
+            Key.Subtract => "\u001bOm",
+            Key.Decimal => "\u001bOn",
+            Key.Divide => "\u001bOo",
             _ => null
         };
 

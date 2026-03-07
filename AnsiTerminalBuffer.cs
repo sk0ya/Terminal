@@ -64,6 +64,9 @@ internal sealed class AnsiTerminalBuffer
     private TerminalStyle _savedStyle = TerminalStyle.Default;
     private bool _cursorVisible = true;
     private bool _applicationCursorKeys;
+    private bool _applicationKeypad;
+    private bool _originMode;
+    private bool _autoWrapEnabled = true;
     private bool _bracketedPasteEnabled;
     private bool _focusReportingEnabled;
     private bool _useSgrMouseEncoding;
@@ -83,6 +86,7 @@ internal sealed class AnsiTerminalBuffer
 
     public string WindowTitle => _windowTitle;
     public bool ApplicationCursorKeysEnabled => _applicationCursorKeys;
+    public bool ApplicationKeypadEnabled => _applicationKeypad;
     public bool BracketedPasteEnabled => _bracketedPasteEnabled;
     public bool FocusReportingEnabled => _focusReportingEnabled;
     public bool UseSgrMouseEncoding => _useSgrMouseEncoding;
@@ -250,6 +254,9 @@ internal sealed class AnsiTerminalBuffer
         _savedStyle = TerminalStyle.Default;
         _cursorVisible = true;
         _applicationCursorKeys = false;
+        _applicationKeypad = false;
+        _originMode = false;
+        _autoWrapEnabled = true;
         _bracketedPasteEnabled = false;
         _focusReportingEnabled = false;
         _useSgrMouseEncoding = false;
@@ -303,10 +310,7 @@ internal sealed class AnsiTerminalBuffer
                 return;
             case '\t':
                 int nextTab = ((_cursorColumn / 8) + 1) * 8;
-                while (_cursorColumn < nextTab && _cursorColumn < _columns)
-                {
-                    PutText(" ", 1);
-                }
+                _cursorColumn = Math.Min(_columns - 1, nextTab);
 
                 return;
             default:
@@ -357,6 +361,14 @@ internal sealed class AnsiTerminalBuffer
                 return;
             case 'M':
                 ReverseIndex();
+                _state = ParserState.Normal;
+                return;
+            case '=':
+                _applicationKeypad = true;
+                _state = ParserState.Normal;
+                return;
+            case '>':
+                _applicationKeypad = false;
                 _state = ParserState.Normal;
                 return;
             case 'c':
@@ -449,10 +461,10 @@ internal sealed class AnsiTerminalBuffer
                 InsertCharacters(GetParameter(parameters, 0, 1));
                 break;
             case 'A':
-                _cursorRow = Math.Max(_scrollTop, _cursorRow - GetParameter(parameters, 0, 1));
+                _cursorRow = Math.Max(GetTopRowLimit(), _cursorRow - GetParameter(parameters, 0, 1));
                 break;
             case 'B':
-                _cursorRow = Math.Min(_scrollBottom, _cursorRow + GetParameter(parameters, 0, 1));
+                _cursorRow = Math.Min(GetBottomRowLimit(), _cursorRow + GetParameter(parameters, 0, 1));
                 break;
             case 'C':
                 _cursorColumn = Math.Min(_columns - 1, _cursorColumn + GetParameter(parameters, 0, 1));
@@ -461,11 +473,11 @@ internal sealed class AnsiTerminalBuffer
                 _cursorColumn = Math.Max(0, _cursorColumn - GetParameter(parameters, 0, 1));
                 break;
             case 'E':
-                _cursorRow = Math.Min(_scrollBottom, _cursorRow + GetParameter(parameters, 0, 1));
+                _cursorRow = Math.Min(GetBottomRowLimit(), _cursorRow + GetParameter(parameters, 0, 1));
                 _cursorColumn = 0;
                 break;
             case 'F':
-                _cursorRow = Math.Max(_scrollTop, _cursorRow - GetParameter(parameters, 0, 1));
+                _cursorRow = Math.Max(GetTopRowLimit(), _cursorRow - GetParameter(parameters, 0, 1));
                 _cursorColumn = 0;
                 break;
             case 'G':
@@ -473,8 +485,7 @@ internal sealed class AnsiTerminalBuffer
                 break;
             case 'H':
             case 'f':
-                _cursorRow = Math.Clamp(GetParameter(parameters, 0, 1) - 1, 0, _rows - 1);
-                _cursorColumn = Math.Clamp(GetParameter(parameters, 1, 1) - 1, 0, _columns - 1);
+                SetCursorPosition(GetParameter(parameters, 0, 1), GetParameter(parameters, 1, 1));
                 break;
             case 'J':
                 ClearDisplay(GetParameter(parameters, 0, 0));
@@ -501,7 +512,7 @@ internal sealed class AnsiTerminalBuffer
                 EraseCharacters(GetParameter(parameters, 0, 1));
                 break;
             case 'd':
-                _cursorRow = Math.Clamp(GetParameter(parameters, 0, 1) - 1, 0, _rows - 1);
+                SetCursorRow(GetParameter(parameters, 0, 1));
                 break;
             case 'c':
                 DispatchDeviceAttributes(isPrivate, isSecondary);
@@ -606,6 +617,18 @@ internal sealed class AnsiTerminalBuffer
                 case 1:
                     _applicationCursorKeys = enabled;
                     break;
+                case 6:
+                    _originMode = enabled;
+                    MoveCursorHome();
+                    break;
+                case 7:
+                    _autoWrapEnabled = enabled;
+                    if (!_autoWrapEnabled && _cursorColumn >= _columns)
+                    {
+                        _cursorColumn = _columns - 1;
+                    }
+
+                    break;
                 case 25:
                     _cursorVisible = enabled;
                     break;
@@ -636,6 +659,9 @@ internal sealed class AnsiTerminalBuffer
                     break;
                 case 1006:
                     _useSgrMouseEncoding = enabled;
+                    break;
+                case 66:
+                    _applicationKeypad = enabled;
                     break;
                 case 2004:
                     _bracketedPasteEnabled = enabled;
@@ -858,8 +884,7 @@ internal sealed class AnsiTerminalBuffer
             _scrollBottom = bottom;
         }
 
-        _cursorRow = 0;
-        _cursorColumn = 0;
+        MoveCursorHome();
     }
 
     private void InsertLines(int count)
@@ -1014,14 +1039,28 @@ internal sealed class AnsiTerminalBuffer
         int normalizedWidth = Math.Clamp(width, 1, 2);
         if (_cursorColumn >= _columns)
         {
-            _cursorColumn = 0;
-            MoveDownAndScrollIfNeeded();
+            if (_autoWrapEnabled)
+            {
+                _cursorColumn = 0;
+                MoveDownAndScrollIfNeeded();
+            }
+            else
+            {
+                _cursorColumn = _columns - 1;
+            }
         }
 
         if (normalizedWidth == 2 && _cursorColumn == _columns - 1)
         {
-            _cursorColumn = 0;
-            MoveDownAndScrollIfNeeded();
+            if (_autoWrapEnabled)
+            {
+                _cursorColumn = 0;
+                MoveDownAndScrollIfNeeded();
+            }
+            else
+            {
+                return;
+            }
         }
 
         TerminalLine line = _screen[_cursorRow];
@@ -1040,6 +1079,10 @@ internal sealed class AnsiTerminalBuffer
         }
 
         _cursorColumn += normalizedWidth;
+        if (!_autoWrapEnabled && _cursorColumn >= _columns)
+        {
+            _cursorColumn = _columns - 1;
+        }
     }
 
     private void AppendCombiningRune(Rune rune)
@@ -1098,6 +1141,39 @@ internal sealed class AnsiTerminalBuffer
         }
 
         _cursorRow = Math.Min(_rows - 1, _cursorRow + 1);
+    }
+
+    private int GetTopRowLimit()
+    {
+        return _originMode ? _scrollTop : 0;
+    }
+
+    private int GetBottomRowLimit()
+    {
+        return _originMode ? _scrollBottom : _rows - 1;
+    }
+
+    private void MoveCursorHome()
+    {
+        _cursorRow = GetTopRowLimit();
+        _cursorColumn = 0;
+    }
+
+    private void SetCursorPosition(int rowParameter, int columnParameter)
+    {
+        int rowOffset = Math.Max(rowParameter, 1) - 1;
+        int baseRow = _originMode ? _scrollTop : 0;
+        int maxRow = _originMode ? _scrollBottom : _rows - 1;
+        _cursorRow = Math.Clamp(baseRow + rowOffset, baseRow, maxRow);
+        _cursorColumn = Math.Clamp(Math.Max(columnParameter, 1) - 1, 0, _columns - 1);
+    }
+
+    private void SetCursorRow(int rowParameter)
+    {
+        int rowOffset = Math.Max(rowParameter, 1) - 1;
+        int baseRow = _originMode ? _scrollTop : 0;
+        int maxRow = _originMode ? _scrollBottom : _rows - 1;
+        _cursorRow = Math.Clamp(baseRow + rowOffset, baseRow, maxRow);
     }
 
     private void ScrollUpRegion(int lines, int top, int bottom)
