@@ -211,4 +211,26 @@ public sealed class AnsiTerminalBufferTests
         buffer.Process("\u001b[?12h");
         Assert.True(buffer.CursorBlinkEnabled);
     }
+
+    [Fact]
+    public void RepRepeatsLastPrintedCluster()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("A\u001b[3b");
+
+        Assert.Equal("AAAA", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal(4, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void RepRepeatsWideGraphemeCluster()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("👩\u200d💻\u001b[2b");
+
+        Assert.Equal("👩\u200d💻👩\u200d💻👩\u200d💻", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal(6, buffer.CursorColumn);
+    }
 }

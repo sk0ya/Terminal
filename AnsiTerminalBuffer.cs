@@ -113,6 +113,8 @@ internal sealed class AnsiTerminalBuffer
     private string? _currentHyperlink;
     private string? _savedHyperlink;
     private string _windowTitle = string.Empty;
+    private string _lastPrintedClusterText = string.Empty;
+    private int _lastPrintedClusterWidth;
     private int _pendingClusterWidth;
     private bool _pendingClusterJoinNext;
     private int _pendingClusterRegionalIndicatorCount;
@@ -368,6 +370,8 @@ internal sealed class AnsiTerminalBuffer
         _currentHyperlink = null;
         _savedHyperlink = null;
         _windowTitle = string.Empty;
+        _lastPrintedClusterText = string.Empty;
+        _lastPrintedClusterWidth = 0;
         ClearPendingCluster();
         _state = ParserState.Normal;
         _csiBuffer.Clear();
@@ -748,6 +752,9 @@ internal sealed class AnsiTerminalBuffer
                 break;
             case 'Z':
                 MoveToPreviousTabStop(GetParameter(parameters, 0, 1));
+                break;
+            case 'b':
+                RepeatLastPrintedCluster(GetParameter(parameters, 0, 1));
                 break;
             case 'd':
                 SetCursorRow(GetParameter(parameters, 0, 1));
@@ -1541,6 +1548,8 @@ internal sealed class AnsiTerminalBuffer
         }
 
         _cursorColumn += normalizedWidth;
+        _lastPrintedClusterText = text;
+        _lastPrintedClusterWidth = normalizedWidth;
         if (!_autoWrapEnabled && _cursorColumn >= _columns)
         {
             _cursorColumn = _columns - 1;
@@ -1563,6 +1572,8 @@ internal sealed class AnsiTerminalBuffer
 
         TerminalCell cell = line.Cells[targetColumn];
         line.Cells[targetColumn] = cell with { Text = cell.Text + rune.ToString() };
+        _lastPrintedClusterText = line.Cells[targetColumn].Text;
+        _lastPrintedClusterWidth = Math.Max(1, cell.Width);
     }
 
     private void AppendClusterExtension(Rune rune)
@@ -1645,6 +1656,8 @@ internal sealed class AnsiTerminalBuffer
             Text = cell.Text + rune.ToString(),
             Width = normalizedWidth
         };
+        _lastPrintedClusterText = line.Cells[targetColumn].Text;
+        _lastPrintedClusterWidth = normalizedWidth;
 
         if (cell.Width == 1 && normalizedWidth == 2 && targetColumn + 1 < _columns)
         {
@@ -1658,6 +1671,20 @@ internal sealed class AnsiTerminalBuffer
         }
 
         return true;
+    }
+
+    private void RepeatLastPrintedCluster(int count)
+    {
+        if (string.IsNullOrEmpty(_lastPrintedClusterText))
+        {
+            return;
+        }
+
+        int repeatCount = Math.Max(count, 1);
+        for (int index = 0; index < repeatCount; index++)
+        {
+            PutText(_lastPrintedClusterText, _lastPrintedClusterWidth);
+        }
     }
 
     private int FindPreviousClusterColumn()
