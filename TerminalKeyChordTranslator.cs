@@ -91,4 +91,17 @@ internal static class TerminalKeyChordTranslator
             _ => null
         };
     }
+
+    public static string? TranslateEnterKey(
+        ModifierKeys modifiers,
+        bool applicationCursorKeys,
+        bool supportsTerminalInput)
+    {
+        if (!supportsTerminalInput && modifiers == ModifierKeys.None)
+        {
+            return "\r\n";
+        }
+
+        return TranslateSpecialKey(Key.Enter, modifiers, applicationCursorKeys);
+    }
 }

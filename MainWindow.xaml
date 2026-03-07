@@ -84,41 +84,31 @@
                     Panel.ZIndex="1">
                 <Border x:Name="TerminalCursorOverlay"
                         Visibility="Collapsed"
+                        Panel.ZIndex="2"
                         Width="2"
                         Height="20"
                         Background="#A0E3E3E3" />
 
-                <Border x:Name="ImeCompositionOverlay"
-                        Visibility="Collapsed"
-                        Background="#111111"
-                        BorderBrush="#5FAFFF"
-                        BorderThickness="0,0,0,1"
-                        Padding="1,0">
-                    <TextBlock x:Name="ImeCompositionTextBlock"
-                               Foreground="#E3E3E3"
-                               FontFamily="Cascadia Mono"
-                               FontSize="14"
-                               FlowDirection="LeftToRight" />
-                </Border>
-
-                <Border x:Name="ImeCandidateOverlay"
-                        Visibility="Collapsed"
-                        Background="#111111"
-                        BorderBrush="#5FAFFF"
-                        BorderThickness="1"
-                        Padding="4,3">
-                    <StackPanel x:Name="ImeCandidatePanel" />
-                </Border>
-
-                <Border x:Name="TerminalInputProxy"
+                <TextBox x:Name="TerminalInputProxy"
+                        Panel.ZIndex="1"
                         Width="2"
                         Height="20"
-                        Opacity="0"
+                        Opacity="1"
                         Background="Transparent"
+                        BorderThickness="0"
+                        Padding="0"
+                        Foreground="#E3E3E3"
+                        CaretBrush="Transparent"
+                        FontFamily="Cascadia Mono"
+                        FontSize="14"
                         Focusable="True"
+                        IsUndoEnabled="False"
                         KeyboardNavigation.IsTabStop="False"
-                        PreviewKeyDown="TerminalOutput_PreviewKeyDown"
-                        PreviewTextInput="TerminalOutput_PreviewTextInput"
+                        TextAlignment="Left"
+                        HorizontalContentAlignment="Left"
+                        VerticalContentAlignment="Top"
+                        PreviewKeyDown="TerminalInputProxy_PreviewKeyDown"
+                        TextChanged="TerminalInputProxy_TextChanged"
                         GotKeyboardFocus="TerminalInputProxy_GotKeyboardFocus"
                         LostKeyboardFocus="TerminalInputProxy_LostKeyboardFocus"
                         InputMethod.IsInputMethodEnabled="True"

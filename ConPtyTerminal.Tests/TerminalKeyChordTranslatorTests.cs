@@ -40,4 +40,31 @@ public sealed class TerminalKeyChordTranslatorTests
 
         Assert.Equal("\u001b[6;7~", sequence);
     }
+
+    [Fact]
+    public void TranslateSpecialKeyEncodesEnter()
+    {
+        Assert.Equal("\r", TerminalKeyChordTranslator.TranslateSpecialKey(
+            Key.Enter,
+            ModifierKeys.None,
+            applicationCursorKeys: false));
+    }
+
+    [Fact]
+    public void TranslateEnterKeyUsesCrInTerminalInputMode()
+    {
+        Assert.Equal("\r", TerminalKeyChordTranslator.TranslateEnterKey(
+            ModifierKeys.None,
+            applicationCursorKeys: false,
+            supportsTerminalInput: true));
+    }
+
+    [Fact]
+    public void TranslateEnterKeyUsesCrLfInCompatibilityMode()
+    {
+        Assert.Equal("\r\n", TerminalKeyChordTranslator.TranslateEnterKey(
+            ModifierKeys.None,
+            applicationCursorKeys: false,
+            supportsTerminalInput: false));
+    }
 }

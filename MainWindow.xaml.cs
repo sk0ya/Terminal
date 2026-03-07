@@ -2,13 +2,11 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
-using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Navigation;
 using System.Windows.Threading;
@@ -21,25 +19,6 @@ public partial class MainWindow : Window
     private const int MaxAutoRecoveryAttempts = 1;
     private const double AutoFollowThreshold = 2.0;
     private const bool PreferDocumentCursorRendering = false;
-    private const int WmInputLangChange = 0x0051;
-    private const int WmImeSetContext = 0x0281;
-    private const int WmImeNotify = 0x0282;
-    private const int WmImeRequest = 0x0288;
-    private const int WmImeStartComposition = 0x010D;
-    private const int WmImeEndComposition = 0x010E;
-    private const int WmImeComposition = 0x010F;
-    private const int GcsCompReadStr = 0x0001;
-    private const int GcsCompStr = 0x0008;
-    private const int GcsResultReadStr = 0x0200;
-    private const int GcsResultStr = 0x0800;
-    private const int ImnChangeCandidate = 0x0003;
-    private const int ImnCloseCandidate = 0x0004;
-    private const int ImnOpenCandidate = 0x0005;
-    private const int ImrCandidateWindow = 0x0002;
-    private const uint CfsPoint = 0x0002;
-    private const uint CfsForcePosition = 0x0020;
-    private const uint CfsCandidatePos = 0x0040;
-    private const uint CfsExclude = 0x0080;
 
     private static readonly TimeSpan InitialOutputTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan IdleOutputTimeout = TimeSpan.FromSeconds(20);
@@ -47,8 +26,6 @@ public partial class MainWindow : Window
     private static readonly TimeSpan MinDocumentRenderInterval = TimeSpan.FromMilliseconds(33);
     private static readonly Brush BlockCursorBrush = CreateFrozenBrush(Color.FromArgb(0xA0, 0xE3, 0xE3, 0xE3));
     private static readonly Brush AccentCursorBrush = CreateFrozenBrush(Color.FromRgb(0x5F, 0xAF, 0xFF));
-    private static readonly Brush CandidateSelectionBrush = CreateFrozenBrush(Color.FromRgb(0x24, 0x4F, 0x7A));
-    private static readonly Brush CandidateHeaderBrush = CreateFrozenBrush(Color.FromRgb(0xA8, 0xD5, 0xFF));
 
     private ITerminalSession? _session;
     private AnsiTerminalBuffer _terminalBuffer = new(120, 30);
@@ -63,13 +40,11 @@ public partial class MainWindow : Window
     private readonly StringBuilder _pendingOutput = new();
     private ScrollViewer? _terminalScrollViewer;
     private FrameworkElement? _cursorAnchorElement;
-    private HwndSource? _windowSource;
     private int _autoRecoveryAttempts;
     private bool _isRecovering;
     private bool _isSessionTransitionActive;
     private bool _isClosingWindow;
     private bool _allowWindowClose;
-    private bool _isImeComposing;
     private bool _postRenderUiSyncScheduled;
     private bool _isRenderingTerminal;
     private bool _documentRenderScheduled;
@@ -81,20 +56,10 @@ public partial class MainWindow : Window
     private bool _cursorBlinkVisible = true;
     private bool _reportedUnsupportedResize;
     private bool _pendingRestoreFocusAfterRender;
-    private string _imeCompositionText = string.Empty;
-    private string _imeReadingText = string.Empty;
-    private string[] _imeCandidateItems = [];
-    private int _imeCandidateSelection = -1;
-    private int _imeCandidatePageStart;
-    private double _inputProxyLeft;
-    private double _inputProxyTop;
-    private double _inputProxyWidth = 2;
-    private double _inputProxyHeight = 2;
+    private bool _resettingInputProxyText;
+    private bool _pendingProxyFlushAfterImeConfirm;
     private double _pendingDistanceFromBottom;
     private DateTime _lastDocumentRenderUtc = DateTime.MinValue;
-    private IntPtr _imeKeyboardLayout;
-    private IntPtr _imeModuleHandle;
-    private ShowReadingWindowDelegate? _showReadingWindow;
 
     public MainWindow()
     {
@@ -114,21 +79,16 @@ public partial class MainWindow : Window
 
         _renderThrottleTimer.Tick += RenderThrottleTimer_Tick;
 
-        TextCompositionManager.AddPreviewTextInputStartHandler(TerminalInputProxy, TerminalInputProxy_PreviewTextInputStart);
-        TextCompositionManager.AddPreviewTextInputUpdateHandler(TerminalInputProxy, TerminalInputProxy_PreviewTextInputUpdate);
         TerminalOutput.AddHandler(Hyperlink.RequestNavigateEvent, new RequestNavigateEventHandler(TerminalOutput_RequestNavigate));
+        TerminalInputProxy.AddHandler(TextCompositionManager.PreviewTextInputStartEvent, new TextCompositionEventHandler(TerminalInputProxy_PreviewTextInputStart), handledEventsToo: true);
+        TerminalInputProxy.AddHandler(TextCompositionManager.PreviewTextInputUpdateEvent, new TextCompositionEventHandler(TerminalInputProxy_PreviewTextInputUpdate), handledEventsToo: true);
+        TerminalInputProxy.AddHandler(TextCompositionManager.TextInputEvent, new TextCompositionEventHandler(TerminalInputProxy_TextInput), handledEventsToo: true);
 
-        SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
         Closing += OnClosing;
         Activated += OnActivated;
         Deactivated += OnDeactivated;
         TerminalOutput.SizeChanged += OnTerminalOutputSizeChanged;
-
-        if (Application.Current is App { TsfUiElements: not null } app)
-        {
-            app.TsfUiElements.SnapshotChanged += ApplyTsfImeUiSnapshot;
-        }
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -137,12 +97,6 @@ public partial class MainWindow : Window
         UpdateInputProxyPosition();
         RequestDocumentRender();
         await StartTerminalAsync();
-    }
-
-    private void OnSourceInitialized(object? sender, EventArgs e)
-    {
-        _windowSource = PresentationSource.FromVisual(this) as HwndSource;
-        _windowSource?.AddHook(WindowProc);
     }
 
     private async void OnClosing(object? sender, CancelEventArgs e)
@@ -164,19 +118,7 @@ public partial class MainWindow : Window
         _sessionWatchdog.Stop();
         _cursorBlinkTimer.Stop();
         _renderThrottleTimer.Stop();
-        if (_windowSource is not null)
-        {
-            _windowSource.RemoveHook(WindowProc);
-            _windowSource = null;
-        }
-
-        if (Application.Current is App { TsfUiElements: not null } app)
-        {
-            app.TsfUiElements.SnapshotChanged -= ApplyTsfImeUiSnapshot;
-        }
-
-        ReleaseImeModule();
-        ClearImeComposition();
+        ResetInputProxyText();
         UpdateUiState(_session is not null);
 
         try
@@ -314,30 +256,56 @@ public partial class MainWindow : Window
             return;
         }
 
-        ClearImeComposition();
+        if (!FlushInputProxyText())
+        {
+            ResetInputProxyText();
+        }
         UpdateTerminalFocusState(focused: false);
     }
 
     private void TerminalInputProxy_PreviewTextInputStart(object sender, TextCompositionEventArgs e)
     {
-        if (string.IsNullOrEmpty(e.TextComposition.CompositionText))
-        {
-            return;
-        }
-
-        UpdateImeComposition(e.TextComposition.CompositionText);
-        UpdateNativeImeWindow();
+        UpdateOverlayState();
     }
 
     private void TerminalInputProxy_PreviewTextInputUpdate(object sender, TextCompositionEventArgs e)
     {
-        if (string.IsNullOrEmpty(e.TextComposition.CompositionText))
+        UpdateOverlayState();
+    }
+
+    private void TerminalInputProxy_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_resettingInputProxyText)
         {
             return;
         }
 
-        UpdateImeComposition(e.TextComposition.CompositionText);
-        UpdateNativeImeWindow();
+        UpdateOverlayState();
+    }
+
+    private void TerminalInputProxy_TextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (_resettingInputProxyText)
+        {
+            return;
+        }
+
+        _pendingProxyFlushAfterImeConfirm = false;
+        if (!HasPendingProxyText())
+        {
+            UpdateOverlayState();
+            return;
+        }
+
+        _ = Dispatcher.BeginInvoke(FlushCommittedProxyText, DispatcherPriority.Input);
+    }
+
+    private void FlushCommittedProxyText()
+    {
+        if (!FlushInputProxyText())
+        {
+            UpdateOverlayState();
+        }
     }
 
     private void TerminalOutput_PreviewTextInput(object sender, TextCompositionEventArgs e)
@@ -348,16 +316,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!string.IsNullOrEmpty(e.TextComposition.CompositionText))
-        {
-            UpdateImeComposition(e.TextComposition.CompositionText);
-            return;
-        }
-
         if (SendTerminalText(text, prefixAltIfNeeded: true))
         {
-            ClearImeComposition();
-            ResetInputProxyText();
             e.Handled = true;
         }
     }
@@ -372,6 +332,63 @@ public partial class MainWindow : Window
         if (TryHandleClipboardShortcut(e))
         {
             e.Handled = true;
+            return;
+        }
+
+        if (IsImeInputInProgress(e))
+        {
+            return;
+        }
+
+        if (TryHandleEnterKey(e))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        _ = FlushInputProxyText();
+
+        if (TryHandleControlShortcut(e) || TryHandleApplicationKeypad(e) || TryHandleSpecialKey(e))
+        {
+            e.Handled = true;
+        }
+    }
+
+    private void TerminalInputProxy_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        Key key = GetEffectiveKey(e);
+        TerminalEnterAction enterAction = TerminalEnterActionResolver.ResolveForProxy(
+            key,
+            HasPendingProxyText());
+        if (TryHandleClipboardShortcut(e))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        if (enterAction == TerminalEnterAction.FlushPendingProxyText)
+        {
+            QueuePendingProxyTextFlushAfterImeConfirm();
+            return;
+        }
+
+        if (enterAction == TerminalEnterAction.SendToTerminal)
+        {
+            if (TryHandleEnterKey(e))
+            {
+                e.Handled = true;
+            }
+
+            return;
+        }
+
+        if (HasPendingProxyText())
+        {
             return;
         }
 
@@ -414,13 +431,17 @@ public partial class MainWindow : Window
 
     private bool IsImeInputInProgress(KeyEventArgs e)
     {
-        return _isImeComposing ||
-            e.ImeProcessedKey != Key.None ||
-            e.Key == Key.ImeProcessed ||
-            e.Key == Key.ImeConvert ||
-            e.Key == Key.ImeNonConvert ||
-            e.Key == Key.ImeAccept ||
-            e.Key == Key.ImeModeChange;
+        if (HasPendingProxyText())
+        {
+            return true;
+        }
+
+        Key key = GetEffectiveKey(e);
+        return key == Key.ImeProcessed ||
+            key == Key.ImeConvert ||
+            key == Key.ImeNonConvert ||
+            key == Key.ImeAccept ||
+            key == Key.ImeModeChange;
     }
 
     private bool TryHandleControlShortcut(KeyEventArgs e)
@@ -430,13 +451,14 @@ public partial class MainWindow : Window
             return false;
         }
 
-        string? chord = TerminalKeyChordTranslator.TranslateCtrlChord(e.Key);
+        Key key = GetEffectiveKey(e);
+        string? chord = TerminalKeyChordTranslator.TranslateCtrlChord(key);
         if (chord is null)
         {
             return false;
         }
 
-        if (e.Key == Key.C)
+        if (key == Key.C)
         {
             SendInterrupt();
             return true;
@@ -447,17 +469,38 @@ public partial class MainWindow : Window
 
     private bool TryHandleSpecialKey(KeyEventArgs e)
     {
+        Key key = GetEffectiveKey(e);
+        if (key == Key.Enter)
+        {
+            return false;
+        }
+
         ModifierKeys modifiers = GetTerminalModifiers();
-        bool requiresTerminalInput = e.Key is not Key.Enter and not Key.Back and not Key.Tab and not Key.Escape;
+        bool requiresTerminalInput = key is not Key.Back and not Key.Tab and not Key.Escape;
         if (requiresTerminalInput && !SupportsTerminalInput())
         {
             return false;
         }
 
         string? sequence = TerminalKeyChordTranslator.TranslateSpecialKey(
-            e.Key,
+            key,
             modifiers,
             _terminalBuffer.ApplicationCursorKeysEnabled);
+
+        return sequence is not null && SendTerminalInput(sequence);
+    }
+
+    private bool TryHandleEnterKey(KeyEventArgs e)
+    {
+        if (GetEffectiveKey(e) != Key.Enter)
+        {
+            return false;
+        }
+
+        string? sequence = TerminalKeyChordTranslator.TranslateEnterKey(
+            GetTerminalModifiers(),
+            _terminalBuffer.ApplicationCursorKeysEnabled,
+            SupportsTerminalInput());
 
         return sequence is not null && SendTerminalInput(sequence);
     }
@@ -469,7 +512,8 @@ public partial class MainWindow : Window
             return false;
         }
 
-        string? sequence = e.Key switch
+        Key key = GetEffectiveKey(e);
+        string? sequence = key switch
         {
             Key.NumPad0 => "\u001bOp",
             Key.NumPad1 => "\u001bOq",
@@ -548,7 +592,6 @@ public partial class MainWindow : Window
             Exception? stopError = await DisposeSessionAsync(previousSession);
 
             ClearPendingOutput();
-            ClearImeComposition();
             ResetInputProxyText();
             (_currentColumns, _currentRows) = CalculateTerminalSize();
             ReplaceTerminalBuffer(new AnsiTerminalBuffer(_currentColumns, _currentRows));
@@ -633,7 +676,6 @@ public partial class MainWindow : Window
 
             ITerminalSession? session = DetachCurrentSession();
             ClearPendingOutput();
-            ClearImeComposition();
             ResetInputProxyText();
             _prioritizeInitialOutputRender = false;
             UpdateOverlayState();
@@ -1061,8 +1103,7 @@ public partial class MainWindow : Window
     {
         return UsesDocumentCursorRendering() &&
             ShouldShowCursor() &&
-            _terminalBuffer.CursorVisible &&
-            !_isImeComposing;
+            _terminalBuffer.CursorVisible;
     }
 
     private bool HasTerminalInputFocus()
@@ -1104,8 +1145,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        InputMethod.SetIsInputMethodEnabled(TerminalInputProxy, true);
-        InputMethod.SetPreferredImeState(TerminalInputProxy, InputMethodState.On);
         ResetInputProxyText();
         UpdateInputProxyPosition();
         Keyboard.Focus(TerminalInputProxy);
@@ -1115,12 +1154,15 @@ public partial class MainWindow : Window
     {
         var (charWidth, charHeight) = MeasureCharacterCell();
         TerminalViewportMetrics viewport = GetTerminalViewportMetrics();
-        Size compositionTextSize = MeasureImeCompositionText();
-        double proxyWidth = ResolveInputProxyWidth(charWidth, compositionTextSize);
-        double proxyHeight = ResolveInputProxyHeight(charHeight, compositionTextSize);
+        Size proxyTextSize = string.IsNullOrEmpty(TerminalInputProxy.Text)
+            ? new Size(charWidth, charHeight)
+            : MeasureTerminalText(TerminalInputProxy.Text);
+        double proxyWidth = Math.Max(2, Math.Max(charWidth, Math.Ceiling(proxyTextSize.Width + 4)));
+        double proxyHeight = Math.Max(2, Math.Max(charHeight, Math.Ceiling(proxyTextSize.Height)));
         TerminalInputProxy.Width = proxyWidth;
         TerminalInputProxy.Height = proxyHeight;
         TerminalInputProxy.FlowDirection = FlowDirection.LeftToRight;
+        TerminalInputProxy.CaretBrush = Brushes.Transparent;
 
         bool usedAnchor = TryGetCursorAnchorPosition(out double left, out double top);
         if (!usedAnchor)
@@ -1134,17 +1176,9 @@ public partial class MainWindow : Window
         }
 
         (double proxyLeft, double proxyTop) = ClampToViewport(left, top, proxyWidth, proxyHeight, viewport);
-        _inputProxyLeft = proxyLeft;
-        _inputProxyTop = proxyTop;
-        _inputProxyWidth = proxyWidth;
-        _inputProxyHeight = proxyHeight;
-
         Canvas.SetLeft(TerminalInputProxy, proxyLeft);
         Canvas.SetTop(TerminalInputProxy, proxyTop);
-        UpdateCursorOverlay(left, top, charWidth, charHeight, viewport);
-        UpdateImeCompositionOverlay(proxyLeft, proxyTop, charHeight, compositionTextSize);
-        UpdateImeCandidateOverlay(proxyLeft, proxyTop, charHeight, compositionTextSize, viewport);
-        UpdateNativeImeWindow();
+        UpdateCursorOverlay(proxyLeft + GetInputProxyCaretOffset(), proxyTop, charWidth, charHeight, viewport);
     }
 
     private bool TryGetCursorAnchorPosition(out double left, out double top)
@@ -1187,141 +1221,21 @@ public partial class MainWindow : Window
 
     private void ResetInputProxyText()
     {
-        // The input proxy is only a focus target for IME/native messages.
-    }
-
-    private void ApplyTsfImeUiSnapshot(TsfImeUiSnapshot snapshot)
-    {
-        if (!Dispatcher.CheckAccess())
+        _pendingProxyFlushAfterImeConfirm = false;
+        if (!string.IsNullOrEmpty(TerminalInputProxy.Text))
         {
-            _ = Dispatcher.BeginInvoke(() => ApplyTsfImeUiSnapshot(snapshot), DispatcherPriority.Input);
-            return;
-        }
-
-        _imeReadingText = snapshot.ReadingText;
-        _imeCandidateItems = snapshot.CandidateItems;
-        _imeCandidateSelection = snapshot.SelectionIndex;
-        _imeCandidatePageStart = snapshot.PageStart;
-        UpdateInputProxyPosition();
-    }
-
-    private void UpdateImeComposition(string? compositionText)
-    {
-        _imeCompositionText = compositionText ?? string.Empty;
-        _isImeComposing = _imeCompositionText.Length > 0;
-        UpdateInputProxyPosition();
-    }
-
-    private void ClearImeComposition()
-    {
-        _imeCompositionText = string.Empty;
-        _isImeComposing = false;
-        ImeCompositionOverlay.Visibility = Visibility.Collapsed;
-        ImeCompositionTextBlock.Text = string.Empty;
-        if (!_isRenderingTerminal)
-        {
-            UpdateOverlayState();
-        }
-    }
-
-    private void ClearImeCandidates()
-    {
-        _imeReadingText = string.Empty;
-        _imeCandidateItems = [];
-        _imeCandidateSelection = -1;
-        _imeCandidatePageStart = 0;
-        ImeCandidateOverlay.Visibility = Visibility.Collapsed;
-        ImeCandidatePanel.Children.Clear();
-        if (!_isRenderingTerminal)
-        {
-            UpdateOverlayState();
-        }
-    }
-
-    private void UpdateImeCompositionOverlay(double left, double top, double charHeight, Size compositionTextSize)
-    {
-        if (!_isImeComposing || string.IsNullOrEmpty(_imeCompositionText) || !HasTerminalInputFocus())
-        {
-            ImeCompositionOverlay.Visibility = Visibility.Collapsed;
-            ImeCompositionTextBlock.Text = string.Empty;
-            return;
-        }
-
-        ImeCompositionTextBlock.FontFamily = TerminalOutput.FontFamily;
-        ImeCompositionTextBlock.FontSize = TerminalOutput.FontSize;
-        ImeCompositionTextBlock.Text = _imeCompositionText;
-        ImeCompositionTextBlock.FlowDirection = FlowDirection.LeftToRight;
-
-        Size textSize = compositionTextSize.Width > 0 && compositionTextSize.Height > 0
-            ? compositionTextSize
-            : MeasureTerminalText(_imeCompositionText);
-        double overlayWidth = Math.Max(textSize.Width + 4, 8);
-        double overlayHeight = Math.Max(textSize.Height, charHeight);
-
-        ImeCompositionOverlay.Width = overlayWidth;
-        ImeCompositionOverlay.Height = overlayHeight;
-        Canvas.SetLeft(ImeCompositionOverlay, left);
-        Canvas.SetTop(ImeCompositionOverlay, top);
-        ImeCompositionOverlay.Visibility = Visibility.Visible;
-    }
-
-    private void UpdateImeCandidateOverlay(double left, double top, double charHeight, Size compositionTextSize, TerminalViewportMetrics viewport)
-    {
-        if ((_imeCandidateItems.Length == 0 && string.IsNullOrWhiteSpace(_imeReadingText)) || !HasTerminalInputFocus())
-        {
-            ImeCandidateOverlay.Visibility = Visibility.Collapsed;
-            ImeCandidatePanel.Children.Clear();
-            return;
-        }
-
-        PopulateImeCandidatePanel();
-
-        ImeCandidateOverlay.MaxWidth = Math.Max(64, viewport.ViewportRight - viewport.ViewportLeft);
-        ImeCandidateOverlay.Measure(new Size(ImeCandidateOverlay.MaxWidth, double.PositiveInfinity));
-        Size overlaySize = ImeCandidateOverlay.DesiredSize;
-        double compositionHeight = compositionTextSize.Height > 0 ? compositionTextSize.Height : charHeight;
-        double overlayTop = top + Math.Max(charHeight, compositionHeight) + 2;
-        (double overlayLeft, double clampedTop) = ClampToViewport(left, overlayTop, overlaySize.Width, overlaySize.Height, viewport);
-
-        Canvas.SetLeft(ImeCandidateOverlay, overlayLeft);
-        Canvas.SetTop(ImeCandidateOverlay, clampedTop);
-        ImeCandidateOverlay.Visibility = Visibility.Visible;
-    }
-
-    private void PopulateImeCandidatePanel()
-    {
-        ImeCandidatePanel.Children.Clear();
-
-        if (!string.IsNullOrWhiteSpace(_imeReadingText))
-        {
-            ImeCandidatePanel.Children.Add(new TextBlock
+            _resettingInputProxyText = true;
+            try
             {
-                Text = _imeReadingText,
-                FontFamily = TerminalOutput.FontFamily,
-                FontSize = TerminalOutput.FontSize,
-                Foreground = CandidateHeaderBrush,
-                Margin = new Thickness(0, 0, 0, 2)
-            });
-        }
-
-        for (int index = 0; index < _imeCandidateItems.Length; index++)
-        {
-            bool isSelected = index == _imeCandidateSelection;
-            ImeCandidatePanel.Children.Add(new TextBlock
+                TerminalInputProxy.Clear();
+            }
+            finally
             {
-                Text = $"{_imeCandidatePageStart + index + 1}. {_imeCandidateItems[index]}",
-                FontFamily = TerminalOutput.FontFamily,
-                FontSize = TerminalOutput.FontSize,
-                Foreground = isSelected ? Brushes.White : TerminalOutput.Foreground,
-                Background = isSelected ? CandidateSelectionBrush : Brushes.Transparent,
-                Padding = new Thickness(2, 0, 2, 0)
-            });
+                _resettingInputProxyText = false;
+            }
         }
-    }
 
-    private bool UsesTsfCandidateUi()
-    {
-        return Application.Current is App { TsfUiElements: not null };
+        UpdateOverlayState();
     }
 
     private void UpdateCursorOverlay(double left, double top, double charWidth, double charHeight, TerminalViewportMetrics viewport)
@@ -1357,35 +1271,6 @@ public partial class MainWindow : Window
         Canvas.SetLeft(TerminalCursorOverlay, overlayLeft);
         Canvas.SetTop(TerminalCursorOverlay, overlayTop);
         TerminalCursorOverlay.Visibility = Visibility.Visible;
-    }
-
-    private Size MeasureImeCompositionText()
-    {
-        return string.IsNullOrEmpty(_imeCompositionText)
-            ? new Size(0, 0)
-            : MeasureTerminalText(_imeCompositionText);
-    }
-
-    private static double ResolveInputProxyWidth(double charWidth, Size compositionTextSize)
-    {
-        double minimumWidth = Math.Max(2, charWidth);
-        if (compositionTextSize.Width <= 0)
-        {
-            return minimumWidth;
-        }
-
-        return Math.Max(minimumWidth, Math.Ceiling(compositionTextSize.Width + 4));
-    }
-
-    private static double ResolveInputProxyHeight(double charHeight, Size compositionTextSize)
-    {
-        double minimumHeight = Math.Max(2, charHeight);
-        if (compositionTextSize.Height <= 0)
-        {
-            return minimumHeight;
-        }
-
-        return Math.Max(minimumHeight, Math.Ceiling(compositionTextSize.Height));
     }
 
     private static (double Left, double Top) ClampToViewport(double left, double top, double width, double height, TerminalViewportMetrics viewport)
@@ -1431,8 +1316,112 @@ public partial class MainWindow : Window
     {
         return !UsesDocumentCursorRendering() &&
             ShouldShowCursor() &&
-            _terminalBuffer.CursorVisible &&
-            !_isImeComposing;
+            _terminalBuffer.CursorVisible;
+    }
+
+    private static Key GetEffectiveKey(KeyEventArgs e)
+    {
+        Key key = e.Key == Key.ImeProcessed && e.ImeProcessedKey != Key.None
+            ? e.ImeProcessedKey
+            : e.Key;
+
+        if (key == Key.ImeProcessed)
+        {
+            key = ResolveImeProcessedSpecialKey();
+        }
+
+        return key == Key.Return ? Key.Enter : key;
+    }
+
+    private static Key ResolveImeProcessedSpecialKey()
+    {
+        if (Keyboard.IsKeyDown(Key.Enter) || Keyboard.IsKeyDown(Key.Return))
+        {
+            return Key.Enter;
+        }
+
+        if (Keyboard.IsKeyDown(Key.Back))
+        {
+            return Key.Back;
+        }
+
+        if (Keyboard.IsKeyDown(Key.Tab))
+        {
+            return Key.Tab;
+        }
+
+        if (Keyboard.IsKeyDown(Key.Escape))
+        {
+            return Key.Escape;
+        }
+
+        if (Keyboard.IsKeyDown(Key.Up))
+        {
+            return Key.Up;
+        }
+
+        if (Keyboard.IsKeyDown(Key.Down))
+        {
+            return Key.Down;
+        }
+
+        if (Keyboard.IsKeyDown(Key.Left))
+        {
+            return Key.Left;
+        }
+
+        if (Keyboard.IsKeyDown(Key.Right))
+        {
+            return Key.Right;
+        }
+
+        if (Keyboard.IsKeyDown(Key.Home))
+        {
+            return Key.Home;
+        }
+
+        if (Keyboard.IsKeyDown(Key.End))
+        {
+            return Key.End;
+        }
+
+        if (Keyboard.IsKeyDown(Key.Insert))
+        {
+            return Key.Insert;
+        }
+
+        if (Keyboard.IsKeyDown(Key.Delete))
+        {
+            return Key.Delete;
+        }
+
+        if (Keyboard.IsKeyDown(Key.PageUp))
+        {
+            return Key.PageUp;
+        }
+
+        if (Keyboard.IsKeyDown(Key.PageDown))
+        {
+            return Key.PageDown;
+        }
+
+        return Key.ImeProcessed;
+    }
+
+    private double GetInputProxyCaretOffset()
+    {
+        string text = TerminalInputProxy.Text;
+        if (string.IsNullOrEmpty(text))
+        {
+            return 0;
+        }
+
+        return Math.Ceiling(MeasureTerminalText(text).Width);
+    }
+
+    private bool HasPendingProxyText()
+    {
+        return !string.IsNullOrEmpty(TerminalInputProxy.Text);
     }
 
     private void UpdateOverlayState()
@@ -1464,492 +1453,45 @@ public partial class MainWindow : Window
         return SendTerminalInput(text);
     }
 
-    private void ProcessImeComposition(IntPtr windowHandle, IntPtr lParam)
+    private bool FlushInputProxyText()
     {
-        if (!TerminalInputProxy.IsKeyboardFocusWithin)
-        {
-            return;
-        }
-
-        long compositionFlags = lParam.ToInt64();
-        bool hasCompositionText = (compositionFlags & GcsCompStr) != 0;
-        bool hasResultText = (compositionFlags & GcsResultStr) != 0;
-        if (!hasCompositionText && !hasResultText)
-        {
-            ClearImeComposition();
-            ResetInputProxyText();
-            UpdateNativeImeWindow();
-            return;
-        }
-
-        IntPtr inputContext = ImmGetContext(windowHandle);
-        if (inputContext == IntPtr.Zero)
-        {
-            return;
-        }
-
-        string compositionText;
-        string readingText;
-        string resultText;
-        try
-        {
-            compositionText = hasCompositionText
-                ? GetImeCompositionString(inputContext, GcsCompStr)
-                : string.Empty;
-            readingText = hasCompositionText
-                ? GetImeCompositionString(inputContext, GcsCompReadStr)
-                : hasResultText
-                    ? GetImeCompositionString(inputContext, GcsResultReadStr)
-                    : string.Empty;
-            resultText = hasResultText
-                ? GetImeCompositionString(inputContext, GcsResultStr)
-                : string.Empty;
-        }
-        finally
-        {
-            _ = ImmReleaseContext(windowHandle, inputContext);
-        }
-
-        _imeReadingText = readingText;
-
-        if (hasResultText && resultText.Length > 0)
-        {
-            _ = SendTerminalText(resultText, prefixAltIfNeeded: false);
-            ResetInputProxyText();
-        }
-
-        if (hasCompositionText)
-        {
-            if (compositionText.Length > 0)
-            {
-                UpdateImeComposition(compositionText);
-            }
-            else
-            {
-                ClearImeComposition();
-            }
-        }
-        else if (hasResultText)
-        {
-            ClearImeComposition();
-        }
-
-        UpdateNativeImeWindow();
-    }
-
-    private static string GetImeCompositionString(IntPtr inputContext, int compositionIndex)
-    {
-        int byteCount = ImmGetCompositionString(inputContext, compositionIndex, IntPtr.Zero, 0);
-        if (byteCount <= 0)
-        {
-            return string.Empty;
-        }
-
-        IntPtr buffer = Marshal.AllocHGlobal(byteCount);
-        try
-        {
-            int copiedByteCount = ImmGetCompositionString(inputContext, compositionIndex, buffer, byteCount);
-            if (copiedByteCount <= 0)
-            {
-                return string.Empty;
-            }
-
-            byte[] bytes = new byte[copiedByteCount];
-            Marshal.Copy(buffer, bytes, 0, copiedByteCount);
-            return Encoding.Unicode.GetString(bytes).TrimEnd('\0');
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(buffer);
-        }
-    }
-
-    private void UpdateImeCandidateList(IntPtr windowHandle, int candidateListIndex)
-    {
-        IntPtr inputContext = ImmGetContext(windowHandle);
-        if (inputContext == IntPtr.Zero)
-        {
-            return;
-        }
-
-        try
-        {
-            int bufferSize = (int)ImmGetCandidateList(inputContext, candidateListIndex, IntPtr.Zero, 0);
-            if (bufferSize <= 0)
-            {
-                ClearImeCandidates();
-                return;
-            }
-
-            IntPtr buffer = Marshal.AllocHGlobal(bufferSize);
-            try
-            {
-                int copiedSize = (int)ImmGetCandidateList(inputContext, candidateListIndex, buffer, bufferSize);
-                if (copiedSize <= 0)
-                {
-                    ClearImeCandidates();
-                    return;
-                }
-
-                byte[] bytes = new byte[copiedSize];
-                Marshal.Copy(buffer, bytes, 0, copiedSize);
-                ApplyImeCandidateList(bytes);
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(buffer);
-            }
-        }
-        finally
-        {
-            _ = ImmReleaseContext(windowHandle, inputContext);
-        }
-    }
-
-    private void ApplyImeCandidateList(byte[] bytes)
-    {
-        if (bytes.Length < 24)
-        {
-            ClearImeCandidates();
-            return;
-        }
-
-        int candidateCount = BitConverter.ToInt32(bytes, 8);
-        int selectionIndex = BitConverter.ToInt32(bytes, 12);
-        int pageStart = BitConverter.ToInt32(bytes, 16);
-        int pageSize = BitConverter.ToInt32(bytes, 20);
-        if (candidateCount <= 0)
-        {
-            ClearImeCandidates();
-            return;
-        }
-
-        string[] allCandidates = new string[candidateCount];
-        for (int index = 0; index < candidateCount; index++)
-        {
-            int offsetIndex = 24 + (index * 4);
-            if (offsetIndex + 4 > bytes.Length)
-            {
-                allCandidates[index] = string.Empty;
-                continue;
-            }
-
-            int valueOffset = BitConverter.ToInt32(bytes, offsetIndex);
-            allCandidates[index] = ReadCandidateString(bytes, valueOffset);
-        }
-
-        int displayStart = Math.Clamp(pageStart, 0, candidateCount);
-        int displayEnd = pageSize > 0
-            ? Math.Min(candidateCount, displayStart + pageSize)
-            : candidateCount;
-        if (displayEnd <= displayStart)
-        {
-            displayStart = 0;
-            displayEnd = candidateCount;
-        }
-
-        _imeCandidateItems = allCandidates[displayStart..displayEnd];
-        _imeCandidatePageStart = displayStart;
-        _imeCandidateSelection = selectionIndex >= displayStart && selectionIndex < displayEnd
-            ? selectionIndex - displayStart
-            : -1;
-        UpdateOverlayState();
-    }
-
-    private static string ReadCandidateString(byte[] bytes, int startOffset)
-    {
-        if (startOffset < 0 || startOffset >= bytes.Length)
-        {
-            return string.Empty;
-        }
-
-        int endOffset = startOffset;
-        while (endOffset + 1 < bytes.Length)
-        {
-            if (bytes[endOffset] == 0 && bytes[endOffset + 1] == 0)
-            {
-                break;
-            }
-
-            endOffset += 2;
-        }
-
-        int length = Math.Max(0, endOffset - startOffset);
-        return length == 0
-            ? string.Empty
-            : Encoding.Unicode.GetString(bytes, startOffset, length);
-    }
-
-    private bool TryUpdateImeCandidateListFromMask(IntPtr windowHandle, IntPtr candidateMask)
-    {
-        int mask = candidateMask.ToInt32();
-        for (int index = 0; index < 4; index++)
-        {
-            if ((mask & (1 << index)) != 0)
-            {
-                UpdateImeCandidateList(windowHandle, index);
-                return true;
-            }
-        }
-
-        if (mask == 0)
-        {
-            UpdateImeCandidateList(windowHandle, 0);
-            return true;
-        }
-
-        return false;
-    }
-
-    private bool TryPopulateCandidateWindowRequest(IntPtr windowHandle, IntPtr lParam)
-    {
-        if (lParam == IntPtr.Zero || !TryGetImeClientBounds(out ImeClientBounds bounds))
+        if (_resettingInputProxyText || !HasPendingProxyText())
         {
             return false;
         }
 
-        var form = Marshal.PtrToStructure<CandidateForm>(lParam);
-        form.dwStyle = CfsExclude;
-        form.ptCurrentPos = bounds.CandidateOrigin;
-        form.rcArea = bounds.CaretRect;
-        Marshal.StructureToPtr(form, lParam, fDeleteOld: false);
-        UpdateImeCandidateList(windowHandle, (int)form.dwIndex);
+        if (!SendTerminalText(TerminalInputProxy.Text, prefixAltIfNeeded: true))
+        {
+            return false;
+        }
+
+        ResetInputProxyText();
         return true;
     }
 
-    private void UpdateNativeImeWindow()
+    private void QueuePendingProxyTextFlushAfterImeConfirm()
     {
-        if (_windowSource is null || !TerminalInputProxy.IsKeyboardFocusWithin)
+        if (_pendingProxyFlushAfterImeConfirm)
         {
             return;
         }
 
-        if (!TryGetImeClientBounds(out ImeClientBounds bounds))
+        _pendingProxyFlushAfterImeConfirm = true;
+        _ = Dispatcher.BeginInvoke(FlushPendingProxyTextAfterImeConfirm, DispatcherPriority.Background);
+    }
+
+    private void FlushPendingProxyTextAfterImeConfirm()
+    {
+        if (!_pendingProxyFlushAfterImeConfirm)
         {
             return;
         }
 
-        IntPtr windowHandle = _windowSource.Handle;
-        IntPtr inputContext = ImmGetContext(windowHandle);
-        if (inputContext == IntPtr.Zero)
+        _pendingProxyFlushAfterImeConfirm = false;
+        if (!FlushInputProxyText())
         {
-            return;
+            UpdateOverlayState();
         }
-
-        try
-        {
-            HideNativeImeReadingWindow(inputContext);
-
-            var compositionForm = new CompositionForm
-            {
-                dwStyle = _isImeComposing ? CfsForcePosition : CfsPoint,
-                ptCurrentPos = bounds.CompositionOrigin,
-                rcArea = bounds.CaretRect
-            };
-            _ = ImmSetCompositionWindow(inputContext, ref compositionForm);
-
-            for (uint index = 0; index < 4; index++)
-            {
-                var candidateForm = new CandidateForm
-                {
-                    dwIndex = index,
-                    dwStyle = CfsExclude,
-                    ptCurrentPos = bounds.CandidateOrigin,
-                    rcArea = bounds.CaretRect
-                };
-                _ = ImmSetCandidateWindow(inputContext, ref candidateForm);
-            }
-        }
-        finally
-        {
-            _ = ImmReleaseContext(windowHandle, inputContext);
-        }
-    }
-
-    private bool TryGetImeClientBounds(out ImeClientBounds bounds)
-    {
-        bounds = default;
-        if (_windowSource?.CompositionTarget is null ||
-            TerminalOutput.Parent is not UIElement overlayHost)
-        {
-            return false;
-        }
-
-        Point topLeftDip = overlayHost.TranslatePoint(new Point(_inputProxyLeft, _inputProxyTop), this);
-        Point bottomRightDip = overlayHost.TranslatePoint(
-            new Point(_inputProxyLeft + _inputProxyWidth, _inputProxyTop + _inputProxyHeight),
-            this);
-        Matrix transform = _windowSource.CompositionTarget.TransformToDevice;
-        Point topLeftPx = transform.Transform(topLeftDip);
-        Point bottomRightPx = transform.Transform(bottomRightDip);
-
-        int left = (int)Math.Round(topLeftPx.X);
-        int top = (int)Math.Round(topLeftPx.Y);
-        int right = Math.Max(left + 1, (int)Math.Round(bottomRightPx.X));
-        int bottom = Math.Max(top + 1, (int)Math.Round(bottomRightPx.Y));
-
-        bounds = new ImeClientBounds(
-            new NativePoint(left, top),
-            new NativePoint(left, bottom),
-            new NativeRect(left, top, right, bottom));
-        return true;
-    }
-
-    private void HideNativeImeReadingWindow(IntPtr inputContext)
-    {
-        if (!TryEnsureImeModuleBindings() || _showReadingWindow is null)
-        {
-            return;
-        }
-
-        _ = _showReadingWindow(inputContext, false);
-    }
-
-    private bool TryEnsureImeModuleBindings()
-    {
-        IntPtr keyboardLayout = GetKeyboardLayout(0);
-        if (keyboardLayout == _imeKeyboardLayout)
-        {
-            return _showReadingWindow is not null;
-        }
-
-        ReleaseImeModule();
-        _imeKeyboardLayout = keyboardLayout;
-
-        const int pathCapacity = 260;
-        var modulePathBuilder = new StringBuilder(pathCapacity);
-        uint modulePathLength = ImmGetIMEFileName(keyboardLayout, modulePathBuilder, (uint)modulePathBuilder.Capacity);
-        if (modulePathLength == 0)
-        {
-            return false;
-        }
-
-        string modulePath = modulePathBuilder.ToString();
-        if (!Path.IsPathRooted(modulePath))
-        {
-            modulePath = Path.Combine(Environment.SystemDirectory, modulePath);
-        }
-
-        _imeModuleHandle = LoadLibrary(modulePath);
-        if (_imeModuleHandle == IntPtr.Zero)
-        {
-            return false;
-        }
-
-        IntPtr showReadingWindowAddress = GetProcAddress(_imeModuleHandle, "ShowReadingWindow");
-        if (showReadingWindowAddress == IntPtr.Zero)
-        {
-            _ = FreeLibrary(_imeModuleHandle);
-            _imeModuleHandle = IntPtr.Zero;
-            return false;
-        }
-
-        _showReadingWindow = Marshal.GetDelegateForFunctionPointer<ShowReadingWindowDelegate>(showReadingWindowAddress);
-        return true;
-    }
-
-    private void ReleaseImeModule()
-    {
-        _showReadingWindow = null;
-        if (_imeModuleHandle != IntPtr.Zero)
-        {
-            _ = FreeLibrary(_imeModuleHandle);
-            _imeModuleHandle = IntPtr.Zero;
-        }
-    }
-
-    private IntPtr WindowProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
-    {
-        switch (msg)
-        {
-            case WmImeSetContext:
-                handled = true;
-                IntPtr setContextResult = DefWindowProc(hwnd, msg, wParam, IntPtr.Zero);
-                if (wParam != IntPtr.Zero && TerminalInputProxy.IsKeyboardFocusWithin)
-                {
-                    _ = Dispatcher.BeginInvoke(UpdateNativeImeWindow, DispatcherPriority.Input);
-                }
-
-                return setContextResult;
-            case WmImeStartComposition:
-                if (TerminalInputProxy.IsKeyboardFocusWithin)
-                {
-                    handled = true;
-                    if (!UsesTsfCandidateUi())
-                    {
-                        ClearImeCandidates();
-                    }
-
-                    _ = Dispatcher.BeginInvoke(UpdateNativeImeWindow, DispatcherPriority.Input);
-                    return IntPtr.Zero;
-                }
-
-                break;
-            case WmImeComposition:
-                if (TerminalInputProxy.IsKeyboardFocusWithin)
-                {
-                    handled = true;
-                    ProcessImeComposition(hwnd, lParam);
-                    return IntPtr.Zero;
-                }
-
-                break;
-            case WmImeEndComposition:
-                if (TerminalInputProxy.IsKeyboardFocusWithin)
-                {
-                    ClearImeComposition();
-                    if (!UsesTsfCandidateUi())
-                    {
-                        ClearImeCandidates();
-                    }
-
-                    handled = true;
-                    return IntPtr.Zero;
-                }
-
-                break;
-            case WmImeNotify:
-                if (TerminalInputProxy.IsKeyboardFocusWithin)
-                {
-                    handled = true;
-                    switch (wParam.ToInt32())
-                    {
-                        case ImnOpenCandidate:
-                        case ImnChangeCandidate:
-                            if (!UsesTsfCandidateUi())
-                            {
-                                TryUpdateImeCandidateListFromMask(hwnd, lParam);
-                            }
-
-                            break;
-                        case ImnCloseCandidate:
-                            if (!UsesTsfCandidateUi())
-                            {
-                                ClearImeCandidates();
-                            }
-
-                            break;
-                    }
-
-                    _ = Dispatcher.BeginInvoke(UpdateNativeImeWindow, DispatcherPriority.Input);
-                    return IntPtr.Zero;
-                }
-
-                break;
-            case WmImeRequest:
-                if (TerminalInputProxy.IsKeyboardFocusWithin && wParam.ToInt32() == ImrCandidateWindow)
-                {
-                    handled = true;
-                    return TryPopulateCandidateWindowRequest(hwnd, lParam) ? new IntPtr(1) : IntPtr.Zero;
-                }
-
-                break;
-            case WmInputLangChange:
-                _ = Dispatcher.BeginInvoke(UpdateNativeImeWindow, DispatcherPriority.Input);
-                break;
-        }
-
-        return IntPtr.Zero;
     }
 
     private void AttachTerminalScrollViewer()
@@ -2502,102 +2044,6 @@ public partial class MainWindow : Window
 
         return ((short)columns, (short)rows);
     }
-
-    [DllImport("imm32.dll")]
-    private static extern IntPtr ImmGetContext(IntPtr hWnd);
-
-    [DllImport("imm32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool ImmReleaseContext(IntPtr hWnd, IntPtr hIMC);
-
-    [DllImport("imm32.dll", CharSet = CharSet.Unicode, EntryPoint = "ImmGetCompositionStringW")]
-    private static extern int ImmGetCompositionString(IntPtr hIMC, int dwIndex, IntPtr lpBuf, int dwBufLen);
-
-    [DllImport("imm32.dll", CharSet = CharSet.Unicode, EntryPoint = "ImmGetCandidateListW")]
-    private static extern uint ImmGetCandidateList(IntPtr hIMC, int deIndex, IntPtr candidateList, int bufferLength);
-
-    [DllImport("imm32.dll", CharSet = CharSet.Unicode, EntryPoint = "ImmGetIMEFileNameW")]
-    private static extern uint ImmGetIMEFileName(IntPtr keyboardLayout, StringBuilder? fileName, uint bufferLength);
-
-    [DllImport("imm32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool ImmSetCompositionWindow(IntPtr hIMC, ref CompositionForm form);
-
-    [DllImport("imm32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool ImmSetCandidateWindow(IntPtr hIMC, ref CandidateForm form);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "DefWindowProcW")]
-    private static extern IntPtr DefWindowProc(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetKeyboardLayout(uint threadId);
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern IntPtr LoadLibrary(string fileName);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr GetProcAddress(IntPtr moduleHandle, string procedureName);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool FreeLibrary(IntPtr moduleHandle);
-
-    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private delegate bool ShowReadingWindowDelegate(IntPtr inputContext, [MarshalAs(UnmanagedType.Bool)] bool show);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct CompositionForm
-    {
-        public uint dwStyle;
-        public NativePoint ptCurrentPos;
-        public NativeRect rcArea;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct CandidateForm
-    {
-        public uint dwIndex;
-        public uint dwStyle;
-        public NativePoint ptCurrentPos;
-        public NativeRect rcArea;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private readonly struct NativePoint
-    {
-        public readonly int X;
-        public readonly int Y;
-
-        public NativePoint(int x, int y)
-        {
-            X = x;
-            Y = y;
-        }
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private readonly struct NativeRect
-    {
-        public readonly int Left;
-        public readonly int Top;
-        public readonly int Right;
-        public readonly int Bottom;
-
-        public NativeRect(int left, int top, int right, int bottom)
-        {
-            Left = left;
-            Top = top;
-            Right = right;
-            Bottom = bottom;
-        }
-    }
-
-    private readonly record struct ImeClientBounds(
-        NativePoint CompositionOrigin,
-        NativePoint CandidateOrigin,
-        NativeRect CaretRect);
 
     private readonly record struct TerminalViewportMetrics(
         double ViewportLeft,
