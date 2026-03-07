@@ -213,6 +213,18 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void DecPrivate1007TogglesAlternateScrollMode()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("\u001b[?1007h");
+        Assert.True(buffer.AlternateScrollEnabled);
+
+        buffer.Process("\u001b[?1007l");
+        Assert.False(buffer.AlternateScrollEnabled);
+    }
+
+    [Fact]
     public void RepRepeatsLastPrintedCluster()
     {
         var buffer = new AnsiTerminalBuffer(32, 10);

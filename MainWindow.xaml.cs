@@ -1166,9 +1166,14 @@ public partial class MainWindow : Window
 
     private bool TrySendMouseWheelEvent(MouseWheelEventArgs e)
     {
-        if (_session is null || !SupportsTerminalInput() || _terminalBuffer.MouseTrackingMode == TerminalMouseTrackingMode.Off)
+        if (_session is null || !SupportsTerminalInput())
         {
             return false;
+        }
+
+        if (_terminalBuffer.MouseTrackingMode == TerminalMouseTrackingMode.Off)
+        {
+            return TrySendAlternateScrollEvent(e);
         }
 
         if (!TryGetMouseCell(e.GetPosition(TerminalOutput), out int column, out int row))
@@ -1178,6 +1183,33 @@ public partial class MainWindow : Window
 
         bool wheelUp = e.Delta > 0;
         return SendMouseSequence(0, column, row, released: false, motion: false, wheel: true, wheelUp: wheelUp);
+    }
+
+    private bool TrySendAlternateScrollEvent(MouseWheelEventArgs e)
+    {
+        if (!_terminalBuffer.AlternateScrollEnabled || !_terminalBuffer.IsAlternateScreenActive)
+        {
+            return false;
+        }
+
+        Key directionKey = e.Delta > 0 ? Key.Up : Key.Down;
+        string? sequence = TerminalKeyChordTranslator.TranslateSpecialKey(
+            directionKey,
+            ModifierKeys.None,
+            _terminalBuffer.ApplicationCursorKeysEnabled);
+        if (sequence is null)
+        {
+            return false;
+        }
+
+        int repeats = Math.Max(1, Math.Abs(e.Delta) / Mouse.MouseWheelDeltaForOneLine);
+        var payload = new StringBuilder(sequence.Length * repeats);
+        for (int index = 0; index < repeats; index++)
+        {
+            payload.Append(sequence);
+        }
+
+        return SendTerminalInput(payload.ToString());
     }
 
     private bool SendMouseSequence(int button, int column, int row, bool released, bool motion, bool wheel, bool wheelUp)

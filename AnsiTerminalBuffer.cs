@@ -94,6 +94,7 @@ internal sealed class AnsiTerminalBuffer
     private bool _insertMode;
     private bool _originMode;
     private bool _autoWrapEnabled = true;
+    private bool _alternateScrollEnabled;
     private bool _bracketedPasteEnabled;
     private bool _focusReportingEnabled;
     private bool _useG1CharacterSet;
@@ -136,6 +137,7 @@ internal sealed class AnsiTerminalBuffer
     public string WindowTitle => _windowTitle;
     public bool ApplicationCursorKeysEnabled => _applicationCursorKeys;
     public bool ApplicationKeypadEnabled => _applicationKeypad;
+    public bool AlternateScrollEnabled => _alternateScrollEnabled;
     public bool BracketedPasteEnabled => _bracketedPasteEnabled;
     public int CursorRow => _cursorRow;
     public int CursorColumn => Math.Clamp(_cursorColumn, 0, _columns - 1);
@@ -143,6 +145,7 @@ internal sealed class AnsiTerminalBuffer
     public TerminalCursorShape CursorShape => _cursorShape;
     public bool CursorVisible => _cursorVisible;
     public bool FocusReportingEnabled => _focusReportingEnabled;
+    public bool IsAlternateScreenActive => _primaryScreenBackup is not null;
     public TerminalMouseEncoding MouseEncoding => ResolveMouseEncoding();
     public TerminalMouseTrackingMode MouseTrackingMode => _mouseTrackingMode;
 
@@ -352,6 +355,7 @@ internal sealed class AnsiTerminalBuffer
         _insertMode = false;
         _originMode = false;
         _autoWrapEnabled = true;
+        _alternateScrollEnabled = false;
         _bracketedPasteEnabled = false;
         _focusReportingEnabled = false;
         _useG1CharacterSet = false;
@@ -932,6 +936,9 @@ internal sealed class AnsiTerminalBuffer
                     break;
                 case 25:
                     _cursorVisible = enabled;
+                    break;
+                case 1007:
+                    _alternateScrollEnabled = enabled;
                     break;
                 case 12:
                     _cursorBlinkEnabled = enabled;
