@@ -13,19 +13,23 @@
 - application cursor / application keypad
 - bracketed paste / focus report / mouse tracking の基本
 - DEC Special Graphics
-- wide character の基本対応
+- grapheme cluster の基本対応
+- ZWJ emoji / variation selector / 国旗ペアの基本対応
 - OSC 52 の clipboard set / query
 - スクロールバック閲覧中の自動追従抑制
 - 修飾キー付きの主要キーシーケンス
+- Ctrl 系の主要 ASCII 制御文字入力
+- fallback セッションの quoted command line 解析と制限付きモード化
+- session smoke test を含む自動テスト
+- document render のスロットリング
 
 以下はまだ不足している。
 
 - IME / 日本語入力の本格対応
 - 高頻度更新に耐える描画方式
-- Unicode 幅計算の正確性
+- Unicode 幅計算の厳密性
 - VT シーケンスの網羅性
-- fallback セッションの実用性
-- 自動テスト
+- fallback セッションの resize / signal 戦略の深掘り
 
 ## 優先順位
 

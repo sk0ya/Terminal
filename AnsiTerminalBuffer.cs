@@ -2070,6 +2070,7 @@ internal sealed class AnsiTerminalBuffer
             >= 0xFE30 and <= 0xFE6F or
             >= 0xFF00 and <= 0xFF60 or
             >= 0xFFE0 and <= 0xFFE6 or
+            >= 0x1F1E6 and <= 0x1F1FF or
             >= 0x1F300 and <= 0x1FAFF or
             >= 0x20000 and <= 0x3FFFD)
         {

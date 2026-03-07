@@ -2,6 +2,7 @@ namespace ConPtyTerminal;
 
 public interface ITerminalSession : IDisposable
 {
+    TerminalSessionCapabilities Capabilities { get; }
     event EventHandler<string>? OutputReceived;
     event EventHandler<int>? Exited;
 

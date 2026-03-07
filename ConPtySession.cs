@@ -34,6 +34,11 @@ public sealed class ConPtySession : ITerminalSession
     private bool _hasOutput;
     private bool _disposed;
 
+    public TerminalSessionCapabilities Capabilities { get; } = new(
+        TerminalSessionKind.ConPty,
+        SupportsResize: true,
+        SupportsTerminalInput: true);
+
     public event EventHandler<string>? OutputReceived;
     public event EventHandler<int>? Exited;
 

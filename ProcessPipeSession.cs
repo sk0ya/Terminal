@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace ConPtyTerminal;
@@ -19,6 +20,11 @@ public sealed class ProcessPipeSession : ITerminalSession
     private DateTime _lastOutputAtUtc;
     private bool _hasOutput;
     private bool _disposed;
+
+    public TerminalSessionCapabilities Capabilities { get; } = new(
+        TerminalSessionKind.Compatibility,
+        SupportsResize: false,
+        SupportsTerminalInput: false);
 
     public event EventHandler<string>? OutputReceived;
     public event EventHandler<int>? Exited;
@@ -50,12 +56,11 @@ public sealed class ProcessPipeSession : ITerminalSession
             _hasOutput = false;
         }
 
-        (string fileName, string arguments) = SplitCommandLine(_commandLine);
+        (string fileName, string[] arguments) = SplitCommandLine(_commandLine);
 
         var startInfo = new ProcessStartInfo
         {
             FileName = fileName,
-            Arguments = arguments,
             UseShellExecute = false,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
@@ -64,6 +69,10 @@ public sealed class ProcessPipeSession : ITerminalSession
             StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
             StandardErrorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
         };
+        foreach (string argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
 
         _process = new Process
         {
@@ -263,7 +272,7 @@ public sealed class ProcessPipeSession : ITerminalSession
         Exited?.Invoke(this, _process.ExitCode);
     }
 
-    private static (string FileName, string Arguments) SplitCommandLine(string commandLine)
+    internal static (string FileName, string[] Arguments) SplitCommandLine(string commandLine)
     {
         string text = commandLine.Trim();
         if (text.Length == 0)
@@ -271,25 +280,38 @@ public sealed class ProcessPipeSession : ITerminalSession
             throw new ArgumentException("Command line is required.", nameof(commandLine));
         }
 
-        if (text[0] == '"')
+        int argumentCount;
+        IntPtr argv = CommandLineToArgvW(text, out argumentCount);
+        if (argv == IntPtr.Zero)
         {
-            int endQuote = text.IndexOf('"', 1);
-            if (endQuote < 0)
+            throw new InvalidOperationException("Failed to parse command line.");
+        }
+
+        try
+        {
+            if (argumentCount <= 0)
             {
-                throw new ArgumentException("Invalid quoted command line.", nameof(commandLine));
+                throw new ArgumentException("Command line is required.", nameof(commandLine));
             }
 
-            string fileName = text.Substring(1, endQuote - 1);
-            string args = text[(endQuote + 1)..].TrimStart();
-            return (fileName, args);
-        }
+            var parsedArguments = new string[argumentCount];
+            for (int index = 0; index < argumentCount; index++)
+            {
+                IntPtr valuePtr = Marshal.ReadIntPtr(argv, index * IntPtr.Size);
+                parsedArguments[index] = Marshal.PtrToStringUni(valuePtr) ?? string.Empty;
+            }
 
-        int splitIndex = text.IndexOf(' ');
-        if (splitIndex < 0)
+            return (parsedArguments[0], parsedArguments.Skip(1).ToArray());
+        }
+        finally
         {
-            return (text, string.Empty);
+            _ = LocalFree(argv);
         }
-
-        return (text[..splitIndex], text[(splitIndex + 1)..].TrimStart());
     }
+
+    [DllImport("shell32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CommandLineToArgvW(string commandLine, out int argumentCount);
+
+    [DllImport("kernel32.dll", SetLastError = false)]
+    private static extern IntPtr LocalFree(IntPtr hMem);
 }

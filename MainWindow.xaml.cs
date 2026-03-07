@@ -22,6 +22,7 @@ public partial class MainWindow : Window
     private static readonly TimeSpan InitialOutputTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan IdleOutputTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan CursorBlinkInterval = TimeSpan.FromMilliseconds(530);
+    private static readonly TimeSpan MinDocumentRenderInterval = TimeSpan.FromMilliseconds(33);
     private static readonly Brush BlockCursorBrush = CreateFrozenBrush(Color.FromArgb(0xA0, 0xE3, 0xE3, 0xE3));
     private static readonly Brush AccentCursorBrush = CreateFrozenBrush(Color.FromRgb(0x5F, 0xAF, 0xFF));
 
@@ -31,6 +32,7 @@ public partial class MainWindow : Window
     private short _currentRows = 30;
     private readonly DispatcherTimer _sessionWatchdog = new();
     private readonly DispatcherTimer _cursorBlinkTimer = new();
+    private readonly DispatcherTimer _renderThrottleTimer = new();
     private readonly object _pendingOutputLock = new();
     private readonly StringBuilder _pendingOutput = new();
     private ScrollViewer? _terminalScrollViewer;
@@ -43,7 +45,9 @@ public partial class MainWindow : Window
     private bool _followTerminalOutput = true;
     private bool _useCompatibilityMode;
     private bool _cursorBlinkVisible = true;
+    private bool _reportedUnsupportedResize;
     private string _imeCompositionText = string.Empty;
+    private DateTime _lastDocumentRenderUtc = DateTime.MinValue;
 
     public MainWindow()
     {
@@ -57,6 +61,8 @@ public partial class MainWindow : Window
         _cursorBlinkTimer.Interval = CursorBlinkInterval;
         _cursorBlinkTimer.Tick += CursorBlinkTimer_Tick;
         _cursorBlinkTimer.Start();
+
+        _renderThrottleTimer.Tick += RenderThrottleTimer_Tick;
 
         TextCompositionManager.AddPreviewTextInputStartHandler(TerminalInputProxy, TerminalInputProxy_PreviewTextInputStart);
         TextCompositionManager.AddPreviewTextInputUpdateHandler(TerminalInputProxy, TerminalInputProxy_PreviewTextInputUpdate);
@@ -81,8 +87,9 @@ public partial class MainWindow : Window
     {
         _sessionWatchdog.Stop();
         _cursorBlinkTimer.Stop();
+        _renderThrottleTimer.Stop();
         ClearImeComposition();
-        StopTerminal();
+        StopTerminal(reportStopped: false);
     }
 
     private void OnActivated(object? sender, EventArgs e)
@@ -105,7 +112,7 @@ public partial class MainWindow : Window
     private void StopButton_Click(object sender, RoutedEventArgs e)
     {
         _autoRecoveryAttempts = 0;
-        StopTerminal();
+        StopTerminal(reportStopped: true);
     }
 
     private void RecoverButton_Click(object sender, RoutedEventArgs e)
@@ -308,7 +315,7 @@ public partial class MainWindow : Window
 
     private bool TryHandleControlShortcut(KeyEventArgs e)
     {
-        if (GetTerminalModifiers() != ModifierKeys.Control)
+        if (GetTerminalModifiers() != ModifierKeys.Control || !SupportsTerminalInput())
         {
             return false;
         }
@@ -331,6 +338,12 @@ public partial class MainWindow : Window
     private bool TryHandleSpecialKey(KeyEventArgs e)
     {
         ModifierKeys modifiers = GetTerminalModifiers();
+        bool requiresTerminalInput = e.Key is not Key.Enter and not Key.Back and not Key.Tab and not Key.Escape;
+        if (requiresTerminalInput && !SupportsTerminalInput())
+        {
+            return false;
+        }
+
         string? sequence = TerminalKeyChordTranslator.TranslateSpecialKey(
             e.Key,
             modifiers,
@@ -341,7 +354,7 @@ public partial class MainWindow : Window
 
     private bool TryHandleApplicationKeypad(KeyEventArgs e)
     {
-        if (!_terminalBuffer.ApplicationKeypadEnabled || Keyboard.Modifiers != ModifierKeys.None)
+        if (!SupportsTerminalInput() || !_terminalBuffer.ApplicationKeypadEnabled || Keyboard.Modifiers != ModifierKeys.None)
         {
             return false;
         }
@@ -388,6 +401,17 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (!_session.Capabilities.SupportsResize)
+        {
+            if (!_reportedUnsupportedResize)
+            {
+                _reportedUnsupportedResize = true;
+                SetStatus("Compatibility mode keeps the local viewport size only.");
+            }
+
+            return;
+        }
+
         try
         {
             _session.Resize(columns, rows);
@@ -400,7 +424,7 @@ public partial class MainWindow : Window
 
     private void StartTerminal()
     {
-        StopTerminal();
+        StopTerminal(reportStopped: false);
 
         string commandLine = string.IsNullOrWhiteSpace(CommandTextBox.Text)
             ? BuildDefaultCommandLine()
@@ -409,28 +433,25 @@ public partial class MainWindow : Window
         (_currentColumns, _currentRows) = CalculateTerminalSize();
         ReplaceTerminalBuffer(new AnsiTerminalBuffer(_currentColumns, _currentRows));
         _cursorBlinkVisible = true;
+        _reportedUnsupportedResize = false;
         RequestDocumentRender();
 
         try
         {
-            string modeLabel;
             if (_useCompatibilityMode)
             {
                 _session = new ProcessPipeSession(commandLine);
-                modeLabel = "Compat";
             }
             else
             {
                 try
                 {
                     _session = new ConPtySession(_currentColumns, _currentRows, commandLine);
-                    modeLabel = "ConPTY";
                 }
                 catch
                 {
                     _useCompatibilityMode = true;
                     _session = new ProcessPipeSession(commandLine);
-                    modeLabel = "Compat";
                 }
             }
 
@@ -439,7 +460,7 @@ public partial class MainWindow : Window
             _session.Start();
             UpdateUiState(isRunning: true);
             FocusTerminalInput();
-            SetStatus($"Started ({modeLabel}): {commandLine}");
+            SetStatus(BuildSessionStartedMessage(commandLine));
         }
         catch (Exception ex)
         {
@@ -448,7 +469,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void StopTerminal()
+    private void StopTerminal(bool reportStopped)
     {
         if (_session is null)
         {
@@ -472,7 +493,10 @@ public partial class MainWindow : Window
         UpdateOverlayState();
         UpdateUiState(isRunning: false);
         UpdateWindowTitle();
-        SetStatus("Stopped.");
+        if (reportStopped)
+        {
+            SetStatus("Stopped.");
+        }
     }
 
     private void OnOutputReceived(object? sender, string text)
@@ -486,7 +510,7 @@ public partial class MainWindow : Window
         {
             FlushPendingOutput();
             SetStatus($"Process exited with code {exitCode}.");
-            StopTerminal();
+            StopTerminal(reportStopped: false);
         });
     }
 
@@ -626,6 +650,12 @@ public partial class MainWindow : Window
 
     private void SendInterrupt()
     {
+        if (_session is not null && !_session.Capabilities.SupportsTerminalInput)
+        {
+            SetStatus("Interrupt signaling requires ConPTY mode.");
+            return;
+        }
+
         _ = SendTerminalInput("\u0003");
     }
 
@@ -667,12 +697,38 @@ public partial class MainWindow : Window
         StopButton.IsEnabled = isRunning;
         RecoverButton.IsEnabled = isRunning;
         PasteButton.IsEnabled = isRunning;
-        InterruptButton.IsEnabled = isRunning;
+        InterruptButton.IsEnabled = isRunning && SupportsTerminalInput();
         CommandTextBox.IsEnabled = !isRunning;
     }
 
     private void RequestDocumentRender()
     {
+        if (_documentRenderScheduled || _renderThrottleTimer.IsEnabled)
+        {
+            return;
+        }
+
+        TimeSpan elapsed = DateTime.UtcNow - _lastDocumentRenderUtc;
+        if (elapsed >= MinDocumentRenderInterval || _lastDocumentRenderUtc == DateTime.MinValue)
+        {
+            _documentRenderScheduled = true;
+            _ = Dispatcher.BeginInvoke(PerformDocumentRender, DispatcherPriority.Background);
+            return;
+        }
+
+        _renderThrottleTimer.Interval = MinDocumentRenderInterval - elapsed;
+        _renderThrottleTimer.Start();
+    }
+
+    private void PerformDocumentRender()
+    {
+        _documentRenderScheduled = false;
+        RenderTerminal();
+    }
+
+    private void RenderThrottleTimer_Tick(object? sender, EventArgs e)
+    {
+        _renderThrottleTimer.Stop();
         if (_documentRenderScheduled)
         {
             return;
@@ -680,12 +736,6 @@ public partial class MainWindow : Window
 
         _documentRenderScheduled = true;
         _ = Dispatcher.BeginInvoke(PerformDocumentRender, DispatcherPriority.Background);
-    }
-
-    private void PerformDocumentRender()
-    {
-        _documentRenderScheduled = false;
-        RenderTerminal();
     }
 
     private void RenderTerminal()
@@ -718,6 +768,7 @@ public partial class MainWindow : Window
         }
         finally
         {
+            _lastDocumentRenderUtc = DateTime.UtcNow;
             _isRenderingTerminal = false;
         }
     }
@@ -1048,7 +1099,7 @@ public partial class MainWindow : Window
 
     private void EmitFocusReport(bool focused)
     {
-        if (!_terminalBuffer.FocusReportingEnabled)
+        if (!_terminalBuffer.FocusReportingEnabled || !SupportsTerminalInput())
         {
             return;
         }
@@ -1058,7 +1109,7 @@ public partial class MainWindow : Window
 
     private bool TrySendMouseButtonEvent(MouseButtonEventArgs e, bool pressed)
     {
-        if (_session is null || _terminalBuffer.MouseTrackingMode == TerminalMouseTrackingMode.Off)
+        if (_session is null || !SupportsTerminalInput() || _terminalBuffer.MouseTrackingMode == TerminalMouseTrackingMode.Off)
         {
             return false;
         }
@@ -1084,7 +1135,7 @@ public partial class MainWindow : Window
 
     private bool TrySendMouseMoveEvent(MouseEventArgs e)
     {
-        if (_session is null)
+        if (_session is null || !SupportsTerminalInput())
         {
             return false;
         }
@@ -1115,7 +1166,7 @@ public partial class MainWindow : Window
 
     private bool TrySendMouseWheelEvent(MouseWheelEventArgs e)
     {
-        if (_session is null || _terminalBuffer.MouseTrackingMode == TerminalMouseTrackingMode.Off)
+        if (_session is null || !SupportsTerminalInput() || _terminalBuffer.MouseTrackingMode == TerminalMouseTrackingMode.Off)
         {
             return false;
         }
@@ -1192,9 +1243,26 @@ public partial class MainWindow : Window
         return Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control | ModifierKeys.Alt);
     }
 
+    private bool SupportsTerminalInput()
+    {
+        return _session?.Capabilities.SupportsTerminalInput ?? false;
+    }
+
     private static string NormalizeClipboardSelectionTargets(string? selectionTargets)
     {
         return string.IsNullOrWhiteSpace(selectionTargets) ? "c" : selectionTargets.Trim();
+    }
+
+    private string BuildSessionStartedMessage(string commandLine)
+    {
+        if (_session is null)
+        {
+            return $"Started: {commandLine}";
+        }
+
+        return _session.Capabilities.Kind == TerminalSessionKind.ConPty
+            ? $"Started ({_session.Capabilities.DisplayName}): {commandLine}"
+            : $"Started ({_session.Capabilities.DisplayName}): {commandLine} [limited line mode]";
     }
 
     private bool TryGetMouseCell(Point position, out int column, out int row)
