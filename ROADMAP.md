@@ -22,10 +22,11 @@
 - fallback セッションの quoted command line 解析と制限付きモード化
 - session smoke test を含む自動テスト
 - document render のスロットリング
+- WPF input proxy と IME candidate / composition window の位置同期
 
 以下はまだ不足している。
 
-- IME / 日本語入力の本格対応
+- IME の実機検証と細部調整
 - 高頻度更新に耐える描画方式
 - Unicode 幅計算の厳密性
 - VT シーケンスの網羅性

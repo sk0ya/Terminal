@@ -2,11 +2,13 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Navigation;
 using System.Windows.Threading;
@@ -18,6 +20,15 @@ public partial class MainWindow : Window
     private const string BaseWindowTitle = "ConPTY Terminal";
     private const int MaxAutoRecoveryAttempts = 1;
     private const double AutoFollowThreshold = 2.0;
+    private const int WmInputLangChange = 0x0051;
+    private const int WmImeSetContext = 0x0281;
+    private const int WmImeNotify = 0x0282;
+    private const int WmImeStartComposition = 0x010D;
+    private const int WmImeEndComposition = 0x010E;
+    private const int IscShowUiCompositionWindow = unchecked((int)0x80000000);
+    private const uint CfsPoint = 0x0002;
+    private const uint CfsForcePosition = 0x0020;
+    private const uint CfsExclude = 0x0080;
 
     private static readonly TimeSpan InitialOutputTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan IdleOutputTimeout = TimeSpan.FromSeconds(20);
@@ -36,9 +47,13 @@ public partial class MainWindow : Window
     private readonly object _pendingOutputLock = new();
     private readonly StringBuilder _pendingOutput = new();
     private ScrollViewer? _terminalScrollViewer;
+    private HwndSource? _windowSource;
     private int _autoRecoveryAttempts;
     private bool _isRecovering;
     private bool _isImeComposing;
+    private bool _isImeContextActive;
+    private bool _imeCommitFlushScheduled;
+    private bool _suppressProxyTextChanges;
     private bool _isRenderingTerminal;
     private bool _documentRenderScheduled;
     private bool _outputFlushScheduled;
@@ -66,8 +81,10 @@ public partial class MainWindow : Window
 
         TextCompositionManager.AddPreviewTextInputStartHandler(TerminalInputProxy, TerminalInputProxy_PreviewTextInputStart);
         TextCompositionManager.AddPreviewTextInputUpdateHandler(TerminalInputProxy, TerminalInputProxy_PreviewTextInputUpdate);
+        TerminalInputProxy.TextChanged += TerminalInputProxy_TextChanged;
         TerminalOutput.AddHandler(Hyperlink.RequestNavigateEvent, new RequestNavigateEventHandler(TerminalOutput_RequestNavigate));
 
+        SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
         Closing += OnClosing;
         Activated += OnActivated;
@@ -83,11 +100,23 @@ public partial class MainWindow : Window
         StartTerminal();
     }
 
+    private void OnSourceInitialized(object? sender, EventArgs e)
+    {
+        _windowSource = PresentationSource.FromVisual(this) as HwndSource;
+        _windowSource?.AddHook(WindowProc);
+    }
+
     private void OnClosing(object? sender, CancelEventArgs e)
     {
         _sessionWatchdog.Stop();
         _cursorBlinkTimer.Stop();
         _renderThrottleTimer.Stop();
+        if (_windowSource is not null)
+        {
+            _windowSource.RemoveHook(WindowProc);
+            _windowSource = null;
+        }
+
         ClearImeComposition();
         StopTerminal(reportStopped: false);
     }
@@ -222,12 +251,39 @@ public partial class MainWindow : Window
 
     private void TerminalInputProxy_PreviewTextInputStart(object sender, TextCompositionEventArgs e)
     {
+        _isImeContextActive = true;
         UpdateImeComposition(e.TextComposition.CompositionText);
+        UpdateNativeImeWindow();
     }
 
     private void TerminalInputProxy_PreviewTextInputUpdate(object sender, TextCompositionEventArgs e)
     {
         UpdateImeComposition(e.TextComposition.CompositionText);
+        UpdateNativeImeWindow();
+    }
+
+    private void TerminalInputProxy_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppressProxyTextChanges)
+        {
+            return;
+        }
+
+        if (_isImeComposing || _isImeContextActive)
+        {
+            string compositionText = string.IsNullOrEmpty(TerminalInputProxy.Text)
+                ? _imeCompositionText
+                : TerminalInputProxy.Text;
+            UpdateImeComposition(compositionText);
+            return;
+        }
+
+        if (TerminalInputProxy.Text.Length == 0)
+        {
+            return;
+        }
+
+        ScheduleCommittedProxyFlush();
     }
 
     private void TerminalOutput_PreviewTextInput(object sender, TextCompositionEventArgs e)
@@ -238,13 +294,12 @@ public partial class MainWindow : Window
             return;
         }
 
-        ModifierKeys modifiers = GetTerminalModifiers();
-        if ((modifiers & ModifierKeys.Alt) != 0 && (modifiers & ModifierKeys.Control) == 0)
+        if (_isImeComposing || _isImeContextActive || !string.IsNullOrEmpty(e.TextComposition.CompositionText))
         {
-            text = $"\u001b{text}";
+            return;
         }
 
-        if (SendTerminalInput(text))
+        if (SendTerminalText(text, prefixAltIfNeeded: true))
         {
             ClearImeComposition();
             ResetInputProxyText();
@@ -305,6 +360,7 @@ public partial class MainWindow : Window
     private bool IsImeInputInProgress(KeyEventArgs e)
     {
         return _isImeComposing ||
+            _isImeContextActive ||
             e.ImeProcessedKey != Key.None ||
             e.Key == Key.ImeProcessed ||
             e.Key == Key.ImeConvert ||
@@ -813,6 +869,8 @@ public partial class MainWindow : Window
             return;
         }
 
+        InputMethod.SetIsInputMethodEnabled(TerminalInputProxy, true);
+        InputMethod.SetPreferredImeState(TerminalInputProxy, InputMethodState.On);
         ResetInputProxyText();
         UpdateInputProxyPosition();
         Keyboard.Focus(TerminalInputProxy);
@@ -835,6 +893,7 @@ public partial class MainWindow : Window
         Canvas.SetTop(TerminalInputProxy, Math.Clamp(top, TerminalOutput.Padding.Top, maxTop));
         UpdateCursorOverlay(left, top, charWidth, charHeight, maxLeft, maxTop);
         UpdateImeCompositionOverlay(left, top, charHeight, maxLeft, maxTop);
+        UpdateNativeImeWindow();
     }
 
     private void ResetInputProxyText()
@@ -844,7 +903,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        TerminalInputProxy.Clear();
+        _suppressProxyTextChanges = true;
+        try
+        {
+            TerminalInputProxy.Clear();
+        }
+        finally
+        {
+            _suppressProxyTextChanges = false;
+        }
     }
 
     private void UpdateImeComposition(string? compositionText)
@@ -858,6 +925,8 @@ public partial class MainWindow : Window
     {
         _imeCompositionText = string.Empty;
         _isImeComposing = false;
+        _isImeContextActive = false;
+        _imeCommitFlushScheduled = false;
         ImeCompositionOverlay.Visibility = Visibility.Collapsed;
         ImeCompositionTextBlock.Text = string.Empty;
         if (!_isRenderingTerminal)
@@ -941,6 +1010,165 @@ public partial class MainWindow : Window
         }
 
         UpdateInputProxyPosition();
+    }
+
+    private void ScheduleCommittedProxyFlush()
+    {
+        if (_imeCommitFlushScheduled)
+        {
+            return;
+        }
+
+        _imeCommitFlushScheduled = true;
+        _ = Dispatcher.BeginInvoke(FlushCommittedProxyText, DispatcherPriority.Input);
+    }
+
+    private void FlushCommittedProxyText()
+    {
+        _imeCommitFlushScheduled = false;
+        if (_isImeComposing || _isImeContextActive)
+        {
+            return;
+        }
+
+        string text = TerminalInputProxy.Text;
+        if (text.Length == 0)
+        {
+            ClearImeComposition();
+            return;
+        }
+
+        if (SendTerminalText(text, prefixAltIfNeeded: false))
+        {
+            ClearImeComposition();
+            ResetInputProxyText();
+        }
+    }
+
+    private bool SendTerminalText(string text, bool prefixAltIfNeeded)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return false;
+        }
+
+        if (prefixAltIfNeeded)
+        {
+            ModifierKeys modifiers = GetTerminalModifiers();
+            if ((modifiers & ModifierKeys.Alt) != 0 && (modifiers & ModifierKeys.Control) == 0)
+            {
+                text = $"\u001b{text}";
+            }
+        }
+
+        return SendTerminalInput(text);
+    }
+
+    private void UpdateNativeImeWindow()
+    {
+        if (_windowSource is null || !TerminalInputProxy.IsKeyboardFocusWithin)
+        {
+            return;
+        }
+
+        if (!TryGetImeClientBounds(out ImeClientBounds bounds))
+        {
+            return;
+        }
+
+        IntPtr windowHandle = _windowSource.Handle;
+        IntPtr inputContext = ImmGetContext(windowHandle);
+        if (inputContext == IntPtr.Zero)
+        {
+            return;
+        }
+
+        try
+        {
+            var compositionForm = new CompositionForm
+            {
+                dwStyle = _isImeComposing ? CfsForcePosition : CfsPoint,
+                ptCurrentPos = bounds.CompositionOrigin,
+                rcArea = bounds.CaretRect
+            };
+            _ = ImmSetCompositionWindow(inputContext, ref compositionForm);
+
+            for (uint index = 0; index < 4; index++)
+            {
+                var candidateForm = new CandidateForm
+                {
+                    dwIndex = index,
+                    dwStyle = CfsExclude,
+                    ptCurrentPos = bounds.CandidateOrigin,
+                    rcArea = bounds.CaretRect
+                };
+                _ = ImmSetCandidateWindow(inputContext, ref candidateForm);
+            }
+        }
+        finally
+        {
+            _ = ImmReleaseContext(windowHandle, inputContext);
+        }
+    }
+
+    private bool TryGetImeClientBounds(out ImeClientBounds bounds)
+    {
+        bounds = default;
+        if (_windowSource?.CompositionTarget is null)
+        {
+            return false;
+        }
+
+        Point topLeftDip = TerminalInputProxy.TranslatePoint(new Point(0, 0), this);
+        Point bottomRightDip = TerminalInputProxy.TranslatePoint(
+            new Point(TerminalInputProxy.ActualWidth, TerminalInputProxy.ActualHeight),
+            this);
+        Matrix transform = _windowSource.CompositionTarget.TransformToDevice;
+        Point topLeftPx = transform.Transform(topLeftDip);
+        Point bottomRightPx = transform.Transform(bottomRightDip);
+
+        int left = (int)Math.Round(topLeftPx.X);
+        int top = (int)Math.Round(topLeftPx.Y);
+        int right = Math.Max(left + 1, (int)Math.Round(bottomRightPx.X));
+        int bottom = Math.Max(top + 1, (int)Math.Round(bottomRightPx.Y));
+
+        bounds = new ImeClientBounds(
+            new NativePoint(left, top),
+            new NativePoint(left, bottom),
+            new NativeRect(left, top, right, bottom));
+        return true;
+    }
+
+    private IntPtr WindowProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        switch (msg)
+        {
+            case WmImeSetContext:
+                if (wParam != IntPtr.Zero)
+                {
+                    handled = true;
+                    IntPtr filteredLParam = new(lParam.ToInt64() & ~IscShowUiCompositionWindow);
+                    IntPtr result = DefWindowProc(hwnd, msg, wParam, filteredLParam);
+                    _ = Dispatcher.BeginInvoke(UpdateNativeImeWindow, DispatcherPriority.Input);
+                    return result;
+                }
+
+                break;
+            case WmImeStartComposition:
+                _isImeContextActive = true;
+                _ = Dispatcher.BeginInvoke(UpdateNativeImeWindow, DispatcherPriority.Input);
+                break;
+            case WmImeEndComposition:
+                _isImeContextActive = false;
+                ScheduleCommittedProxyFlush();
+                break;
+            case WmImeNotify:
+            case WmInputLangChange:
+                _ = Dispatcher.BeginInvoke(UpdateNativeImeWindow, DispatcherPriority.Input);
+                break;
+        }
+
+        return IntPtr.Zero;
     }
 
     private void AttachTerminalScrollViewer()
@@ -1463,4 +1691,74 @@ public partial class MainWindow : Window
 
         return ((short)columns, (short)rows);
     }
+
+    [DllImport("imm32.dll")]
+    private static extern IntPtr ImmGetContext(IntPtr hWnd);
+
+    [DllImport("imm32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ImmReleaseContext(IntPtr hWnd, IntPtr hIMC);
+
+    [DllImport("imm32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ImmSetCompositionWindow(IntPtr hIMC, ref CompositionForm form);
+
+    [DllImport("imm32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ImmSetCandidateWindow(IntPtr hIMC, ref CandidateForm form);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "DefWindowProcW")]
+    private static extern IntPtr DefWindowProc(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CompositionForm
+    {
+        public uint dwStyle;
+        public NativePoint ptCurrentPos;
+        public NativeRect rcArea;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CandidateForm
+    {
+        public uint dwIndex;
+        public uint dwStyle;
+        public NativePoint ptCurrentPos;
+        public NativeRect rcArea;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly struct NativePoint
+    {
+        public readonly int X;
+        public readonly int Y;
+
+        public NativePoint(int x, int y)
+        {
+            X = x;
+            Y = y;
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly struct NativeRect
+    {
+        public readonly int Left;
+        public readonly int Top;
+        public readonly int Right;
+        public readonly int Bottom;
+
+        public NativeRect(int left, int top, int right, int bottom)
+        {
+            Left = left;
+            Top = top;
+            Right = right;
+            Bottom = bottom;
+        }
+    }
+
+    private readonly record struct ImeClientBounds(
+        NativePoint CompositionOrigin,
+        NativePoint CandidateOrigin,
+        NativeRect CaretRect);
 }
