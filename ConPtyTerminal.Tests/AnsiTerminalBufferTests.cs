@@ -245,4 +245,24 @@ public sealed class AnsiTerminalBufferTests
         Assert.Equal("👩\u200d💻👩\u200d💻👩\u200d💻", buffer.GetScreenLineText(0).TrimEnd());
         Assert.Equal(6, buffer.CursorColumn);
     }
+
+    [Fact]
+    public void DecstrSoftResetClearsTerminalModesWithoutClearingScreen()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("text");
+        buffer.Process("\u001b[?1h\u001b=\u001b[?25l\u001b[?12l\u001b[?1000h\u001b[?1007h\u001b[?2004h\u001b[2 q");
+        buffer.Process("\u001b[!p");
+
+        Assert.False(buffer.ApplicationCursorKeysEnabled);
+        Assert.False(buffer.ApplicationKeypadEnabled);
+        Assert.False(buffer.AlternateScrollEnabled);
+        Assert.False(buffer.BracketedPasteEnabled);
+        Assert.Equal(TerminalMouseTrackingMode.Off, buffer.MouseTrackingMode);
+        Assert.True(buffer.CursorVisible);
+        Assert.True(buffer.CursorBlinkEnabled);
+        Assert.Equal(TerminalCursorShape.Block, buffer.CursorShape);
+        Assert.Equal("text", buffer.GetScreenLineText(0).TrimEnd());
+    }
 }

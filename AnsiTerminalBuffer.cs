@@ -787,6 +787,13 @@ internal sealed class AnsiTerminalBuffer
             case 'n':
                 DispatchDeviceStatusReport(parameters, isPrivate);
                 break;
+            case 'p':
+                if (intermediate == "!")
+                {
+                    SoftResetTerminal();
+                }
+
+                break;
             case 'q':
                 if (intermediate == " ")
                 {
@@ -1053,6 +1060,31 @@ internal sealed class AnsiTerminalBuffer
                 _cursorBlinkEnabled = false;
                 break;
         }
+    }
+
+    private void SoftResetTerminal()
+    {
+        _currentStyle = TerminalStyle.Default;
+        _cursorVisible = true;
+        _cursorBlinkEnabled = true;
+        _cursorShape = TerminalCursorShape.Block;
+        _applicationCursorKeys = false;
+        _applicationKeypad = false;
+        _insertMode = false;
+        _originMode = false;
+        _autoWrapEnabled = true;
+        _alternateScrollEnabled = false;
+        _bracketedPasteEnabled = false;
+        _focusReportingEnabled = false;
+        _useG1CharacterSet = false;
+        _useUtf8MouseEncoding = false;
+        _useSgrMouseEncoding = false;
+        _useUrxvtMouseEncoding = false;
+        _mouseTrackingMode = TerminalMouseTrackingMode.Off;
+        _g0CharacterSet = TerminalCharacterSet.Ascii;
+        _g1CharacterSet = TerminalCharacterSet.Ascii;
+        _currentHyperlink = null;
+        ResetMargins();
     }
 
     private void EnterAlternateScreen()
