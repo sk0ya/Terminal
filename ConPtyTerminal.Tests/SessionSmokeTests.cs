@@ -32,6 +32,28 @@ public sealed class SessionSmokeTests
             arguments);
     }
 
+    [Fact]
+    public async Task ProcessPipeSessionPublishesCompatibilityEnvironment()
+    {
+        using ITerminalSession session = new ProcessPipeSession(
+            BuildCompatibilityEnvironmentCommandLine(),
+            columns: 132,
+            rows: 41);
+        var output = new StringBuilder();
+        var exitCodeSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        session.OutputReceived += (_, text) => output.Append(text);
+        session.Exited += (_, code) => exitCodeSource.TrySetResult(code);
+        session.Start();
+
+        int exitCode = await exitCodeSource.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("TERM=dumb", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("COLUMNS=132", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("LINES=41", output.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
     private static async Task VerifyInteractiveEchoAsync(Func<ITerminalSession> sessionFactory, string expectedOutput)
     {
         using ITerminalSession session = sessionFactory();
@@ -56,5 +78,11 @@ public sealed class SessionSmokeTests
     {
         string commandPath = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
         return $"\"{commandPath}\" /Q /K";
+    }
+
+    private static string BuildCompatibilityEnvironmentCommandLine()
+    {
+        string commandPath = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
+        return $"\"{commandPath}\" /C echo TERM=%TERM% COLUMNS=%COLUMNS% LINES=%LINES%";
     }
 }

@@ -9,6 +9,8 @@ public sealed class ProcessPipeSession : ITerminalSession
 {
     private readonly object _syncRoot = new();
     private readonly string _commandLine;
+    private short _columns;
+    private short _rows;
     private Process? _process;
     private Stream? _inputStream;
     private StreamWriter? _inputWriter;
@@ -30,6 +32,11 @@ public sealed class ProcessPipeSession : ITerminalSession
     public event EventHandler<int>? Exited;
 
     public ProcessPipeSession(string commandLine)
+        : this(commandLine, null, null)
+    {
+    }
+
+    public ProcessPipeSession(string commandLine, short? columns, short? rows)
     {
         if (string.IsNullOrWhiteSpace(commandLine))
         {
@@ -37,6 +44,8 @@ public sealed class ProcessPipeSession : ITerminalSession
         }
 
         _commandLine = commandLine.Trim();
+        _columns = columns.GetValueOrDefault();
+        _rows = rows.GetValueOrDefault();
     }
 
     public void Start()
@@ -72,6 +81,17 @@ public sealed class ProcessPipeSession : ITerminalSession
         foreach (string argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);
+        }
+
+        startInfo.Environment["TERM"] = "dumb";
+        if (_columns > 0)
+        {
+            startInfo.Environment["COLUMNS"] = _columns.ToString();
+        }
+
+        if (_rows > 0)
+        {
+            startInfo.Environment["LINES"] = _rows.ToString();
         }
 
         _process = new Process
@@ -122,8 +142,8 @@ public sealed class ProcessPipeSession : ITerminalSession
 
     public void Resize(short columns, short rows)
     {
-        _ = columns;
-        _ = rows;
+        _columns = columns;
+        _rows = rows;
     }
 
     public bool IsOutputStalled(TimeSpan initialOutputTimeout, TimeSpan idleOutputTimeout)

@@ -440,7 +440,7 @@ public partial class MainWindow : Window
         {
             if (_useCompatibilityMode)
             {
-                _session = new ProcessPipeSession(commandLine);
+                _session = new ProcessPipeSession(commandLine, _currentColumns, _currentRows);
             }
             else
             {
@@ -451,7 +451,7 @@ public partial class MainWindow : Window
                 catch
                 {
                     _useCompatibilityMode = true;
-                    _session = new ProcessPipeSession(commandLine);
+                    _session = new ProcessPipeSession(commandLine, _currentColumns, _currentRows);
                 }
             }
 
