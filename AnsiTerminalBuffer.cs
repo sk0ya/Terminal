@@ -2,6 +2,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Documents;
 using System.Windows.Media;
+using System.Globalization;
 
 namespace ConPtyTerminal;
 
@@ -130,9 +131,19 @@ internal sealed class AnsiTerminalBuffer
 
     public void Process(string text)
     {
-        foreach (char ch in text)
+        for (int index = 0; index < text.Length;)
         {
-            ProcessChar(ch);
+            if (_state == ParserState.Normal &&
+                Rune.TryGetRuneAt(text, index, out Rune rune) &&
+                !IsControlRune(rune))
+            {
+                ProcessRune(rune);
+                index += rune.Utf16SequenceLength;
+                continue;
+            }
+
+            ProcessChar(text[index]);
+            index++;
         }
     }
 
@@ -294,18 +305,25 @@ internal sealed class AnsiTerminalBuffer
                 int nextTab = ((_cursorColumn / 8) + 1) * 8;
                 while (_cursorColumn < nextTab && _cursorColumn < _columns)
                 {
-                    PutChar(' ');
+                    PutText(" ", 1);
                 }
 
                 return;
             default:
-                if (!char.IsControl(ch))
-                {
-                    PutChar(ch);
-                }
-
                 return;
         }
+    }
+
+    private void ProcessRune(Rune rune)
+    {
+        int width = GetDisplayWidth(rune);
+        if (width <= 0)
+        {
+            AppendCombiningRune(rune);
+            return;
+        }
+
+        PutText(rune.ToString(), width);
     }
 
     private void ProcessEscape(char ch)
@@ -991,16 +1009,84 @@ internal sealed class AnsiTerminalBuffer
         }
     }
 
-    private void PutChar(char ch)
+    private void PutText(string text, int width)
     {
+        int normalizedWidth = Math.Clamp(width, 1, 2);
         if (_cursorColumn >= _columns)
         {
             _cursorColumn = 0;
             MoveDownAndScrollIfNeeded();
         }
 
-        _screen[_cursorRow].Cells[_cursorColumn] = new TerminalCell(ch, _currentStyle);
-        _cursorColumn++;
+        if (normalizedWidth == 2 && _cursorColumn == _columns - 1)
+        {
+            _cursorColumn = 0;
+            MoveDownAndScrollIfNeeded();
+        }
+
+        TerminalLine line = _screen[_cursorRow];
+        ClearWideOverlap(line, _cursorColumn);
+        line.Cells[_cursorColumn] = new TerminalCell(text, _currentStyle, IsContinuation: false, Width: normalizedWidth);
+
+        if (normalizedWidth == 2)
+        {
+            if (_cursorColumn + 1 >= _columns)
+            {
+                _cursorColumn = _columns;
+                return;
+            }
+
+            line.Cells[_cursorColumn + 1] = new TerminalCell(string.Empty, _currentStyle, IsContinuation: true, Width: 0);
+        }
+
+        _cursorColumn += normalizedWidth;
+    }
+
+    private void AppendCombiningRune(Rune rune)
+    {
+        int targetColumn = _cursorColumn > 0 ? _cursorColumn - 1 : FindPreviousOccupiedColumn();
+        if (targetColumn < 0)
+        {
+            return;
+        }
+
+        TerminalLine line = _screen[_cursorRow];
+        while (targetColumn > 0 && line.Cells[targetColumn].IsContinuation)
+        {
+            targetColumn--;
+        }
+
+        TerminalCell cell = line.Cells[targetColumn];
+        line.Cells[targetColumn] = cell with { Text = cell.Text + rune.ToString() };
+    }
+
+    private int FindPreviousOccupiedColumn()
+    {
+        TerminalLine line = _screen[_cursorRow];
+        for (int column = _columns - 1; column >= 0; column--)
+        {
+            if (!string.IsNullOrEmpty(line.Cells[column].Text) && line.Cells[column].Text != " ")
+            {
+                return column;
+            }
+        }
+
+        return -1;
+    }
+
+    private void ClearWideOverlap(TerminalLine line, int column)
+    {
+        if (column > 0 && line.Cells[column].IsContinuation)
+        {
+            line.Cells[column - 1] = CreateBlankCell(_currentStyle);
+            line.Cells[column] = CreateBlankCell(_currentStyle);
+        }
+
+        if (column + 1 < _columns && line.Cells[column + 1].IsContinuation && !line.Cells[column].IsContinuation)
+        {
+            line.Cells[column] = CreateBlankCell(_currentStyle);
+            line.Cells[column + 1] = CreateBlankCell(_currentStyle);
+        }
     }
 
     private void MoveDownAndScrollIfNeeded()
@@ -1075,7 +1161,7 @@ internal sealed class AnsiTerminalBuffer
     {
         foreach (TerminalCell cell in line.Cells)
         {
-            if (cell.Character != ' ' || cell.Style != TerminalStyle.Default)
+            if ((!cell.IsContinuation && cell.Text != " ") || cell.Style != TerminalStyle.Default)
             {
                 return false;
             }
@@ -1103,6 +1189,11 @@ internal sealed class AnsiTerminalBuffer
         for (int column = 0; column < visibleLength; column++)
         {
             TerminalCell cell = line.Cells[column];
+            if (cell.IsContinuation)
+            {
+                continue;
+            }
+
             bool isCursor = showCursor && cursorColumn == column;
             ResolvedStyle style = ResolveStyle(cell.Style, isCursor);
             if (currentStyle is null || currentStyle.Value != style)
@@ -1111,7 +1202,7 @@ internal sealed class AnsiTerminalBuffer
                 currentStyle = style;
             }
 
-            text.Append(cell.Character);
+            text.Append(cell.Text);
         }
 
         FlushRun(inlines, text, currentStyle);
@@ -1122,7 +1213,10 @@ internal sealed class AnsiTerminalBuffer
         for (int column = line.Cells.Length - 1; column >= 0; column--)
         {
             TerminalCell cell = line.Cells[column];
-            if (column == cursorColumn || cell.Character != ' ' || cell.Style != TerminalStyle.Default)
+            if (column == cursorColumn ||
+                cell.IsContinuation ||
+                cell.Text != " " ||
+                cell.Style != TerminalStyle.Default)
             {
                 return column + 1;
             }
@@ -1179,7 +1273,45 @@ internal sealed class AnsiTerminalBuffer
 
     private static TerminalCell CreateBlankCell(TerminalStyle style)
     {
-        return new TerminalCell(' ', style);
+        return new TerminalCell(" ", style, IsContinuation: false, Width: 1);
+    }
+
+    private static bool IsControlRune(Rune rune)
+    {
+        return rune.Value < 0x20 || rune.Value == 0x7F;
+    }
+
+    private static int GetDisplayWidth(Rune rune)
+    {
+        UnicodeCategory category = Rune.GetUnicodeCategory(rune);
+        if (category is UnicodeCategory.NonSpacingMark or UnicodeCategory.EnclosingMark or UnicodeCategory.Format)
+        {
+            return 0;
+        }
+
+        if (rune.IsAscii)
+        {
+            return 1;
+        }
+
+        int value = rune.Value;
+        if (value is
+            >= 0x1100 and <= 0x115F or
+            >= 0x2329 and <= 0x232A or
+            >= 0x2E80 and <= 0xA4CF or
+            >= 0xAC00 and <= 0xD7A3 or
+            >= 0xF900 and <= 0xFAFF or
+            >= 0xFE10 and <= 0xFE19 or
+            >= 0xFE30 and <= 0xFE6F or
+            >= 0xFF00 and <= 0xFF60 or
+            >= 0xFFE0 and <= 0xFFE6 or
+            >= 0x1F300 and <= 0x1FAFF or
+            >= 0x20000 and <= 0x3FFFD)
+        {
+            return 2;
+        }
+
+        return 1;
     }
 
     private static int?[] ParseParameters(string paramText)
@@ -1247,7 +1379,11 @@ internal sealed class AnsiTerminalBuffer
         TerminalStyle Style,
         TerminalStyle SavedStyle);
 
-    private readonly record struct TerminalCell(char Character, TerminalStyle Style);
+    private readonly record struct TerminalCell(
+        string Text,
+        TerminalStyle Style,
+        bool IsContinuation,
+        int Width);
 
     private readonly record struct TerminalStyle(
         Color? Foreground,
