@@ -14,6 +14,12 @@ internal enum TerminalMouseTrackingMode
     AnyEvent
 }
 
+internal enum TerminalCharacterSet
+{
+    Ascii,
+    DecSpecialGraphics
+}
+
 internal sealed class AnsiTerminalBuffer
 {
     private const int MinColumns = 20;
@@ -63,17 +69,22 @@ internal sealed class AnsiTerminalBuffer
     private TerminalStyle _currentStyle = TerminalStyle.Default;
     private TerminalStyle _savedStyle = TerminalStyle.Default;
     private bool _cursorVisible = true;
+    private int _charsetDesignationTarget;
     private bool _applicationCursorKeys;
     private bool _applicationKeypad;
     private bool _originMode;
     private bool _autoWrapEnabled = true;
     private bool _bracketedPasteEnabled;
     private bool _focusReportingEnabled;
+    private bool _useG1CharacterSet;
     private bool _useSgrMouseEncoding;
     private TerminalMouseTrackingMode _mouseTrackingMode;
+    private TerminalCharacterSet _g0CharacterSet = TerminalCharacterSet.Ascii;
+    private TerminalCharacterSet _g1CharacterSet = TerminalCharacterSet.Ascii;
     private string _windowTitle = string.Empty;
 
     public event EventHandler<string>? InputSequenceGenerated;
+    public event EventHandler<string>? ClipboardSetRequested;
 
     public AnsiTerminalBuffer(short columns, short rows, int scrollbackLimit = DefaultScrollbackLimit)
     {
@@ -253,14 +264,18 @@ internal sealed class AnsiTerminalBuffer
         _currentStyle = TerminalStyle.Default;
         _savedStyle = TerminalStyle.Default;
         _cursorVisible = true;
+        _charsetDesignationTarget = 0;
         _applicationCursorKeys = false;
         _applicationKeypad = false;
         _originMode = false;
         _autoWrapEnabled = true;
         _bracketedPasteEnabled = false;
         _focusReportingEnabled = false;
+        _useG1CharacterSet = false;
         _useSgrMouseEncoding = false;
         _mouseTrackingMode = TerminalMouseTrackingMode.Off;
+        _g0CharacterSet = TerminalCharacterSet.Ascii;
+        _g1CharacterSet = TerminalCharacterSet.Ascii;
         _windowTitle = string.Empty;
         _state = ParserState.Normal;
         _csiBuffer.Clear();
@@ -287,6 +302,9 @@ internal sealed class AnsiTerminalBuffer
             case ParserState.OscEscape:
                 ProcessOscEscape(ch);
                 break;
+            case ParserState.Charset:
+                ProcessCharsetDesignation(ch);
+                break;
         }
     }
 
@@ -295,6 +313,12 @@ internal sealed class AnsiTerminalBuffer
         switch (ch)
         {
             case '\u0007':
+                return;
+            case '\u000E':
+                _useG1CharacterSet = true;
+                return;
+            case '\u000F':
+                _useG1CharacterSet = false;
                 return;
             case '\u001b':
                 _state = ParserState.Escape;
@@ -320,14 +344,15 @@ internal sealed class AnsiTerminalBuffer
 
     private void ProcessRune(Rune rune)
     {
-        int width = GetDisplayWidth(rune);
+        Rune mappedRune = MapActiveRune(rune);
+        int width = GetDisplayWidth(mappedRune);
         if (width <= 0)
         {
-            AppendCombiningRune(rune);
+            AppendCombiningRune(mappedRune);
             return;
         }
 
-        PutText(rune.ToString(), width);
+        PutText(mappedRune.ToString(), width);
     }
 
     private void ProcessEscape(char ch)
@@ -341,6 +366,14 @@ internal sealed class AnsiTerminalBuffer
             case ']':
                 _oscBuffer.Clear();
                 _state = ParserState.Osc;
+                return;
+            case '(':
+                _charsetDesignationTarget = 0;
+                _state = ParserState.Charset;
+                return;
+            case ')':
+                _charsetDesignationTarget = 1;
+                _state = ParserState.Charset;
                 return;
             case '7':
                 SaveCursorState();
@@ -431,6 +464,26 @@ internal sealed class AnsiTerminalBuffer
         ProcessEscape(ch);
     }
 
+    private void ProcessCharsetDesignation(char ch)
+    {
+        TerminalCharacterSet characterSet = ch switch
+        {
+            '0' => TerminalCharacterSet.DecSpecialGraphics,
+            _ => TerminalCharacterSet.Ascii
+        };
+
+        if (_charsetDesignationTarget == 0)
+        {
+            _g0CharacterSet = characterSet;
+        }
+        else
+        {
+            _g1CharacterSet = characterSet;
+        }
+
+        _state = ParserState.Normal;
+    }
+
     private void DispatchOsc(string content)
     {
         int separatorIndex = content.IndexOf(';');
@@ -444,6 +497,43 @@ internal sealed class AnsiTerminalBuffer
         if (command is "0" or "2")
         {
             _windowTitle = value;
+            return;
+        }
+
+        if (command == "52")
+        {
+            DispatchOscClipboard(value);
+        }
+    }
+
+    private void DispatchOscClipboard(string value)
+    {
+        int separatorIndex = value.IndexOf(';');
+        if (separatorIndex < 0)
+        {
+            return;
+        }
+
+        string payload = value[(separatorIndex + 1)..];
+        if (payload == "?")
+        {
+            return;
+        }
+
+        if (payload.Length == 0)
+        {
+            ClipboardSetRequested?.Invoke(this, string.Empty);
+            return;
+        }
+
+        try
+        {
+            byte[] decoded = Convert.FromBase64String(NormalizeBase64(payload));
+            string text = Encoding.UTF8.GetString(decoded);
+            ClipboardSetRequested?.Invoke(this, text);
+        }
+        catch (FormatException)
+        {
         }
     }
 
@@ -606,6 +696,14 @@ internal sealed class AnsiTerminalBuffer
         {
             InputSequenceGenerated?.Invoke(this, text);
         }
+    }
+
+    private static string NormalizeBase64(string payload)
+    {
+        int remainder = payload.Length % 4;
+        return remainder == 0
+            ? payload
+            : payload.PadRight(payload.Length + (4 - remainder), '=');
     }
 
     private void SetPrivateMode(int?[] parameters, bool enabled)
@@ -1352,6 +1450,56 @@ internal sealed class AnsiTerminalBuffer
         return new TerminalCell(" ", style, IsContinuation: false, Width: 1);
     }
 
+    private Rune MapActiveRune(Rune rune)
+    {
+        if (!rune.IsAscii || GetActiveCharacterSet() != TerminalCharacterSet.DecSpecialGraphics)
+        {
+            return rune;
+        }
+
+        return rune.Value switch
+        {
+            0x005F => new Rune(0x00A0),
+            0x0060 => new Rune(0x25C6),
+            0x0061 => new Rune(0x2592),
+            0x0062 => new Rune(0x2409),
+            0x0063 => new Rune(0x240C),
+            0x0064 => new Rune(0x240D),
+            0x0065 => new Rune(0x240A),
+            0x0066 => new Rune(0x00B0),
+            0x0067 => new Rune(0x00B1),
+            0x0068 => new Rune(0x2424),
+            0x0069 => new Rune(0x240B),
+            0x006A => new Rune(0x2518),
+            0x006B => new Rune(0x2510),
+            0x006C => new Rune(0x250C),
+            0x006D => new Rune(0x2514),
+            0x006E => new Rune(0x253C),
+            0x006F => new Rune(0x23BA),
+            0x0070 => new Rune(0x23BB),
+            0x0071 => new Rune(0x2500),
+            0x0072 => new Rune(0x23BC),
+            0x0073 => new Rune(0x23BD),
+            0x0074 => new Rune(0x251C),
+            0x0075 => new Rune(0x2524),
+            0x0076 => new Rune(0x2534),
+            0x0077 => new Rune(0x252C),
+            0x0078 => new Rune(0x2502),
+            0x0079 => new Rune(0x2264),
+            0x007A => new Rune(0x2265),
+            0x007B => new Rune(0x03C0),
+            0x007C => new Rune(0x2260),
+            0x007D => new Rune(0x00A3),
+            0x007E => new Rune(0x00B7),
+            _ => rune
+        };
+    }
+
+    private TerminalCharacterSet GetActiveCharacterSet()
+    {
+        return _useG1CharacterSet ? _g1CharacterSet : _g0CharacterSet;
+    }
+
     private static bool IsControlRune(Rune rune)
     {
         return rune.Value < 0x20 || rune.Value == 0x7F;
@@ -1427,7 +1575,8 @@ internal sealed class AnsiTerminalBuffer
         Escape,
         Csi,
         Osc,
-        OscEscape
+        OscEscape,
+        Charset
     }
 
     private sealed class TerminalLine

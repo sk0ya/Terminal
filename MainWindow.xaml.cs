@@ -558,8 +558,10 @@ public partial class MainWindow : Window
     private void ReplaceTerminalBuffer(AnsiTerminalBuffer nextBuffer)
     {
         _terminalBuffer.InputSequenceGenerated -= TerminalBuffer_InputSequenceGenerated;
+        _terminalBuffer.ClipboardSetRequested -= TerminalBuffer_ClipboardSetRequested;
         _terminalBuffer = nextBuffer;
         _terminalBuffer.InputSequenceGenerated += TerminalBuffer_InputSequenceGenerated;
+        _terminalBuffer.ClipboardSetRequested += TerminalBuffer_ClipboardSetRequested;
     }
 
     private void TerminalBuffer_InputSequenceGenerated(object? sender, string text)
@@ -576,6 +578,19 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             SetStatus($"Terminal response failed: {ex.Message}");
+        }
+    }
+
+    private void TerminalBuffer_ClipboardSetRequested(object? sender, string text)
+    {
+        try
+        {
+            Clipboard.SetText(text ?? string.Empty);
+            SetStatus("Clipboard updated by terminal.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Clipboard update failed: {ex.Message}");
         }
     }
 
