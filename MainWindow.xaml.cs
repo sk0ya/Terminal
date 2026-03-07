@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private const int MaxAutoRecoveryAttempts = 1;
     private const double AutoFollowThreshold = 2.0;
     private const bool PreferDocumentCursorRendering = false;
+    private const double HiddenInputProxyOffset = -10000;
     private const int WmInputLangChange = 0x0051;
     private const int WmImeSetContext = 0x0281;
     private const int WmImeNotify = 0x0282;
@@ -73,6 +74,10 @@ public partial class MainWindow : Window
     private bool _reportedUnsupportedResize;
     private bool _pendingRestoreFocusAfterRender;
     private string _imeCompositionText = string.Empty;
+    private double _inputProxyLeft;
+    private double _inputProxyTop;
+    private double _inputProxyWidth = 2;
+    private double _inputProxyHeight = 2;
     private double _pendingDistanceFromBottom;
     private DateTime _lastDocumentRenderUtc = DateTime.MinValue;
 
@@ -1117,16 +1122,25 @@ public partial class MainWindow : Window
         TerminalInputProxy.TextAlignment = TextAlignment.Left;
         TerminalInputProxy.FlowDirection = FlowDirection.LeftToRight;
 
-        if (!TryGetCursorAnchorPosition(out double left, out double top))
+        bool usedAnchor = TryGetCursorAnchorPosition(out double left, out double top);
+        if (!usedAnchor)
         {
             left = viewport.ContentLeft + (_terminalBuffer.CursorColumn * charWidth);
             top = viewport.ContentTop + (_terminalBuffer.CursorRow * charHeight);
         }
+        else
+        {
+            top -= charHeight;
+        }
 
         (double proxyLeft, double proxyTop) = ClampToViewport(left, top, proxyWidth, proxyHeight, viewport);
+        _inputProxyLeft = proxyLeft;
+        _inputProxyTop = proxyTop;
+        _inputProxyWidth = proxyWidth;
+        _inputProxyHeight = proxyHeight;
 
-        Canvas.SetLeft(TerminalInputProxy, proxyLeft);
-        Canvas.SetTop(TerminalInputProxy, proxyTop);
+        Canvas.SetLeft(TerminalInputProxy, HiddenInputProxyOffset);
+        Canvas.SetTop(TerminalInputProxy, HiddenInputProxyOffset);
         UpdateCursorOverlay(left, top, charWidth, charHeight, viewport);
         UpdateImeCompositionOverlay(proxyLeft, proxyTop, charHeight, compositionTextSize);
         UpdateNativeImeWindow();
@@ -1459,14 +1473,15 @@ public partial class MainWindow : Window
     private bool TryGetImeClientBounds(out ImeClientBounds bounds)
     {
         bounds = default;
-        if (_windowSource?.CompositionTarget is null)
+        if (_windowSource?.CompositionTarget is null ||
+            TerminalOutput.Parent is not UIElement overlayHost)
         {
             return false;
         }
 
-        Point topLeftDip = TerminalInputProxy.TranslatePoint(new Point(0, 0), this);
-        Point bottomRightDip = TerminalInputProxy.TranslatePoint(
-            new Point(TerminalInputProxy.ActualWidth, TerminalInputProxy.ActualHeight),
+        Point topLeftDip = overlayHost.TranslatePoint(new Point(_inputProxyLeft, _inputProxyTop), this);
+        Point bottomRightDip = overlayHost.TranslatePoint(
+            new Point(_inputProxyLeft + _inputProxyWidth, _inputProxyTop + _inputProxyHeight),
             this);
         Matrix transform = _windowSource.CompositionTarget.TransformToDevice;
         Point topLeftPx = transform.Transform(topLeftDip);
@@ -1492,7 +1507,7 @@ public partial class MainWindow : Window
                 if (wParam != IntPtr.Zero)
                 {
                     handled = true;
-                    IntPtr filteredLParam = new(lParam.ToInt64() & ~IscShowUiCompositionWindow);
+                    IntPtr filteredLParam = IntPtr.Zero;
                     IntPtr result = DefWindowProc(hwnd, msg, wParam, filteredLParam);
                     _ = Dispatcher.BeginInvoke(UpdateNativeImeWindow, DispatcherPriority.Input);
                     return result;
