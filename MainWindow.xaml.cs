@@ -48,6 +48,7 @@ public partial class MainWindow : Window
     private readonly object _pendingOutputLock = new();
     private readonly StringBuilder _pendingOutput = new();
     private ScrollViewer? _terminalScrollViewer;
+    private FrameworkElement? _cursorAnchorElement;
     private HwndSource? _windowSource;
     private int _autoRecoveryAttempts;
     private bool _isRecovering;
@@ -977,10 +978,12 @@ public partial class MainWindow : Window
         _isRenderingTerminal = true;
         try
         {
-            TerminalOutput.Document = _terminalBuffer.CreateDocument(
+            AnsiTerminalBuffer.TerminalDocumentSnapshot snapshot = _terminalBuffer.CreateDocument(
                 TerminalOutput.FontFamily,
                 TerminalOutput.FontSize,
                 showCursor: false);
+            _cursorAnchorElement = snapshot.CursorAnchor;
+            TerminalOutput.Document = snapshot.Document;
             TerminalOutput.UpdateLayout();
             UpdateInputProxyPosition();
             if (shouldRestoreFocus && !HasTerminalInputFocus())
@@ -1054,8 +1057,12 @@ public partial class MainWindow : Window
         TerminalInputProxy.FontFamily = TerminalOutput.FontFamily;
         TerminalInputProxy.FontSize = TerminalOutput.FontSize;
 
-        double left = viewport.ContentLeft + (_terminalBuffer.CursorColumn * charWidth);
-        double top = viewport.ContentTop + (_terminalBuffer.CursorRow * charHeight);
+        if (!TryGetCursorAnchorPosition(out double left, out double top))
+        {
+            left = viewport.ContentLeft + (_terminalBuffer.CursorColumn * charWidth);
+            top = viewport.ContentTop + (_terminalBuffer.CursorRow * charHeight);
+        }
+
         double maxLeft = Math.Max(viewport.ViewportLeft, viewport.ViewportRight - TerminalInputProxy.Width);
         double maxTop = Math.Max(viewport.ViewportTop, viewport.ViewportBottom - TerminalInputProxy.Height);
 
@@ -1064,6 +1071,39 @@ public partial class MainWindow : Window
         UpdateCursorOverlay(left, top, charWidth, charHeight, viewport, maxLeft, maxTop);
         UpdateImeCompositionOverlay(left, top, charHeight, viewport, maxLeft, maxTop);
         UpdateNativeImeWindow();
+    }
+
+    private bool TryGetCursorAnchorPosition(out double left, out double top)
+    {
+        left = 0;
+        top = 0;
+
+        if (_cursorAnchorElement is null)
+        {
+            return false;
+        }
+
+        if (TerminalOutput.Parent is not UIElement overlayHost)
+        {
+            return false;
+        }
+
+        try
+        {
+            Point anchorPoint = _cursorAnchorElement.TranslatePoint(new Point(0, 0), overlayHost);
+            if (double.IsNaN(anchorPoint.X) || double.IsNaN(anchorPoint.Y))
+            {
+                return false;
+            }
+
+            left = anchorPoint.X;
+            top = anchorPoint.Y;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void ResetInputProxyText()

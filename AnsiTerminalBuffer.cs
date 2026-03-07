@@ -1,5 +1,6 @@
 using System.Text;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
 using System.Globalization;
@@ -215,7 +216,7 @@ internal sealed class AnsiTerminalBuffer
         FlushPendingCluster();
     }
 
-    public FlowDocument CreateDocument(FontFamily fontFamily, double fontSize, bool showCursor)
+    public TerminalDocumentSnapshot CreateDocument(FontFamily fontFamily, double fontSize, bool showCursor)
     {
         var document = new FlowDocument
         {
@@ -230,18 +231,20 @@ internal sealed class AnsiTerminalBuffer
         {
             Margin = new Thickness(0)
         };
+        FrameworkElement? cursorAnchor = null;
 
         bool isFirstLine = true;
         foreach (TerminalLine line in _scrollback)
         {
-            AppendLine(paragraph.Inlines, line, -1, showCursor: false, ref isFirstLine);
+            AppendLine(paragraph.Inlines, line, -1, -1, showCursor: false, ref isFirstLine, ref cursorAnchor);
         }
 
         int lastScreenRow = FindLastVisibleScreenRow(showCursor);
         for (int row = 0; row <= lastScreenRow; row++)
         {
             int cursorColumn = showCursor && _cursorVisible && row == _cursorRow ? _cursorColumn : -1;
-            AppendLine(paragraph.Inlines, _screen[row], cursorColumn, showCursor, ref isFirstLine);
+            int anchorColumn = row == _cursorRow ? _cursorColumn : -1;
+            AppendLine(paragraph.Inlines, _screen[row], cursorColumn, anchorColumn, showCursor, ref isFirstLine, ref cursorAnchor);
         }
 
         if (paragraph.Inlines.Count == 0)
@@ -250,7 +253,7 @@ internal sealed class AnsiTerminalBuffer
         }
 
         document.Blocks.Add(paragraph);
-        return document;
+        return new TerminalDocumentSnapshot(document, cursorAnchor);
     }
 
     public void ClearScrollback()
@@ -1952,7 +1955,7 @@ internal sealed class AnsiTerminalBuffer
         return builder.ToString();
     }
 
-    private void AppendLine(InlineCollection inlines, TerminalLine line, int cursorColumn, bool showCursor, ref bool isFirstLine)
+    private void AppendLine(InlineCollection inlines, TerminalLine line, int cursorColumn, int anchorColumn, bool showCursor, ref bool isFirstLine, ref FrameworkElement? cursorAnchor)
     {
         if (!isFirstLine)
         {
@@ -1963,6 +1966,11 @@ internal sealed class AnsiTerminalBuffer
         int visibleLength = FindVisibleLength(line, cursorColumn);
         if (visibleLength == 0)
         {
+            if (anchorColumn == 0)
+            {
+                InsertCursorAnchor(inlines, ref cursorAnchor);
+            }
+
             return;
         }
 
@@ -1970,6 +1978,12 @@ internal sealed class AnsiTerminalBuffer
         ResolvedStyle? currentStyle = null;
         for (int column = 0; column < visibleLength; column++)
         {
+            if (anchorColumn == column)
+            {
+                FlushRun(inlines, text, currentStyle);
+                InsertCursorAnchor(inlines, ref cursorAnchor);
+            }
+
             TerminalCell cell = line.Cells[column];
             if (cell.IsContinuation)
             {
@@ -1988,6 +2002,10 @@ internal sealed class AnsiTerminalBuffer
         }
 
         FlushRun(inlines, text, currentStyle);
+        if (anchorColumn == visibleLength)
+        {
+            InsertCursorAnchor(inlines, ref cursorAnchor);
+        }
     }
 
     private static int FindVisibleLength(TerminalLine line, int cursorColumn)
@@ -2048,6 +2066,31 @@ internal sealed class AnsiTerminalBuffer
 
         inlines.Add(run);
         text.Clear();
+    }
+
+    private static void InsertCursorAnchor(InlineCollection inlines, ref FrameworkElement? cursorAnchor)
+    {
+        if (cursorAnchor is not null)
+        {
+            return;
+        }
+
+        var anchor = new Border
+        {
+            Width = 0,
+            Height = 0,
+            Background = Brushes.Transparent,
+            Focusable = false,
+            IsHitTestVisible = false
+        };
+
+        var container = new InlineUIContainer(anchor)
+        {
+            BaselineAlignment = BaselineAlignment.TextBottom
+        };
+
+        inlines.Add(container);
+        cursorAnchor = anchor;
     }
 
     private static ResolvedStyle ResolveStyle(TerminalStyle style, string? hyperlink, bool isCursor)
@@ -2284,4 +2327,8 @@ internal sealed class AnsiTerminalBuffer
         bool Bold,
         bool Underline,
         string? Hyperlink);
+
+    internal readonly record struct TerminalDocumentSnapshot(
+        FlowDocument Document,
+        FrameworkElement? CursorAnchor);
 }
