@@ -28,6 +28,8 @@ public sealed class ConPtySession : ITerminalSession
     private StreamReader? _outputReader;
     private CancellationTokenSource? _readCancellation;
     private Task? _readTask;
+    private CancellationTokenSource? _exitMonitorCancellation;
+    private Task? _exitMonitorTask;
     private bool _started;
     private DateTime _startedAtUtc;
     private DateTime _lastOutputAtUtc;
@@ -168,6 +170,26 @@ public sealed class ConPtySession : ITerminalSession
 
     public void Dispose()
     {
+        DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        StreamWriter? inputWriter;
+        Stream? inputStream;
+        StreamReader? outputReader;
+        CancellationTokenSource? readCancellation;
+        Task? readTask;
+        CancellationTokenSource? exitMonitorCancellation;
+        Task? exitMonitorTask;
+        SafeFileHandle? pseudoConsoleInputReadHandle;
+        SafeFileHandle? pseudoConsoleOutputWriteHandle;
+        SafeFileHandle? inputWriteHandle;
+        SafeFileHandle? outputReadHandle;
+        IntPtr pseudoConsole;
+        IntPtr processHandle;
+        IntPtr threadHandle;
+
         lock (_syncRoot)
         {
             if (_disposed)
@@ -176,64 +198,82 @@ public sealed class ConPtySession : ITerminalSession
             }
 
             _disposed = true;
-        }
 
-        if (_inputWriter is not null)
-        {
-            try
-            {
-                _inputWriter.Write("exit\r\n");
-                _inputWriter.Flush();
-            }
-            catch
-            {
-            }
-        }
+            inputWriter = _inputWriter;
+            inputStream = _inputStream;
+            outputReader = _outputReader;
+            readCancellation = _readCancellation;
+            readTask = _readTask;
+            exitMonitorCancellation = _exitMonitorCancellation;
+            exitMonitorTask = _exitMonitorTask;
+            pseudoConsoleInputReadHandle = _pseudoConsoleInputReadHandle;
+            pseudoConsoleOutputWriteHandle = _pseudoConsoleOutputWriteHandle;
+            inputWriteHandle = _inputWriteHandle;
+            outputReadHandle = _outputReadHandle;
+            pseudoConsole = _pseudoConsole;
+            processHandle = _processHandle;
+            threadHandle = _threadHandle;
 
-        _readCancellation?.Cancel();
-        _outputReader?.Dispose();
-
-        try
-        {
-            _readTask?.Wait(200);
-        }
-        catch
-        {
-        }
-
-        if (_processHandle != IntPtr.Zero && WaitForSingleObject(_processHandle, 250) == WaitTimeout)
-        {
-            _ = TerminateProcess(_processHandle, 1);
-            _ = WaitForSingleObject(_processHandle, 500);
-        }
-
-        _inputWriter?.Dispose();
-        _inputStream?.Dispose();
-
-        _pseudoConsoleInputReadHandle?.Dispose();
-        _pseudoConsoleOutputWriteHandle?.Dispose();
-        _inputWriteHandle?.Dispose();
-        _outputReadHandle?.Dispose();
-
-        if (_pseudoConsole != IntPtr.Zero)
-        {
-            ClosePseudoConsoleHandle(_pseudoConsole);
+            _inputWriter = null;
+            _inputStream = null;
+            _outputReader = null;
+            _readCancellation = null;
+            _readTask = null;
+            _exitMonitorCancellation = null;
+            _exitMonitorTask = null;
+            _pseudoConsoleInputReadHandle = null;
+            _pseudoConsoleOutputWriteHandle = null;
+            _inputWriteHandle = null;
+            _outputReadHandle = null;
             _pseudoConsole = IntPtr.Zero;
-        }
-
-        if (_threadHandle != IntPtr.Zero)
-        {
-            CloseHandle(_threadHandle);
+            _processHandle = IntPtr.Zero;
             _threadHandle = IntPtr.Zero;
         }
 
-        if (_processHandle != IntPtr.Zero)
+        TryWriteExit(inputWriter);
+
+        readCancellation?.Cancel();
+        exitMonitorCancellation?.Cancel();
+        DisposeQuietly(outputReader);
+
+        await WaitForTaskAsync(readTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
+        await WaitForTaskAsync(exitMonitorTask, TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
+
+        if (processHandle != IntPtr.Zero && !await WaitForProcessExitAsync(processHandle, TimeSpan.FromMilliseconds(250)).ConfigureAwait(false))
         {
-            CloseHandle(_processHandle);
-            _processHandle = IntPtr.Zero;
+            _ = TerminateProcess(processHandle, 1);
+            _ = await WaitForProcessExitAsync(processHandle, TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
         }
 
-        _readCancellation?.Dispose();
+        await WaitForTaskAsync(readTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
+        await WaitForTaskAsync(exitMonitorTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
+
+        DisposeQuietly(inputWriter);
+        DisposeQuietly(inputStream);
+        DisposeQuietly(pseudoConsoleInputReadHandle);
+        DisposeQuietly(pseudoConsoleOutputWriteHandle);
+        DisposeQuietly(inputWriteHandle);
+        DisposeQuietly(outputReadHandle);
+
+        if (pseudoConsole != IntPtr.Zero)
+        {
+            ClosePseudoConsoleHandle(pseudoConsole);
+        }
+
+        if (threadHandle != IntPtr.Zero)
+        {
+            CloseHandle(threadHandle);
+        }
+
+        if (processHandle != IntPtr.Zero)
+        {
+            CloseHandle(processHandle);
+        }
+
+        DisposeQuietly(readCancellation);
+        DisposeQuietly(exitMonitorCancellation);
+
+        GC.SuppressFinalize(this);
     }
 
     private void CreatePseudoConsole(short columns, short rows)
@@ -459,19 +499,108 @@ public sealed class ConPtySession : ITerminalSession
 
     private void StartExitMonitor()
     {
-        _ = Task.Run(() =>
+        _exitMonitorCancellation = new CancellationTokenSource();
+        CancellationToken cancellationToken = _exitMonitorCancellation.Token;
+
+        _exitMonitorTask = Task.Run(() =>
         {
             if (_processHandle == IntPtr.Zero)
             {
                 return;
             }
 
-            uint wait = WaitForSingleObject(_processHandle, Infinite);
-            if (wait == 0 && GetExitCodeProcess(_processHandle, out uint exitCode))
+            while (!cancellationToken.IsCancellationRequested)
             {
-                Exited?.Invoke(this, unchecked((int)exitCode));
+                uint wait = WaitForSingleObject(_processHandle, 100);
+                if (wait == WaitTimeout)
+                {
+                    continue;
+                }
+
+                if (wait == 0 && !_disposed && GetExitCodeProcess(_processHandle, out uint exitCode))
+                {
+                    Exited?.Invoke(this, unchecked((int)exitCode));
+                }
+
+                return;
             }
-        });
+        }, cancellationToken);
+    }
+
+    private static void TryWriteExit(TextWriter? writer)
+    {
+        if (writer is null)
+        {
+            return;
+        }
+
+        try
+        {
+            writer.Write("exit\r\n");
+            writer.Flush();
+        }
+        catch
+        {
+        }
+    }
+
+    private static async Task WaitForTaskAsync(Task? task, TimeSpan timeout)
+    {
+        if (task is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await task.WaitAsync(timeout).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+    }
+
+    private static async Task<bool> WaitForProcessExitAsync(IntPtr processHandle, TimeSpan timeout)
+    {
+        if (processHandle == IntPtr.Zero)
+        {
+            return true;
+        }
+
+        DateTime deadlineUtc = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadlineUtc)
+        {
+            uint wait = WaitForSingleObject(processHandle, 50);
+            if (wait == 0)
+            {
+                return true;
+            }
+
+            if (wait != WaitTimeout)
+            {
+                return false;
+            }
+
+            await Task.Delay(25).ConfigureAwait(false);
+        }
+
+        return WaitForSingleObject(processHandle, 0) == 0;
+    }
+
+    private static void DisposeQuietly(IDisposable? disposable)
+    {
+        if (disposable is null)
+        {
+            return;
+        }
+
+        try
+        {
+            disposable.Dispose();
+        }
+        catch
+        {
+        }
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

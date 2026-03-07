@@ -1,6 +1,6 @@
 namespace ConPtyTerminal;
 
-public interface ITerminalSession : IDisposable
+public interface ITerminalSession : IDisposable, IAsyncDisposable
 {
     TerminalSessionCapabilities Capabilities { get; }
     event EventHandler<string>? OutputReceived;

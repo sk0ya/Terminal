@@ -14,6 +14,8 @@ public sealed class ProcessPipeSession : ITerminalSession
     private Process? _process;
     private Stream? _inputStream;
     private StreamWriter? _inputWriter;
+    private StreamReader? _outputReader;
+    private StreamReader? _errorReader;
     private CancellationTokenSource? _readCancellation;
     private Task? _outputReadTask;
     private Task? _errorReadTask;
@@ -108,10 +110,12 @@ public sealed class ProcessPipeSession : ITerminalSession
 
         _inputWriter = _process.StandardInput;
         _inputStream = _inputWriter.BaseStream;
+        _outputReader = _process.StandardOutput;
+        _errorReader = _process.StandardError;
         _inputWriter.AutoFlush = true;
         _readCancellation = new CancellationTokenSource();
-        _outputReadTask = StartReadLoop(_process.StandardOutput, _readCancellation.Token);
-        _errorReadTask = StartReadLoop(_process.StandardError, _readCancellation.Token);
+        _outputReadTask = StartReadLoop(_outputReader, _readCancellation.Token);
+        _errorReadTask = StartReadLoop(_errorReader, _readCancellation.Token);
     }
 
     public void Write(string input)
@@ -189,6 +193,20 @@ public sealed class ProcessPipeSession : ITerminalSession
 
     public void Dispose()
     {
+        DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Process? process;
+        StreamWriter? inputWriter;
+        Stream? inputStream;
+        StreamReader? outputReader;
+        StreamReader? errorReader;
+        CancellationTokenSource? readCancellation;
+        Task? outputReadTask;
+        Task? errorReadTask;
+
         lock (_syncRoot)
         {
             if (_disposed)
@@ -197,60 +215,52 @@ public sealed class ProcessPipeSession : ITerminalSession
             }
 
             _disposed = true;
+
+            process = _process;
+            inputWriter = _inputWriter;
+            inputStream = _inputStream;
+            outputReader = _outputReader;
+            errorReader = _errorReader;
+            readCancellation = _readCancellation;
+            outputReadTask = _outputReadTask;
+            errorReadTask = _errorReadTask;
+
+            _process = null;
+            _inputWriter = null;
+            _inputStream = null;
+            _outputReader = null;
+            _errorReader = null;
+            _readCancellation = null;
+            _outputReadTask = null;
+            _errorReadTask = null;
         }
 
-        try
+        TryWriteExit(inputWriter);
+
+        readCancellation?.Cancel();
+        DisposeQuietly(outputReader);
+        DisposeQuietly(errorReader);
+
+        await WaitForTaskAsync(outputReadTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
+        await WaitForTaskAsync(errorReadTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
+
+        if (process is not null)
         {
-            _inputWriter?.Write("exit\r\n");
-            _inputWriter?.Flush();
-        }
-        catch
-        {
+            process.Exited -= OnProcessExited;
+            await EnsureProcessStoppedAsync(process).ConfigureAwait(false);
         }
 
-        _readCancellation?.Cancel();
-        try
-        {
-            _outputReadTask?.Wait(200);
-            _errorReadTask?.Wait(200);
-        }
-        catch
-        {
-        }
+        await WaitForTaskAsync(outputReadTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
+        await WaitForTaskAsync(errorReadTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
 
-        if (_process is not null)
-        {
-            _process.Exited -= OnProcessExited;
-            if (!_process.HasExited)
-            {
-                try
-                {
-                    _process.Kill(entireProcessTree: true);
-                    _process.WaitForExit(500);
-                }
-                catch
-                {
-                }
-            }
-        }
+        DisposeQuietly(inputWriter);
+        DisposeQuietly(inputStream);
+        DisposeQuietly(outputReader);
+        DisposeQuietly(errorReader);
+        DisposeQuietly(process);
+        DisposeQuietly(readCancellation);
 
-        try
-        {
-            _inputWriter?.Dispose();
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            _process?.Dispose();
-        }
-        catch
-        {
-        }
-
-        _readCancellation?.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     private Task StartReadLoop(StreamReader reader, CancellationToken cancellationToken)
@@ -290,6 +300,98 @@ public sealed class ProcessPipeSession : ITerminalSession
         }
 
         Exited?.Invoke(this, _process.ExitCode);
+    }
+
+    private static void TryWriteExit(TextWriter? writer)
+    {
+        if (writer is null)
+        {
+            return;
+        }
+
+        try
+        {
+            writer.Write("exit\r\n");
+            writer.Flush();
+        }
+        catch
+        {
+        }
+    }
+
+    private static async Task EnsureProcessStoppedAsync(Process process)
+    {
+        try
+        {
+            if (process.HasExited)
+            {
+                return;
+            }
+        }
+        catch
+        {
+            return;
+        }
+
+        if (await TryWaitForExitAsync(process, TimeSpan.FromMilliseconds(250)).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+        }
+
+        _ = await TryWaitForExitAsync(process, TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> TryWaitForExitAsync(Process process, TimeSpan timeout)
+    {
+        try
+        {
+            await process.WaitForExitAsync().WaitAsync(timeout).ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static async Task WaitForTaskAsync(Task? task, TimeSpan timeout)
+    {
+        if (task is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await task.WaitAsync(timeout).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+    }
+
+    private static void DisposeQuietly(IDisposable? disposable)
+    {
+        if (disposable is null)
+        {
+            return;
+        }
+
+        try
+        {
+            disposable.Dispose();
+        }
+        catch
+        {
+        }
     }
 
     internal static (string FileName, string[] Arguments) SplitCommandLine(string commandLine)

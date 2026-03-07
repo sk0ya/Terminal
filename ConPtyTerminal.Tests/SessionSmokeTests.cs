@@ -54,6 +54,26 @@ public sealed class SessionSmokeTests
         Assert.Contains("LINES=41", output.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task ConPtySessionDisposeAsyncStopsRunningSession()
+    {
+        ITerminalSession session = new ConPtySession(120, 30, BuildInteractiveCommandLine());
+        session.Start();
+
+        await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task ProcessPipeSessionDisposeAsyncStopsRunningSession()
+    {
+        ITerminalSession session = new ProcessPipeSession(BuildInteractiveCommandLine());
+        session.Start();
+
+        await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+    }
+
     private static async Task VerifyInteractiveEchoAsync(Func<ITerminalSession> sessionFactory, string expectedOutput)
     {
         using ITerminalSession session = sessionFactory();
