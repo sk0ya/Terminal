@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 
 namespace ConPtyTerminal;
@@ -28,7 +29,7 @@ public partial class MainWindow : Window
     {
         if (_tabs.Count == 0)
         {
-            AddNewTab();
+            AddNewTabFromSettings();
         }
     }
 
@@ -63,7 +64,7 @@ public partial class MainWindow : Window
 
     private void NewTabButton_Click(object sender, RoutedEventArgs e)
     {
-        AddNewTab();
+        ToggleProfilePicker();
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
@@ -71,15 +72,22 @@ public partial class MainWindow : Window
         OpenSettings();
     }
 
-    private void AddNewTab()
+    private void AddNewTabFromSettings()
     {
-        string commandLine = string.IsNullOrWhiteSpace(_settings.CommandLine)
-            ? TerminalProfileCatalog.BuildDefaultCommandLine()
-            : _settings.CommandLine.Trim();
-        string workingDirectory = string.IsNullOrWhiteSpace(_settings.WorkingDirectory)
-            ? Environment.CurrentDirectory
-            : _settings.WorkingDirectory.Trim();
+        AddNewTab(
+            string.IsNullOrWhiteSpace(_settings.CommandLine)
+                ? TerminalProfileCatalog.BuildDefaultCommandLine()
+                : _settings.CommandLine.Trim(),
+            GetWorkingDirectoryOrDefault());
+    }
 
+    private void AddNewTab(TerminalProfileDefinition profile)
+    {
+        AddNewTab(profile.CommandLine, GetWorkingDirectoryOrDefault());
+    }
+
+    private void AddNewTab(string commandLine, string workingDirectory)
+    {
         var view = new TerminalTabView(commandLine, workingDirectory);
         var tab = CreateTabItem(view);
         _tabs.Add(tab);
@@ -87,6 +95,84 @@ public partial class MainWindow : Window
         view.HeaderTitleChanged += (_, title) => UpdateTabHeader(tab, title);
         UpdateTabHeader(tab, view.HeaderTitle);
         TabStrip.SelectedItem = tab.ListBoxItem;
+    }
+
+    private string GetWorkingDirectoryOrDefault()
+    {
+        return string.IsNullOrWhiteSpace(_settings.WorkingDirectory)
+            ? Environment.CurrentDirectory
+            : _settings.WorkingDirectory.Trim();
+    }
+
+    private void ToggleProfilePicker()
+    {
+        if (ProfilePickerPopup.IsOpen)
+        {
+            ProfilePickerPopup.IsOpen = false;
+            return;
+        }
+
+        PopulateProfilePicker();
+        ProfilePickerPopup.IsOpen = true;
+
+        if (ProfilePickerPanel.Children.OfType<Button>().FirstOrDefault() is Button firstButton)
+        {
+            _ = Dispatcher.BeginInvoke(firstButton.Focus, DispatcherPriority.Input);
+        }
+    }
+
+    private void PopulateProfilePicker()
+    {
+        ProfilePickerPanel.Children.Clear();
+
+        foreach (TerminalProfileDefinition profile in TerminalProfileCatalog.CreateProfiles())
+        {
+            ProfilePickerPanel.Children.Add(CreateProfilePickerButton(profile));
+        }
+    }
+
+    private Button CreateProfilePickerButton(TerminalProfileDefinition profile)
+    {
+        var nameText = new TextBlock
+        {
+            Text = profile.DisplayName,
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xED, 0xED, 0xED))
+        };
+
+        var descriptionText = new TextBlock
+        {
+            Text = profile.Description,
+            Margin = new Thickness(0, 2, 0, 0),
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xA7, 0xA7, 0xA7)),
+            TextWrapping = TextWrapping.Wrap
+        };
+
+        var contentPanel = new StackPanel();
+        contentPanel.Children.Add(nameText);
+        contentPanel.Children.Add(descriptionText);
+
+        var button = new Button
+        {
+            Tag = profile,
+            Content = contentPanel,
+            Style = (Style)FindResource("ProfilePickerButtonStyle")
+        };
+        button.Click += ProfilePickerButton_Click;
+        return button;
+    }
+
+    private void ProfilePickerButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: TerminalProfileDefinition profile })
+        {
+            return;
+        }
+
+        ProfilePickerPopup.IsOpen = false;
+        AddNewTab(profile);
     }
 
     private TerminalTabItem CreateTabItem(TerminalTabView view)
@@ -200,7 +286,7 @@ public partial class MainWindow : Window
 
         if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.T)
         {
-            AddNewTab();
+            AddNewTabFromSettings();
             e.Handled = true;
             return;
         }
@@ -208,6 +294,13 @@ public partial class MainWindow : Window
         if (modifiers == ModifierKeys.Control && key == Key.OemComma)
         {
             OpenSettings();
+            e.Handled = true;
+            return;
+        }
+
+        if (ProfilePickerPopup.IsOpen && key == Key.Escape)
+        {
+            ProfilePickerPopup.IsOpen = false;
             e.Handled = true;
             return;
         }

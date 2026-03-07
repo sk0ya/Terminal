@@ -39,6 +39,40 @@
             <Setter Property="Padding" Value="10,0" />
             <Setter Property="FontSize" Value="12" />
         </Style>
+
+        <Style x:Key="ProfilePickerButtonStyle" TargetType="Button">
+            <Setter Property="Margin" Value="0,0,0,4" />
+            <Setter Property="Padding" Value="12,10" />
+            <Setter Property="Foreground" Value="{StaticResource TabTextBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonBorder"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="10"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="#232323" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="#232323" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="#2B2B2B" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Grid>
@@ -79,6 +113,24 @@
                         Click="SettingsButton_Click" />
             </DockPanel>
         </Border>
+
+        <Popup x:Name="ProfilePickerPopup"
+               Grid.Row="0"
+               PlacementTarget="{Binding ElementName=NewTabButton}"
+               Placement="Bottom"
+               HorizontalOffset="-8"
+               VerticalOffset="4"
+               AllowsTransparency="True"
+               StaysOpen="False">
+            <Border MinWidth="300"
+                    Background="#151515"
+                    BorderBrush="{StaticResource ChromeBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="14"
+                    Padding="8">
+                <StackPanel x:Name="ProfilePickerPanel" />
+            </Border>
+        </Popup>
 
         <ContentControl x:Name="ActiveTabHost"
                         Grid.Row="1"
