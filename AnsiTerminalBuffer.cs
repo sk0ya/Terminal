@@ -5,6 +5,14 @@ using System.Windows.Media;
 
 namespace ConPtyTerminal;
 
+internal enum TerminalMouseTrackingMode
+{
+    Off,
+    X10,
+    ButtonEvent,
+    AnyEvent
+}
+
 internal sealed class AnsiTerminalBuffer
 {
     private const int MinColumns = 20;
@@ -54,7 +62,14 @@ internal sealed class AnsiTerminalBuffer
     private TerminalStyle _currentStyle = TerminalStyle.Default;
     private TerminalStyle _savedStyle = TerminalStyle.Default;
     private bool _cursorVisible = true;
+    private bool _applicationCursorKeys;
+    private bool _bracketedPasteEnabled;
+    private bool _focusReportingEnabled;
+    private bool _useSgrMouseEncoding;
+    private TerminalMouseTrackingMode _mouseTrackingMode;
     private string _windowTitle = string.Empty;
+
+    public event EventHandler<string>? InputSequenceGenerated;
 
     public AnsiTerminalBuffer(short columns, short rows, int scrollbackLimit = DefaultScrollbackLimit)
     {
@@ -66,6 +81,11 @@ internal sealed class AnsiTerminalBuffer
     }
 
     public string WindowTitle => _windowTitle;
+    public bool ApplicationCursorKeysEnabled => _applicationCursorKeys;
+    public bool BracketedPasteEnabled => _bracketedPasteEnabled;
+    public bool FocusReportingEnabled => _focusReportingEnabled;
+    public bool UseSgrMouseEncoding => _useSgrMouseEncoding;
+    public TerminalMouseTrackingMode MouseTrackingMode => _mouseTrackingMode;
 
     public void Resize(short columns, short rows)
     {
@@ -218,6 +238,11 @@ internal sealed class AnsiTerminalBuffer
         _currentStyle = TerminalStyle.Default;
         _savedStyle = TerminalStyle.Default;
         _cursorVisible = true;
+        _applicationCursorKeys = false;
+        _bracketedPasteEnabled = false;
+        _focusReportingEnabled = false;
+        _useSgrMouseEncoding = false;
+        _mouseTrackingMode = TerminalMouseTrackingMode.Off;
         _windowTitle = string.Empty;
         _state = ParserState.Normal;
         _csiBuffer.Clear();
@@ -394,8 +419,10 @@ internal sealed class AnsiTerminalBuffer
 
     private void DispatchCsi(char command, string rawParams)
     {
-        bool isPrivate = rawParams.StartsWith("?", StringComparison.Ordinal);
-        string paramText = isPrivate ? rawParams[1..] : rawParams;
+        char prefix = rawParams.Length > 0 && (rawParams[0] == '?' || rawParams[0] == '>') ? rawParams[0] : '\0';
+        bool isPrivate = prefix == '?';
+        bool isSecondary = prefix == '>';
+        string paramText = prefix == '\0' ? rawParams : rawParams[1..];
         int?[] parameters = ParseParameters(paramText);
 
         switch (command)
@@ -458,6 +485,9 @@ internal sealed class AnsiTerminalBuffer
             case 'd':
                 _cursorRow = Math.Clamp(GetParameter(parameters, 0, 1) - 1, 0, _rows - 1);
                 break;
+            case 'c':
+                DispatchDeviceAttributes(isPrivate, isSecondary);
+                break;
             case 'h':
             case 'l':
                 if (isPrivate)
@@ -468,6 +498,9 @@ internal sealed class AnsiTerminalBuffer
                 break;
             case 'm':
                 ApplySgr(parameters);
+                break;
+            case 'n':
+                DispatchDeviceStatusReport(parameters, isPrivate);
                 break;
             case 'r':
                 SetScrollRegion(parameters);
@@ -506,12 +539,55 @@ internal sealed class AnsiTerminalBuffer
         _cursorRow = Math.Max(0, _cursorRow - 1);
     }
 
+    private void DispatchDeviceAttributes(bool isPrivate, bool isSecondary)
+    {
+        if (isSecondary)
+        {
+            EmitInputSequence("\u001b[>0;10;1c");
+            return;
+        }
+
+        if (isPrivate)
+        {
+            EmitInputSequence("\u001b[?1;2c");
+            return;
+        }
+
+        EmitInputSequence("\u001b[?1;2c");
+    }
+
+    private void DispatchDeviceStatusReport(int?[] parameters, bool isPrivate)
+    {
+        int report = GetParameter(parameters, 0, 0);
+        switch (report)
+        {
+            case 5:
+                EmitInputSequence(isPrivate ? "\u001b[?0n" : "\u001b[0n");
+                break;
+            case 6:
+                string prefix = isPrivate ? "?" : string.Empty;
+                EmitInputSequence($"\u001b[{prefix}{_cursorRow + 1};{_cursorColumn + 1}R");
+                break;
+        }
+    }
+
+    private void EmitInputSequence(string text)
+    {
+        if (!string.IsNullOrEmpty(text))
+        {
+            InputSequenceGenerated?.Invoke(this, text);
+        }
+    }
+
     private void SetPrivateMode(int?[] parameters, bool enabled)
     {
         foreach (int? parameter in parameters)
         {
             switch (parameter)
             {
+                case 1:
+                    _applicationCursorKeys = enabled;
+                    break;
                 case 25:
                     _cursorVisible = enabled;
                     break;
@@ -527,6 +603,24 @@ internal sealed class AnsiTerminalBuffer
                         ExitAlternateScreen();
                     }
 
+                    break;
+                case 1000:
+                    _mouseTrackingMode = enabled ? TerminalMouseTrackingMode.X10 : TerminalMouseTrackingMode.Off;
+                    break;
+                case 1002:
+                    _mouseTrackingMode = enabled ? TerminalMouseTrackingMode.ButtonEvent : TerminalMouseTrackingMode.Off;
+                    break;
+                case 1003:
+                    _mouseTrackingMode = enabled ? TerminalMouseTrackingMode.AnyEvent : TerminalMouseTrackingMode.Off;
+                    break;
+                case 1004:
+                    _focusReportingEnabled = enabled;
+                    break;
+                case 1006:
+                    _useSgrMouseEncoding = enabled;
+                    break;
+                case 2004:
+                    _bracketedPasteEnabled = enabled;
                     break;
             }
         }

@@ -74,6 +74,9 @@
                      PreviewKeyDown="TerminalOutput_PreviewKeyDown"
                      PreviewTextInput="TerminalOutput_PreviewTextInput"
                      PreviewMouseDown="TerminalOutput_PreviewMouseDown"
+                     PreviewMouseUp="TerminalOutput_PreviewMouseUp"
+                     PreviewMouseMove="TerminalOutput_PreviewMouseMove"
+                     PreviewMouseWheel="TerminalOutput_PreviewMouseWheel"
                      GotKeyboardFocus="TerminalOutput_GotKeyboardFocus"
                      LostKeyboardFocus="TerminalOutput_LostKeyboardFocus" />
 
