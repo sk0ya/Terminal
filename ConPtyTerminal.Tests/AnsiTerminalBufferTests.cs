@@ -201,6 +201,19 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void CreateRenderSnapshotReusesCombinedArrayWhenBufferIsUnchanged()
+    {
+        var buffer = new AnsiTerminalBuffer(8, 2);
+
+        buffer.Process("A\r\nB\r\nC");
+
+        AnsiTerminalBuffer.TerminalRenderSnapshot first = buffer.CreateRenderSnapshot(showCursor: false);
+        AnsiTerminalBuffer.TerminalRenderSnapshot second = buffer.CreateRenderSnapshot(showCursor: false);
+
+        Assert.Same(first.Lines, second.Lines);
+    }
+
+    [Fact]
     public void DecPrivate12ControlsCursorBlinking()
     {
         var buffer = new AnsiTerminalBuffer(32, 10);

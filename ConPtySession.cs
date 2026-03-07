@@ -139,6 +139,8 @@ public sealed class ConPtySession : ITerminalSession
 
     public bool IsOutputStalled(TimeSpan initialOutputTimeout, TimeSpan idleOutputTimeout)
     {
+        _ = idleOutputTimeout;
+
         if (_disposed || !_started || _processHandle == IntPtr.Zero)
         {
             return false;
@@ -149,13 +151,11 @@ public sealed class ConPtySession : ITerminalSession
             return false;
         }
 
-        DateTime now = DateTime.UtcNow;
-        if (!_hasOutput)
-        {
-            return now - _startedAtUtc > initialOutputTimeout;
-        }
-
-        return now - _lastOutputAtUtc > idleOutputTimeout;
+        return TerminalSessionStallDetector.IsStartupStalled(
+            _hasOutput,
+            _startedAtUtc,
+            DateTime.UtcNow,
+            initialOutputTimeout);
     }
 
     public bool TryForceUnlock(uint exitCode = 1)

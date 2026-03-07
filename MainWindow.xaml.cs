@@ -1966,8 +1966,8 @@ public partial class MainWindow : Window
         if (_autoRecoveryAttempts >= MaxAutoRecoveryAttempts)
         {
             SetStatus(_useCompatibilityMode
-                ? "Output stalled in compatibility mode. Click Recover."
-                : "Output stalled. Switching to compatibility mode via Recover.");
+                ? "Initial output stalled in compatibility mode. Click Recover."
+                : "Initial output stalled. Switching to compatibility mode via Recover.");
             return;
         }
 
@@ -1999,7 +1999,7 @@ public partial class MainWindow : Window
             }
 
             SetStatus(isAutomatic
-                ? "Output stalled. Unlocking and restarting in compatibility mode..."
+                ? "Initial output stalled. Unlocking and restarting in compatibility mode..."
                 : "Recover requested. Unlocking and restarting in compatibility mode...");
             await StartTerminalAsync();
         }

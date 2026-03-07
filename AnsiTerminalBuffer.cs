@@ -69,11 +69,14 @@ internal sealed class AnsiTerminalBuffer
 
     private readonly int _scrollbackLimit;
     private readonly List<TerminalLine> _scrollback = [];
+    private readonly List<TerminalRenderLineSnapshot> _scrollbackRenderCache = [];
     private readonly StringBuilder _csiBuffer = new();
     private readonly StringBuilder _oscBuffer = new();
     private readonly StringBuilder _pendingClusterText = new();
 
     private List<TerminalLine> _screen;
+    private TerminalRenderLineSnapshot[] _screenRenderCache;
+    private TerminalRenderLineSnapshot[] _combinedRenderCache = [];
     private bool[] _tabStops;
     private ScreenState? _primaryScreenBackup;
     private int _columns;
@@ -120,6 +123,10 @@ internal sealed class AnsiTerminalBuffer
     private int _pendingClusterWidth;
     private bool _pendingClusterJoinNext;
     private int _pendingClusterRegionalIndicatorCount;
+    private bool _renderCacheDirty = true;
+    private bool _screenRenderCacheDirty = true;
+    private bool _cachedRenderShowCursor;
+    private int _cachedVisibleScreenRow = -1;
 
     public event EventHandler<string>? InputSequenceGenerated;
     public event EventHandler<string>? ClipboardSetRequested;
@@ -131,6 +138,7 @@ internal sealed class AnsiTerminalBuffer
         _columns = Math.Max(columns, (short)MinColumns);
         _rows = Math.Max(rows, (short)MinRows);
         _screen = CreateScreen(_rows, _columns, TerminalStyle.Default);
+        _screenRenderCache = new TerminalRenderLineSnapshot[_rows];
         _tabStops = CreateDefaultTabStops(_columns);
         ResetMargins();
     }
@@ -193,6 +201,7 @@ internal sealed class AnsiTerminalBuffer
         _savedCursorRow = Math.Clamp(_savedCursorRow, 0, _rows - 1);
         _savedCursorColumn = Math.Clamp(_savedCursorColumn, 0, _columns - 1);
         ResetMargins();
+        ResetScreenRenderCache();
     }
 
     public void Process(string text)
@@ -214,25 +223,53 @@ internal sealed class AnsiTerminalBuffer
         }
 
         FlushPendingCluster();
+        InvalidateScreenRenderCache();
     }
 
     public TerminalRenderSnapshot CreateRenderSnapshot(bool showCursor)
     {
-        var lines = new List<TerminalRenderLineSnapshot>(_scrollback.Count + _rows);
-        foreach (TerminalLine line in _scrollback)
+        if (_cachedRenderShowCursor != showCursor)
         {
-            lines.Add(CreateLineSnapshot(line, -1, -1, showCursor: false));
+            _cachedRenderShowCursor = showCursor;
+            InvalidateScreenRenderCache();
+        }
+
+        if (_screenRenderCacheDirty)
+        {
+            RebuildScreenRenderCache(showCursor);
         }
 
         int lastScreenRow = FindLastVisibleScreenRow(showCursor);
-        for (int row = 0; row <= lastScreenRow; row++)
+        if (_cachedVisibleScreenRow != lastScreenRow)
         {
-            int cursorColumn = showCursor && _cursorVisible && row == _cursorRow ? _cursorColumn : -1;
-            int anchorColumn = row == _cursorRow ? _cursorColumn : -1;
-            lines.Add(CreateLineSnapshot(_screen[row], cursorColumn, anchorColumn, showCursor));
+            _cachedVisibleScreenRow = lastScreenRow;
+            _renderCacheDirty = true;
         }
 
-        return new TerminalRenderSnapshot(lines.ToArray());
+        int visibleScreenLineCount = lastScreenRow + 1;
+        int totalLineCount = _scrollbackRenderCache.Count + visibleScreenLineCount;
+        if (_renderCacheDirty || _combinedRenderCache.Length != totalLineCount)
+        {
+            _combinedRenderCache = new TerminalRenderLineSnapshot[totalLineCount];
+            if (_scrollbackRenderCache.Count > 0)
+            {
+                _scrollbackRenderCache.CopyTo(_combinedRenderCache, 0);
+            }
+
+            if (visibleScreenLineCount > 0)
+            {
+                Array.Copy(
+                    _screenRenderCache,
+                    0,
+                    _combinedRenderCache,
+                    _scrollbackRenderCache.Count,
+                    visibleScreenLineCount);
+            }
+
+            _renderCacheDirty = false;
+        }
+
+        return new TerminalRenderSnapshot(_combinedRenderCache);
     }
 
     public TerminalDocumentSnapshot CreateDocument(FontFamily fontFamily, double fontSize, bool showCursor)
@@ -270,6 +307,8 @@ internal sealed class AnsiTerminalBuffer
     public void ClearScrollback()
     {
         _scrollback.Clear();
+        _scrollbackRenderCache.Clear();
+        _renderCacheDirty = true;
     }
 
     internal string GetScreenLineText(int row)
@@ -331,10 +370,13 @@ internal sealed class AnsiTerminalBuffer
     private void AppendScrollback(TerminalLine line)
     {
         _scrollback.Add(line);
+        _scrollbackRenderCache.Add(CreateLineSnapshot(line, -1, -1, showCursor: false));
+        _renderCacheDirty = true;
         int overflow = _scrollback.Count - _scrollbackLimit;
         if (overflow > 0)
         {
             _scrollback.RemoveRange(0, overflow);
+            _scrollbackRenderCache.RemoveRange(0, overflow);
         }
     }
 
@@ -349,9 +391,39 @@ internal sealed class AnsiTerminalBuffer
         _tabStops = CreateDefaultTabStops(_columns);
     }
 
+    private void InvalidateScreenRenderCache()
+    {
+        _screenRenderCacheDirty = true;
+        _renderCacheDirty = true;
+    }
+
+    private void ResetScreenRenderCache()
+    {
+        _screenRenderCache = new TerminalRenderLineSnapshot[_rows];
+        _cachedVisibleScreenRow = -1;
+        InvalidateScreenRenderCache();
+    }
+
+    private void RebuildScreenRenderCache(bool showCursor)
+    {
+        if (_screenRenderCache.Length != _rows)
+        {
+            _screenRenderCache = new TerminalRenderLineSnapshot[_rows];
+        }
+
+        for (int row = 0; row < _rows; row++)
+        {
+            int cursorColumn = showCursor && _cursorVisible && row == _cursorRow ? _cursorColumn : -1;
+            int anchorColumn = row == _cursorRow ? _cursorColumn : -1;
+            _screenRenderCache[row] = CreateLineSnapshot(_screen[row], cursorColumn, anchorColumn, showCursor);
+        }
+
+        _screenRenderCacheDirty = false;
+    }
+
     private void ResetTerminal()
     {
-        _scrollback.Clear();
+        ClearScrollback();
         _screen = CreateScreen(_rows, _columns, TerminalStyle.Default);
         _primaryScreenBackup = null;
         _cursorRow = 0;
@@ -396,6 +468,7 @@ internal sealed class AnsiTerminalBuffer
         _oscBuffer.Clear();
         ResetTabStops();
         ResetMargins();
+        ResetScreenRenderCache();
     }
 
     private void ProcessChar(char ch)
@@ -1510,7 +1583,7 @@ internal sealed class AnsiTerminalBuffer
 
                 break;
             case 3:
-                _scrollback.Clear();
+                ClearScrollback();
                 for (int row = 0; row < _rows; row++)
                 {
                     ClearEntireLine(row);
