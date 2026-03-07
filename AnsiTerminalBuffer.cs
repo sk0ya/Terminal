@@ -56,6 +56,7 @@ internal sealed class AnsiTerminalBuffer
     private readonly StringBuilder _oscBuffer = new();
 
     private List<TerminalLine> _screen;
+    private bool[] _tabStops;
     private ScreenState? _primaryScreenBackup;
     private int _columns;
     private int _rows;
@@ -72,6 +73,7 @@ internal sealed class AnsiTerminalBuffer
     private int _charsetDesignationTarget;
     private bool _applicationCursorKeys;
     private bool _applicationKeypad;
+    private bool _insertMode;
     private bool _originMode;
     private bool _autoWrapEnabled = true;
     private bool _bracketedPasteEnabled;
@@ -93,6 +95,7 @@ internal sealed class AnsiTerminalBuffer
         _columns = Math.Max(columns, (short)MinColumns);
         _rows = Math.Max(rows, (short)MinRows);
         _screen = CreateScreen(_rows, _columns, TerminalStyle.Default);
+        _tabStops = CreateDefaultTabStops(_columns);
         ResetMargins();
     }
 
@@ -138,7 +141,11 @@ internal sealed class AnsiTerminalBuffer
             Array.Copy(source.Cells, 0, target.Cells, 0, copyColumns);
         }
 
+        bool[] resizedTabStops = CreateDefaultTabStops(newColumns);
+        Array.Copy(_tabStops, resizedTabStops, Math.Min(_tabStops.Length, resizedTabStops.Length));
+
         _screen = resizedScreen;
+        _tabStops = resizedTabStops;
         _columns = newColumns;
         _rows = newRows;
         _cursorRow = Math.Clamp(_cursorRow - sourceStartRow + targetStartRow, 0, _rows - 1);
@@ -256,6 +263,11 @@ internal sealed class AnsiTerminalBuffer
         _scrollBottom = _rows - 1;
     }
 
+    private void ResetTabStops()
+    {
+        _tabStops = CreateDefaultTabStops(_columns);
+    }
+
     private void ResetTerminal()
     {
         _scrollback.Clear();
@@ -271,6 +283,7 @@ internal sealed class AnsiTerminalBuffer
         _charsetDesignationTarget = 0;
         _applicationCursorKeys = false;
         _applicationKeypad = false;
+        _insertMode = false;
         _originMode = false;
         _autoWrapEnabled = true;
         _bracketedPasteEnabled = false;
@@ -284,6 +297,7 @@ internal sealed class AnsiTerminalBuffer
         _state = ParserState.Normal;
         _csiBuffer.Clear();
         _oscBuffer.Clear();
+        ResetTabStops();
         ResetMargins();
     }
 
@@ -337,8 +351,7 @@ internal sealed class AnsiTerminalBuffer
                 _cursorColumn = Math.Max(0, _cursorColumn - 1);
                 return;
             case '\t':
-                int nextTab = ((_cursorColumn / 8) + 1) * 8;
-                _cursorColumn = Math.Min(_columns - 1, nextTab);
+                _cursorColumn = FindNextTabStop(_cursorColumn);
 
                 return;
             default:
@@ -398,6 +411,10 @@ internal sealed class AnsiTerminalBuffer
                 return;
             case 'M':
                 ReverseIndex();
+                _state = ParserState.Normal;
+                return;
+            case 'H':
+                SetTabStopAtCursor();
                 _state = ParserState.Normal;
                 return;
             case '=':
@@ -583,6 +600,9 @@ internal sealed class AnsiTerminalBuffer
             case 'f':
                 SetCursorPosition(GetParameter(parameters, 0, 1), GetParameter(parameters, 1, 1));
                 break;
+            case 'I':
+                MoveToNextTabStop(GetParameter(parameters, 0, 1));
+                break;
             case 'J':
                 ClearDisplay(GetParameter(parameters, 0, 0));
                 break;
@@ -607,17 +627,27 @@ internal sealed class AnsiTerminalBuffer
             case 'X':
                 EraseCharacters(GetParameter(parameters, 0, 1));
                 break;
+            case 'Z':
+                MoveToPreviousTabStop(GetParameter(parameters, 0, 1));
+                break;
             case 'd':
                 SetCursorRow(GetParameter(parameters, 0, 1));
                 break;
             case 'c':
                 DispatchDeviceAttributes(isPrivate, isSecondary);
                 break;
+            case 'g':
+                ClearTabStops(GetParameter(parameters, 0, 0));
+                break;
             case 'h':
             case 'l':
                 if (isPrivate)
                 {
                     SetPrivateMode(parameters, command == 'h');
+                }
+                else
+                {
+                    SetMode(parameters, command == 'h');
                 }
 
                 break;
@@ -769,6 +799,19 @@ internal sealed class AnsiTerminalBuffer
                     break;
                 case 2004:
                     _bracketedPasteEnabled = enabled;
+                    break;
+            }
+        }
+    }
+
+    private void SetMode(int?[] parameters, bool enabled)
+    {
+        foreach (int? parameter in parameters)
+        {
+            switch (parameter)
+            {
+                case 4:
+                    _insertMode = enabled;
                     break;
             }
         }
@@ -974,6 +1017,86 @@ internal sealed class AnsiTerminalBuffer
         return value == 0 ? (byte)0 : (byte)(55 + (value * 40));
     }
 
+    private static bool[] CreateDefaultTabStops(int columns)
+    {
+        var tabStops = new bool[Math.Max(columns, 0)];
+        for (int column = 8; column < tabStops.Length; column += 8)
+        {
+            tabStops[column] = true;
+        }
+
+        return tabStops;
+    }
+
+    private int FindNextTabStop(int currentColumn)
+    {
+        for (int column = Math.Clamp(currentColumn + 1, 0, _columns - 1); column < _columns; column++)
+        {
+            if (_tabStops[column])
+            {
+                return column;
+            }
+        }
+
+        return _columns - 1;
+    }
+
+    private int FindPreviousTabStop(int currentColumn)
+    {
+        for (int column = Math.Clamp(currentColumn - 1, 0, _columns - 1); column >= 0; column--)
+        {
+            if (_tabStops[column])
+            {
+                return column;
+            }
+        }
+
+        return 0;
+    }
+
+    private void MoveToNextTabStop(int count)
+    {
+        int stopCount = Math.Max(count, 1);
+        for (int index = 0; index < stopCount; index++)
+        {
+            _cursorColumn = FindNextTabStop(_cursorColumn);
+        }
+    }
+
+    private void MoveToPreviousTabStop(int count)
+    {
+        int stopCount = Math.Max(count, 1);
+        for (int index = 0; index < stopCount; index++)
+        {
+            _cursorColumn = FindPreviousTabStop(_cursorColumn);
+        }
+    }
+
+    private void SetTabStopAtCursor()
+    {
+        if (_cursorColumn >= 0 && _cursorColumn < _tabStops.Length)
+        {
+            _tabStops[_cursorColumn] = true;
+        }
+    }
+
+    private void ClearTabStops(int mode)
+    {
+        switch (mode)
+        {
+            case 0:
+                if (_cursorColumn >= 0 && _cursorColumn < _tabStops.Length)
+                {
+                    _tabStops[_cursorColumn] = false;
+                }
+
+                break;
+            case 3:
+                Array.Fill(_tabStops, false);
+                break;
+        }
+    }
+
     private void SetScrollRegion(int?[] parameters)
     {
         int top = Math.Clamp(GetParameter(parameters, 0, 1) - 1, 0, _rows - 1);
@@ -1168,6 +1291,11 @@ internal sealed class AnsiTerminalBuffer
         }
 
         TerminalLine line = _screen[_cursorRow];
+        if (_insertMode)
+        {
+            InsertCharacters(normalizedWidth);
+        }
+
         ClearWideOverlap(line, _cursorColumn);
         line.Cells[_cursorColumn] = new TerminalCell(text, _currentStyle, IsContinuation: false, Width: normalizedWidth);
 
