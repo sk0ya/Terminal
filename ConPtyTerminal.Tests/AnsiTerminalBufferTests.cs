@@ -129,4 +129,39 @@ public sealed class AnsiTerminalBufferTests
 
         Assert.Equal("s0", requestedTarget);
     }
+
+    [Fact]
+    public void ZwjEmojiSequenceOccupiesSingleWideCluster()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("👩\u200d💻");
+
+        Assert.Equal(2, buffer.CursorColumn);
+        Assert.Equal("👩\u200d💻", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void ZwjEmojiSequenceCanContinueAcrossProcessCalls()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("👩");
+        buffer.Process("\u200d💻");
+
+        Assert.Equal(2, buffer.CursorColumn);
+        Assert.Equal("👩\u200d💻", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void RegionalIndicatorPairOccupiesSingleWideCluster()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("🇯");
+        buffer.Process("🇵");
+
+        Assert.Equal(2, buffer.CursorColumn);
+        Assert.Equal("🇯🇵", buffer.GetScreenLineText(0).TrimEnd());
+    }
 }

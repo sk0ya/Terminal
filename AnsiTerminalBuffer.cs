@@ -70,6 +70,7 @@ internal sealed class AnsiTerminalBuffer
     private readonly List<TerminalLine> _scrollback = [];
     private readonly StringBuilder _csiBuffer = new();
     private readonly StringBuilder _oscBuffer = new();
+    private readonly StringBuilder _pendingClusterText = new();
 
     private List<TerminalLine> _screen;
     private bool[] _tabStops;
@@ -112,6 +113,9 @@ internal sealed class AnsiTerminalBuffer
     private string? _currentHyperlink;
     private string? _savedHyperlink;
     private string _windowTitle = string.Empty;
+    private int _pendingClusterWidth;
+    private bool _pendingClusterJoinNext;
+    private int _pendingClusterRegionalIndicatorCount;
 
     public event EventHandler<string>? InputSequenceGenerated;
     public event EventHandler<string>? ClipboardSetRequested;
@@ -198,9 +202,12 @@ internal sealed class AnsiTerminalBuffer
                 continue;
             }
 
+            FlushPendingCluster();
             ProcessChar(text[index]);
             index++;
         }
+
+        FlushPendingCluster();
     }
 
     public FlowDocument CreateDocument(FontFamily fontFamily, double fontSize, bool showCursor)
@@ -361,6 +368,7 @@ internal sealed class AnsiTerminalBuffer
         _currentHyperlink = null;
         _savedHyperlink = null;
         _windowTitle = string.Empty;
+        ClearPendingCluster();
         _state = ParserState.Normal;
         _csiBuffer.Clear();
         _oscBuffer.Clear();
@@ -432,11 +440,34 @@ internal sealed class AnsiTerminalBuffer
         int width = GetDisplayWidth(mappedRune);
         if (width <= 0)
         {
-            AppendCombiningRune(mappedRune);
+            AppendClusterExtension(mappedRune);
             return;
         }
 
-        PutText(mappedRune.ToString(), width);
+        if (_pendingClusterText.Length == 0)
+        {
+            if (TryExtendPreviousCluster(mappedRune, width))
+            {
+                return;
+            }
+
+            StartPendingCluster(mappedRune, width);
+            return;
+        }
+
+        if (ShouldAppendToPendingCluster(mappedRune))
+        {
+            AppendPendingClusterRune(mappedRune, width);
+            return;
+        }
+
+        FlushPendingCluster();
+        if (TryExtendPreviousCluster(mappedRune, width))
+        {
+            return;
+        }
+
+        StartPendingCluster(mappedRune, width);
     }
 
     private void ProcessEscape(char ch)
@@ -1508,6 +1539,165 @@ internal sealed class AnsiTerminalBuffer
         line.Cells[targetColumn] = cell with { Text = cell.Text + rune.ToString() };
     }
 
+    private void AppendClusterExtension(Rune rune)
+    {
+        if (_pendingClusterText.Length > 0)
+        {
+            AppendPendingClusterRune(rune, width: 0);
+            return;
+        }
+
+        AppendCombiningRune(rune);
+    }
+
+    private void StartPendingCluster(Rune rune, int width)
+    {
+        ClearPendingCluster();
+        _pendingClusterText.Append(rune.ToString());
+        _pendingClusterWidth = Math.Clamp(width, 1, 2);
+        _pendingClusterJoinNext = false;
+        _pendingClusterRegionalIndicatorCount = IsRegionalIndicator(rune) ? 1 : 0;
+    }
+
+    private void AppendPendingClusterRune(Rune rune, int width)
+    {
+        _pendingClusterText.Append(rune.ToString());
+        if (width > 0)
+        {
+            _pendingClusterWidth = Math.Max(_pendingClusterWidth, Math.Clamp(width, 1, 2));
+        }
+
+        _pendingClusterJoinNext = IsZeroWidthJoiner(rune);
+        _pendingClusterRegionalIndicatorCount = IsRegionalIndicator(rune)
+            ? _pendingClusterRegionalIndicatorCount + 1
+            : 0;
+    }
+
+    private bool ShouldAppendToPendingCluster(Rune rune)
+    {
+        return _pendingClusterJoinNext ||
+            (IsRegionalIndicator(rune) && _pendingClusterRegionalIndicatorCount == 1);
+    }
+
+    private void FlushPendingCluster()
+    {
+        if (_pendingClusterText.Length == 0)
+        {
+            return;
+        }
+
+        PutText(_pendingClusterText.ToString(), _pendingClusterWidth);
+        ClearPendingCluster();
+    }
+
+    private void ClearPendingCluster()
+    {
+        _pendingClusterText.Clear();
+        _pendingClusterWidth = 0;
+        _pendingClusterJoinNext = false;
+        _pendingClusterRegionalIndicatorCount = 0;
+    }
+
+    private bool TryExtendPreviousCluster(Rune rune, int width)
+    {
+        int targetColumn = FindPreviousClusterColumn();
+        if (targetColumn < 0)
+        {
+            return false;
+        }
+
+        TerminalLine line = _screen[_cursorRow];
+        TerminalCell cell = line.Cells[targetColumn];
+        if (!ShouldExtendRenderedCluster(cell.Text, rune))
+        {
+            return false;
+        }
+
+        int normalizedWidth = Math.Clamp(Math.Max(cell.Width, width), 1, 2);
+        line.Cells[targetColumn] = cell with
+        {
+            Text = cell.Text + rune.ToString(),
+            Width = normalizedWidth
+        };
+
+        if (cell.Width == 1 && normalizedWidth == 2 && targetColumn + 1 < _columns)
+        {
+            line.Cells[targetColumn + 1] = new TerminalCell(
+                string.Empty,
+                cell.Style,
+                cell.Hyperlink,
+                IsContinuation: true,
+                Width: 0);
+            _cursorColumn = Math.Max(_cursorColumn, targetColumn + 2);
+        }
+
+        return true;
+    }
+
+    private int FindPreviousClusterColumn()
+    {
+        if (_cursorColumn <= 0)
+        {
+            return -1;
+        }
+
+        int targetColumn = Math.Min(_cursorColumn - 1, _columns - 1);
+        TerminalLine line = _screen[_cursorRow];
+        while (targetColumn > 0 && line.Cells[targetColumn].IsContinuation)
+        {
+            targetColumn--;
+        }
+
+        TerminalCell cell = line.Cells[targetColumn];
+        return string.IsNullOrEmpty(cell.Text) || cell.Text == " " ? -1 : targetColumn;
+    }
+
+    private static bool ShouldExtendRenderedCluster(string text, Rune rune)
+    {
+        return EndsWithZeroWidthJoiner(text) ||
+            (IsRegionalIndicator(rune) && CountRegionalIndicators(text) == 1);
+    }
+
+    private static bool EndsWithZeroWidthJoiner(string text)
+    {
+        return TryGetLastRune(text, out Rune lastRune) && IsZeroWidthJoiner(lastRune);
+    }
+
+    private static int CountRegionalIndicators(string text)
+    {
+        int count = 0;
+        for (int index = 0; index < text.Length;)
+        {
+            if (!Rune.TryGetRuneAt(text, index, out Rune rune))
+            {
+                break;
+            }
+
+            if (IsRegionalIndicator(rune))
+            {
+                count++;
+            }
+
+            index += rune.Utf16SequenceLength;
+        }
+
+        return count;
+    }
+
+    private static bool TryGetLastRune(string text, out Rune rune)
+    {
+        for (int index = text.Length - 1; index >= 0; index--)
+        {
+            if (Rune.TryGetRuneAt(text, index, out rune))
+            {
+                return true;
+            }
+        }
+
+        rune = default;
+        return false;
+    }
+
     private int FindPreviousOccupiedColumn()
     {
         TerminalLine line = _screen[_cursorRow];
@@ -1898,6 +2088,16 @@ internal sealed class AnsiTerminalBuffer
             0xFE0F or
             >= 0x1F3FB and <= 0x1F3FF or
             >= 0xE0100 and <= 0xE01EF;
+    }
+
+    private static bool IsZeroWidthJoiner(Rune rune)
+    {
+        return rune.Value == 0x200D;
+    }
+
+    private static bool IsRegionalIndicator(Rune rune)
+    {
+        return rune.Value is >= 0x1F1E6 and <= 0x1F1FF;
     }
 
     private static int?[] ParseParameters(string paramText)
