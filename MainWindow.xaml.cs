@@ -761,6 +761,12 @@ public partial class MainWindow : Window
         }
 
         _cursorBlinkVisible = nextVisible;
+        if (UsesDocumentCursorRendering())
+        {
+            RequestDocumentRender();
+            return;
+        }
+
         UpdateOverlayState();
     }
 
@@ -978,10 +984,11 @@ public partial class MainWindow : Window
         _isRenderingTerminal = true;
         try
         {
+            bool showDocumentCursor = ShouldRenderBlockCursorInDocument();
             AnsiTerminalBuffer.TerminalDocumentSnapshot snapshot = _terminalBuffer.CreateDocument(
                 TerminalOutput.FontFamily,
                 TerminalOutput.FontSize,
-                showCursor: false);
+                showCursor: showDocumentCursor);
             _cursorAnchorElement = snapshot.CursorAnchor;
             TerminalOutput.Document = snapshot.Document;
             TerminalOutput.UpdateLayout();
@@ -1008,6 +1015,19 @@ public partial class MainWindow : Window
             (!_terminalBuffer.CursorBlinkEnabled || _cursorBlinkVisible);
     }
 
+    private bool UsesDocumentCursorRendering()
+    {
+        return _terminalBuffer.CursorShape == TerminalCursorShape.Block;
+    }
+
+    private bool ShouldRenderBlockCursorInDocument()
+    {
+        return UsesDocumentCursorRendering() &&
+            ShouldShowCursor() &&
+            _terminalBuffer.CursorVisible &&
+            !_isImeComposing;
+    }
+
     private bool HasTerminalInputFocus()
     {
         return TerminalInputProxy.IsKeyboardFocusWithin || TerminalOutput.IsKeyboardFocusWithin;
@@ -1018,6 +1038,12 @@ public partial class MainWindow : Window
         _cursorBlinkVisible = focused || !_terminalBuffer.CursorBlinkEnabled;
         if (_isRenderingTerminal)
         {
+            return;
+        }
+
+        if (UsesDocumentCursorRendering())
+        {
+            RequestDocumentRender();
             return;
         }
 
@@ -1209,7 +1235,10 @@ public partial class MainWindow : Window
 
     private bool ShouldShowCursorOverlay()
     {
-        return ShouldShowCursor() && _terminalBuffer.CursorVisible && !_isImeComposing;
+        return !UsesDocumentCursorRendering() &&
+            ShouldShowCursor() &&
+            _terminalBuffer.CursorVisible &&
+            !_isImeComposing;
     }
 
     private void UpdateOverlayState()
