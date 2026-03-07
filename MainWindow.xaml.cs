@@ -1048,20 +1048,21 @@ public partial class MainWindow : Window
     private void UpdateInputProxyPosition()
     {
         var (charWidth, charHeight) = MeasureCharacterCell();
+        TerminalViewportMetrics viewport = GetTerminalViewportMetrics();
         TerminalInputProxy.Width = Math.Max(2, charWidth);
         TerminalInputProxy.Height = Math.Max(2, charHeight);
         TerminalInputProxy.FontFamily = TerminalOutput.FontFamily;
         TerminalInputProxy.FontSize = TerminalOutput.FontSize;
 
-        double left = TerminalOutput.Padding.Left + (_terminalBuffer.CursorColumn * charWidth);
-        double top = TerminalOutput.Padding.Top + (_terminalBuffer.CursorRow * charHeight);
-        double maxLeft = Math.Max(TerminalOutput.Padding.Left, TerminalOutput.ActualWidth - TerminalOutput.Padding.Right - TerminalInputProxy.Width);
-        double maxTop = Math.Max(TerminalOutput.Padding.Top, TerminalOutput.ActualHeight - TerminalOutput.Padding.Bottom - TerminalInputProxy.Height);
+        double left = viewport.ContentLeft + (_terminalBuffer.CursorColumn * charWidth);
+        double top = viewport.ContentTop + (_terminalBuffer.CursorRow * charHeight);
+        double maxLeft = Math.Max(viewport.ViewportLeft, viewport.ViewportRight - TerminalInputProxy.Width);
+        double maxTop = Math.Max(viewport.ViewportTop, viewport.ViewportBottom - TerminalInputProxy.Height);
 
-        Canvas.SetLeft(TerminalInputProxy, Math.Clamp(left, TerminalOutput.Padding.Left, maxLeft));
-        Canvas.SetTop(TerminalInputProxy, Math.Clamp(top, TerminalOutput.Padding.Top, maxTop));
-        UpdateCursorOverlay(left, top, charWidth, charHeight, maxLeft, maxTop);
-        UpdateImeCompositionOverlay(left, top, charHeight, maxLeft, maxTop);
+        Canvas.SetLeft(TerminalInputProxy, Math.Clamp(left, viewport.ViewportLeft, maxLeft));
+        Canvas.SetTop(TerminalInputProxy, Math.Clamp(top, viewport.ViewportTop, maxTop));
+        UpdateCursorOverlay(left, top, charWidth, charHeight, viewport, maxLeft, maxTop);
+        UpdateImeCompositionOverlay(left, top, charHeight, viewport, maxLeft, maxTop);
         UpdateNativeImeWindow();
     }
 
@@ -1104,7 +1105,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void UpdateImeCompositionOverlay(double left, double top, double charHeight, double maxLeft, double maxTop)
+    private void UpdateImeCompositionOverlay(double left, double top, double charHeight, TerminalViewportMetrics viewport, double maxLeft, double maxTop)
     {
         if (!_isImeComposing || string.IsNullOrEmpty(_imeCompositionText) || !HasTerminalInputFocus())
         {
@@ -1120,8 +1121,8 @@ public partial class MainWindow : Window
         Size textSize = MeasureTerminalText(_imeCompositionText);
         double overlayWidth = Math.Max(textSize.Width + 4, 8);
         double overlayHeight = Math.Max(textSize.Height, charHeight);
-        double overlayLeft = Math.Clamp(left, TerminalOutput.Padding.Left, Math.Max(TerminalOutput.Padding.Left, maxLeft - overlayWidth + TerminalInputProxy.Width));
-        double overlayTop = Math.Clamp(top, TerminalOutput.Padding.Top, Math.Max(TerminalOutput.Padding.Top, maxTop - overlayHeight));
+        double overlayLeft = Math.Clamp(left, viewport.ViewportLeft, Math.Max(viewport.ViewportLeft, maxLeft - overlayWidth + TerminalInputProxy.Width));
+        double overlayTop = Math.Clamp(top, viewport.ViewportTop, Math.Max(viewport.ViewportTop, maxTop - overlayHeight));
 
         ImeCompositionOverlay.Width = overlayWidth;
         ImeCompositionOverlay.Height = overlayHeight;
@@ -1130,7 +1131,7 @@ public partial class MainWindow : Window
         ImeCompositionOverlay.Visibility = Visibility.Visible;
     }
 
-    private void UpdateCursorOverlay(double left, double top, double charWidth, double charHeight, double maxLeft, double maxTop)
+    private void UpdateCursorOverlay(double left, double top, double charWidth, double charHeight, TerminalViewportMetrics viewport, double maxLeft, double maxTop)
     {
         if (!ShouldShowCursorOverlay())
         {
@@ -1155,8 +1156,8 @@ public partial class MainWindow : Window
                 break;
         }
 
-        double overlayLeft = Math.Clamp(left, TerminalOutput.Padding.Left, Math.Max(TerminalOutput.Padding.Left, maxLeft - overlayWidth + TerminalInputProxy.Width));
-        double overlayTop = Math.Clamp(top, TerminalOutput.Padding.Top, Math.Max(TerminalOutput.Padding.Top, maxTop - overlayHeight));
+        double overlayLeft = Math.Clamp(left, viewport.ViewportLeft, Math.Max(viewport.ViewportLeft, maxLeft - overlayWidth + TerminalInputProxy.Width));
+        double overlayTop = Math.Clamp(top, viewport.ViewportTop, Math.Max(viewport.ViewportTop, maxTop - overlayHeight));
 
         TerminalCursorOverlay.Width = overlayWidth;
         TerminalCursorOverlay.Height = overlayHeight;
@@ -1697,8 +1698,9 @@ public partial class MainWindow : Window
     private bool TryGetMouseCell(Point position, out int column, out int row)
     {
         var (charWidth, charHeight) = MeasureCharacterCell();
-        double x = Math.Max(0, position.X - TerminalOutput.Padding.Left);
-        double y = Math.Max(0, position.Y - TerminalOutput.Padding.Top);
+        TerminalViewportMetrics viewport = GetTerminalViewportMetrics();
+        double x = Math.Max(0, position.X - viewport.ViewportLeft + viewport.HorizontalOffset);
+        double y = Math.Max(0, position.Y - viewport.ViewportTop + viewport.VerticalOffset);
         column = Math.Clamp((int)(x / charWidth) + 1, 1, _currentColumns);
         row = Math.Clamp((int)(y / charHeight) + 1, 1, _currentRows);
         return true;
@@ -1706,10 +1708,31 @@ public partial class MainWindow : Window
 
     private (double Width, double Height) MeasureCharacterCell()
     {
-        Size size = MeasureTerminalText("W");
+        const int SampleLength = 32;
+        Size size = MeasureTerminalText(new string('W', SampleLength));
         return (
-            Math.Max(size.Width, 1.0),
+            Math.Max(size.Width / SampleLength, 1.0),
             Math.Max(size.Height, 1.0));
+    }
+
+    private TerminalViewportMetrics GetTerminalViewportMetrics()
+    {
+        double horizontalOffset = _terminalScrollViewer?.HorizontalOffset ?? 0;
+        double verticalOffset = _terminalScrollViewer?.VerticalOffset ?? 0;
+        double viewportLeft = TerminalOutput.BorderThickness.Left + TerminalOutput.Padding.Left;
+        double viewportTop = TerminalOutput.BorderThickness.Top + TerminalOutput.Padding.Top;
+        double viewportRight = Math.Max(viewportLeft, TerminalOutput.ActualWidth - TerminalOutput.BorderThickness.Right - TerminalOutput.Padding.Right);
+        double viewportBottom = Math.Max(viewportTop, TerminalOutput.ActualHeight - TerminalOutput.BorderThickness.Bottom - TerminalOutput.Padding.Bottom);
+
+        return new TerminalViewportMetrics(
+            viewportLeft,
+            viewportTop,
+            viewportRight,
+            viewportBottom,
+            viewportLeft - horizontalOffset,
+            viewportTop - verticalOffset,
+            horizontalOffset,
+            verticalOffset);
     }
 
     private Size MeasureTerminalText(string text)
@@ -1938,4 +1961,14 @@ public partial class MainWindow : Window
         NativePoint CompositionOrigin,
         NativePoint CandidateOrigin,
         NativeRect CaretRect);
+
+    private readonly record struct TerminalViewportMetrics(
+        double ViewportLeft,
+        double ViewportTop,
+        double ViewportRight,
+        double ViewportBottom,
+        double ContentLeft,
+        double ContentTop,
+        double HorizontalOffset,
+        double VerticalOffset);
 }
