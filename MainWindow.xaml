@@ -82,6 +82,12 @@
 
             <Canvas IsHitTestVisible="False"
                     Panel.ZIndex="1">
+                <Border x:Name="TerminalCursorOverlay"
+                        Visibility="Collapsed"
+                        Width="2"
+                        Height="20"
+                        Background="#A0E3E3E3" />
+
                 <Border x:Name="ImeCompositionOverlay"
                         Visibility="Collapsed"
                         Background="#111111"

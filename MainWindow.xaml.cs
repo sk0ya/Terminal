@@ -547,6 +547,7 @@ public partial class MainWindow : Window
             ClearPendingOutput();
             ClearImeComposition();
             ResetInputProxyText();
+            UpdateOverlayState();
             UpdateUiState(isRunning: false);
             UpdateWindowTitle();
             return;
@@ -560,6 +561,7 @@ public partial class MainWindow : Window
         ClearPendingOutput();
         ClearImeComposition();
         ResetInputProxyText();
+        UpdateOverlayState();
         UpdateUiState(isRunning: false);
         UpdateWindowTitle();
         SetStatus("Stopped.");
@@ -592,7 +594,7 @@ public partial class MainWindow : Window
         }
 
         _cursorBlinkVisible = nextVisible;
-        RenderTerminal();
+        UpdateOverlayState();
     }
 
     private bool SendTerminalInput(string text)
@@ -767,7 +769,7 @@ public partial class MainWindow : Window
             TerminalOutput.Document = _terminalBuffer.CreateDocument(
                 TerminalOutput.FontFamily,
                 TerminalOutput.FontSize,
-                showCursor: ShouldShowCursor());
+                showCursor: false);
             TerminalOutput.UpdateLayout();
             UpdateInputProxyPosition();
             if (shouldRestoreFocus && !HasTerminalInputFocus())
@@ -802,7 +804,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        RenderTerminal();
+        UpdateOverlayState();
     }
 
     private void QueueTerminalInputFocus()
@@ -842,6 +844,7 @@ public partial class MainWindow : Window
 
         Canvas.SetLeft(TerminalInputProxy, Math.Clamp(left, TerminalOutput.Padding.Left, maxLeft));
         Canvas.SetTop(TerminalInputProxy, Math.Clamp(top, TerminalOutput.Padding.Top, maxTop));
+        UpdateCursorOverlay(left, top, charWidth, charHeight, maxLeft, maxTop);
         UpdateImeCompositionOverlay(left, top, charHeight, maxLeft, maxTop);
     }
 
@@ -868,6 +871,10 @@ public partial class MainWindow : Window
         _isImeComposing = false;
         ImeCompositionOverlay.Visibility = Visibility.Collapsed;
         ImeCompositionTextBlock.Text = string.Empty;
+        if (!_isRenderingTerminal)
+        {
+            UpdateOverlayState();
+        }
     }
 
     private void UpdateImeCompositionOverlay(double left, double top, double charHeight, double maxLeft, double maxTop)
@@ -894,6 +901,41 @@ public partial class MainWindow : Window
         Canvas.SetLeft(ImeCompositionOverlay, overlayLeft);
         Canvas.SetTop(ImeCompositionOverlay, overlayTop);
         ImeCompositionOverlay.Visibility = Visibility.Visible;
+    }
+
+    private void UpdateCursorOverlay(double left, double top, double charWidth, double charHeight, double maxLeft, double maxTop)
+    {
+        if (!ShouldShowCursorOverlay())
+        {
+            TerminalCursorOverlay.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        double overlayWidth = Math.Max(2, Math.Ceiling(charWidth));
+        double overlayHeight = Math.Max(2, Math.Ceiling(charHeight));
+        double overlayLeft = Math.Clamp(left, TerminalOutput.Padding.Left, Math.Max(TerminalOutput.Padding.Left, maxLeft - overlayWidth + TerminalInputProxy.Width));
+        double overlayTop = Math.Clamp(top, TerminalOutput.Padding.Top, Math.Max(TerminalOutput.Padding.Top, maxTop - overlayHeight));
+
+        TerminalCursorOverlay.Width = overlayWidth;
+        TerminalCursorOverlay.Height = overlayHeight;
+        Canvas.SetLeft(TerminalCursorOverlay, overlayLeft);
+        Canvas.SetTop(TerminalCursorOverlay, overlayTop);
+        TerminalCursorOverlay.Visibility = Visibility.Visible;
+    }
+
+    private bool ShouldShowCursorOverlay()
+    {
+        return ShouldShowCursor() && _terminalBuffer.CursorVisible && !_isImeComposing;
+    }
+
+    private void UpdateOverlayState()
+    {
+        if (_isRenderingTerminal)
+        {
+            return;
+        }
+
+        UpdateInputProxyPosition();
     }
 
     private void AttachTerminalScrollViewer()

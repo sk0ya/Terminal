@@ -102,6 +102,7 @@ internal sealed class AnsiTerminalBuffer
     public bool BracketedPasteEnabled => _bracketedPasteEnabled;
     public int CursorRow => _cursorRow;
     public int CursorColumn => Math.Clamp(_cursorColumn, 0, _columns - 1);
+    public bool CursorVisible => _cursorVisible;
     public bool FocusReportingEnabled => _focusReportingEnabled;
     public bool UseSgrMouseEncoding => _useSgrMouseEncoding;
     public TerminalMouseTrackingMode MouseTrackingMode => _mouseTrackingMode;
