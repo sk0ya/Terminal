@@ -164,4 +164,39 @@ public sealed class AnsiTerminalBufferTests
         Assert.Equal(2, buffer.CursorColumn);
         Assert.Equal("🇯🇵", buffer.GetScreenLineText(0).TrimEnd());
     }
+
+    [Fact]
+    public void DecPrivate1048RestoresSavedCursorPosition()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("\u001b[3;5H");
+        buffer.Process("\u001b[?1048h");
+        buffer.Process("\u001b[8;12H");
+        buffer.Process("\u001b[?1048l");
+        buffer.Process("\u001b[6n");
+
+        Assert.Equal("\u001b[3;5R", emitted);
+    }
+
+    [Fact]
+    public void DecPrivate1049RestoresPrimaryScreenAndCursor()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("main");
+        buffer.Process("\u001b[2;4H");
+        buffer.Process("\u001b[?1049h");
+        buffer.Process("alt");
+        buffer.Process("\u001b[8;8H");
+        buffer.Process("\u001b[?1049l");
+        buffer.Process("\u001b[6n");
+
+        Assert.Equal("main", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("\u001b[2;4R", emitted);
+    }
 }

@@ -928,7 +928,6 @@ internal sealed class AnsiTerminalBuffer
                     break;
                 case 47:
                 case 1047:
-                case 1049:
                     if (enabled)
                     {
                         EnterAlternateScreen();
@@ -936,6 +935,30 @@ internal sealed class AnsiTerminalBuffer
                     else
                     {
                         ExitAlternateScreen();
+                    }
+
+                    break;
+                case 1048:
+                    if (enabled)
+                    {
+                        SaveCursorState();
+                    }
+                    else
+                    {
+                        RestoreCursorState();
+                    }
+
+                    break;
+                case 1049:
+                    if (enabled)
+                    {
+                        SaveCursorState();
+                        EnterAlternateScreen();
+                    }
+                    else
+                    {
+                        ExitAlternateScreen();
+                        RestoreCursorState();
                     }
 
                     break;
