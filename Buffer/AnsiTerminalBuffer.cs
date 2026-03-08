@@ -5,7 +5,7 @@ using System.Windows.Documents;
 using System.Windows.Media;
 using System.Globalization;
 
-namespace Terminal;
+namespace Terminal.Buffer;
 
 internal enum TerminalMouseTrackingMode
 {

@@ -1,5 +1,8 @@
 using System.IO;
 
+using Terminal.Sessions;
+using Terminal.Settings;
+
 namespace Terminal.Tests;
 
 public sealed class TerminalProfileCatalogTests

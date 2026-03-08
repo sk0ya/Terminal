@@ -1,6 +1,9 @@
 using System.IO;
 
-namespace Terminal;
+using Terminal.Sessions;
+using Terminal.Settings;
+
+namespace Terminal.Tabs;
 
 internal static class TerminalTabTitleResolver
 {

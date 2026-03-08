@@ -4,6 +4,9 @@ using System.Threading;
 using System.Windows.Documents;
 using System.Windows.Media;
 
+using Terminal.Buffer;
+using Terminal.Rendering;
+
 namespace Terminal.Tests;
 
 public sealed class TerminalDocumentRendererTests

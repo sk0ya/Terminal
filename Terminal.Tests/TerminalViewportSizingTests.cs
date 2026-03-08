@@ -1,5 +1,7 @@
 using System.Windows;
 
+using Terminal.Buffer;
+
 namespace Terminal.Tests;
 
 public sealed class TerminalViewportSizingTests

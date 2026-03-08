@@ -3,7 +3,9 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
 
-namespace Terminal;
+using Terminal.Buffer;
+
+namespace Terminal.Rendering;
 
 internal sealed class TerminalDocumentRenderer
 {

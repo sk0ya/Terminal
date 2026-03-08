@@ -7,7 +7,10 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 
-namespace Terminal;
+using Terminal.Settings;
+using Terminal.Sessions;
+
+namespace Terminal.Tabs;
 
 public partial class TerminalTabView
 {

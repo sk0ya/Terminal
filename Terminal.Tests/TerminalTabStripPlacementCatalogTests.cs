@@ -1,3 +1,5 @@
+using Terminal.Settings;
+
 namespace Terminal.Tests;
 
 public sealed class TerminalTabStripPlacementCatalogTests

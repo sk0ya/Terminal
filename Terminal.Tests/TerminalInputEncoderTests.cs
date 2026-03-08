@@ -1,6 +1,9 @@
 using System.Text;
 using System.Windows.Input;
 
+using Terminal.Buffer;
+using Terminal.Input;
+
 namespace Terminal.Tests;
 
 public sealed class TerminalInputEncoderTests

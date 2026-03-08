@@ -1,4 +1,4 @@
-namespace Terminal;
+namespace Terminal.Sessions;
 
 public enum TerminalSessionKind
 {

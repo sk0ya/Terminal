@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.IO;
 
-namespace Terminal;
+namespace Terminal.Settings;
 
 public sealed class TerminalAppSettings
 {

@@ -1,4 +1,4 @@
-namespace Terminal;
+namespace Terminal.Sessions;
 
 internal static class TerminalSessionStallDetector
 {

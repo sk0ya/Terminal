@@ -1,6 +1,8 @@
 using System.IO;
 
-namespace Terminal;
+using Terminal.Sessions;
+
+namespace Terminal.Settings;
 
 internal static class TerminalProfileCatalog
 {

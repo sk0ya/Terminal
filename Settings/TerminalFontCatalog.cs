@@ -1,6 +1,6 @@
 using System.Windows.Media;
 
-namespace Terminal;
+namespace Terminal.Settings;
 
 internal static class TerminalFontCatalog
 {

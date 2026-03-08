@@ -1,7 +1,9 @@
 using System.Text;
 using System.Windows.Input;
 
-namespace Terminal;
+using Terminal.Buffer;
+
+namespace Terminal.Input;
 
 internal static class TerminalInputEncoder
 {

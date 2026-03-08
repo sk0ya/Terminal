@@ -9,7 +9,13 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 
-namespace Terminal;
+using Terminal.Buffer;
+using Terminal.Input;
+using Terminal.Rendering;
+using Terminal.Sessions;
+using Terminal.Settings;
+
+namespace Terminal.Tabs;
 
 public partial class TerminalTabView : UserControl
 {

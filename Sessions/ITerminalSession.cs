@@ -1,4 +1,4 @@
-namespace Terminal;
+namespace Terminal.Sessions;
 
 public interface ITerminalSession : IDisposable, IAsyncDisposable
 {

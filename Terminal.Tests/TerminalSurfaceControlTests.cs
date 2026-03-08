@@ -3,6 +3,9 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Media;
 
+using Terminal.Buffer;
+using Terminal.Rendering;
+
 namespace Terminal.Tests;
 
 public sealed class TerminalSurfaceControlTests

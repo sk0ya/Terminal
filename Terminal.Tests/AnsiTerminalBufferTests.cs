@@ -1,3 +1,5 @@
+using Terminal.Buffer;
+
 namespace Terminal.Tests;
 
 public sealed class AnsiTerminalBufferTests

@@ -8,6 +8,9 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Shell;
 using System.Windows.Threading;
 
+using Terminal.Settings;
+using Terminal.Tabs;
+
 namespace Terminal;
 
 public partial class MainWindow : Window

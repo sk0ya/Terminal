@@ -1,6 +1,6 @@
 using System.Windows.Input;
 
-namespace Terminal;
+namespace Terminal.Input;
 
 internal static class TerminalKeyChordTranslator
 {

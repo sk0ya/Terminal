@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 
+using Terminal.Sessions;
+
 namespace Terminal.Tests;
 
 public sealed class SessionSmokeTests

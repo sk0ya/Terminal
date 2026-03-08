@@ -1,5 +1,7 @@
 using System.Windows.Input;
 
+using Terminal.Input;
+
 namespace Terminal.Tests;
 
 public sealed class TerminalKeyChordTranslatorTests

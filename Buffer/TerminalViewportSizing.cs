@@ -1,6 +1,6 @@
 using System.Windows;
 
-namespace Terminal;
+namespace Terminal.Buffer;
 
 internal static class TerminalViewportSizing
 {

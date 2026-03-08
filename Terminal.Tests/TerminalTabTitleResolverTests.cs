@@ -1,3 +1,6 @@
+using Terminal.Settings;
+using Terminal.Tabs;
+
 namespace Terminal.Tests;
 
 public sealed class TerminalTabTitleResolverTests

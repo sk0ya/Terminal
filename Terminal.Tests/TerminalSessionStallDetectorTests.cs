@@ -1,3 +1,5 @@
+using Terminal.Sessions;
+
 namespace Terminal.Tests;
 
 public sealed class TerminalSessionStallDetectorTests

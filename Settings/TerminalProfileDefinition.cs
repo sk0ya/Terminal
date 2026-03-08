@@ -1,4 +1,4 @@
-namespace Terminal;
+namespace Terminal.Settings;
 
 internal sealed record TerminalProfileDefinition(
     string Id,

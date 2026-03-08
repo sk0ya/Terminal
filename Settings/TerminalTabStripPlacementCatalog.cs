@@ -1,4 +1,4 @@
-namespace Terminal;
+namespace Terminal.Settings;
 
 public static class TerminalTabStripPlacementCatalog
 {

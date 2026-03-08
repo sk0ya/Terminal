@@ -4,7 +4,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace Terminal;
+namespace Terminal.Sessions;
 
 public sealed class ConPtySession : ITerminalSession
 {
