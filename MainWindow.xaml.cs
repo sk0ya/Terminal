@@ -225,24 +225,26 @@ public partial class MainWindow : Window
             Text = "Terminal",
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            Width = 150
+            Width = 110
         };
 
         var closeButton = new Button
         {
             Content = "×",
-            Width = 20,
-            Height = 20,
+            Width = 18,
+            Height = 18,
+            Margin = new Thickness(3, 0, 0, 0),
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
             Foreground = new SolidColorBrush(Color.FromRgb(0xA7, 0xA7, 0xA7)),
-            FontSize = 12,
+            FontSize = 13,
             Cursor = Cursors.Hand
         };
 
         var headerPanel = new StackPanel
         {
-            Orientation = Orientation.Horizontal
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center
         };
         headerPanel.Children.Add(titleText);
         headerPanel.Children.Add(closeButton);
@@ -252,6 +254,7 @@ public partial class MainWindow : Window
             Background = new SolidColorBrush(Color.FromRgb(0x1B, 0x1B, 0x1B)),
             BorderBrush = new SolidColorBrush(Color.FromRgb(0x2A, 0x2A, 0x2A)),
             BorderThickness = new Thickness(0, 0, 1, 0),
+            Padding = new Thickness(8, 0, 6, 0),
             Child = headerPanel
         };
 

@@ -190,14 +190,20 @@
     <Border Background="{StaticResource PanelBrush}"
             BorderBrush="{StaticResource BorderBrush}"
             BorderThickness="1"
-            CornerRadius="12">
+            CornerRadius="12"
+            Padding="20,16">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="10" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="10" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="10" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="10" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="10" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
@@ -218,48 +224,48 @@
                       TextSearch.TextPath="DisplayName"
                       SelectionChanged="ProfileComboBox_SelectionChanged" />
 
-            <TextBlock Grid.Row="1"
+            <TextBlock Grid.Row="2"
                        Grid.Column="0"
                        VerticalAlignment="Center"
                        Foreground="{StaticResource MutedBrush}"
                        Text="Command" />
             <TextBox x:Name="CommandTextBox"
-                     Grid.Row="1"
-                     Grid.Column="1"
-                     Style="{StaticResource InputTextBoxStyle}"
-                     TextChanged="CommandTextBox_TextChanged" />
-
-            <TextBlock Grid.Row="2"
-                       Grid.Column="0"
-                       VerticalAlignment="Center"
-                       Foreground="{StaticResource MutedBrush}"
-                       Text="Start in" />
-            <TextBox x:Name="WorkingDirectoryTextBox"
                      Grid.Row="2"
                      Grid.Column="1"
                      Style="{StaticResource InputTextBoxStyle}"
-                     TextChanged="WorkingDirectoryTextBox_TextChanged"
-                     LostKeyboardFocus="WorkingDirectoryTextBox_LostKeyboardFocus" />
-
-            <TextBlock Grid.Row="3"
-                       Grid.Column="0"
-                       VerticalAlignment="Center"
-                       Foreground="{StaticResource MutedBrush}"
-                       Text="Font" />
-            <ComboBox x:Name="FontFamilyComboBox"
-                      Grid.Row="3"
-                      Grid.Column="1"
-                      Style="{StaticResource InputComboBoxStyle}"
-                      ItemTemplate="{StaticResource FontFamilyItemTemplate}"
-                      SelectionChanged="FontFamilyComboBox_SelectionChanged" />
+                     TextChanged="CommandTextBox_TextChanged" />
 
             <TextBlock Grid.Row="4"
                        Grid.Column="0"
                        VerticalAlignment="Center"
                        Foreground="{StaticResource MutedBrush}"
+                       Text="Start in" />
+            <TextBox x:Name="WorkingDirectoryTextBox"
+                     Grid.Row="4"
+                     Grid.Column="1"
+                     Style="{StaticResource InputTextBoxStyle}"
+                     TextChanged="WorkingDirectoryTextBox_TextChanged"
+                     LostKeyboardFocus="WorkingDirectoryTextBox_LostKeyboardFocus" />
+
+            <TextBlock Grid.Row="6"
+                       Grid.Column="0"
+                       VerticalAlignment="Center"
+                       Foreground="{StaticResource MutedBrush}"
+                       Text="Font" />
+            <ComboBox x:Name="FontFamilyComboBox"
+                      Grid.Row="6"
+                      Grid.Column="1"
+                      Style="{StaticResource InputComboBoxStyle}"
+                      ItemTemplate="{StaticResource FontFamilyItemTemplate}"
+                      SelectionChanged="FontFamilyComboBox_SelectionChanged" />
+
+            <TextBlock Grid.Row="8"
+                       Grid.Column="0"
+                       VerticalAlignment="Center"
+                       Foreground="{StaticResource MutedBrush}"
                        Text="Font size" />
             <TextBox x:Name="FontSizeTextBox"
-                     Grid.Row="4"
+                     Grid.Row="8"
                      Grid.Column="1"
                      Width="84"
                      HorizontalAlignment="Left"
@@ -267,13 +273,13 @@
                      TextChanged="FontSizeTextBox_TextChanged"
                      LostKeyboardFocus="FontSizeTextBox_LostKeyboardFocus" />
 
-            <TextBlock Grid.Row="5"
+            <TextBlock Grid.Row="10"
                        Grid.Column="0"
                        VerticalAlignment="Center"
                        Foreground="{StaticResource MutedBrush}"
                        Text="Tabs" />
             <ComboBox x:Name="TabStripPlacementComboBox"
-                      Grid.Row="5"
+                      Grid.Row="10"
                       Grid.Column="1"
                       Style="{StaticResource InputComboBoxStyle}"
                       ItemTemplate="{StaticResource TabStripPlacementItemTemplate}"

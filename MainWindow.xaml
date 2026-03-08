@@ -42,11 +42,11 @@
         </ItemsPanelTemplate>
 
         <Style x:Key="TabActionButtonStyle" TargetType="Button">
-            <Setter Property="Height" Value="34" />
-            <Setter Property="Width" Value="34" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="Width" Value="30" />
             <Setter Property="Margin" Value="0" />
             <Setter Property="Padding" Value="0" />
-            <Setter Property="FontSize" Value="18" />
+            <Setter Property="FontSize" Value="17" />
             <Setter Property="Foreground" Value="{StaticResource TabTextMutedBrush}" />
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="Transparent" />
