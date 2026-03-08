@@ -1,7 +1,7 @@
 using System.Text;
 using System.Windows.Input;
 
-namespace ConPtyTerminal;
+namespace Terminal;
 
 internal static class TerminalInputEncoder
 {

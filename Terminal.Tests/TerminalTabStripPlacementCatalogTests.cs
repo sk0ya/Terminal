@@ -1,4 +1,4 @@
-namespace ConPtyTerminal.Tests;
+namespace Terminal.Tests;
 
 public sealed class TerminalTabStripPlacementCatalogTests
 {

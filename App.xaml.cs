@@ -1,5 +1,5 @@
 using System.Windows;
 
-namespace ConPtyTerminal;
+namespace Terminal;
 
 public partial class App : Application { }

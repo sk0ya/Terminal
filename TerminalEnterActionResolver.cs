@@ -1,6 +1,6 @@
 using System.Windows.Input;
 
-namespace ConPtyTerminal;
+namespace Terminal;
 
 internal enum TerminalEnterAction
 {

@@ -8,7 +8,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Shell;
 using System.Windows.Threading;
 
-namespace ConPtyTerminal;
+namespace Terminal;
 
 public partial class MainWindow : Window
 {

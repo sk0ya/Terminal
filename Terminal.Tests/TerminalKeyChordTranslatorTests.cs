@@ -1,6 +1,6 @@
 using System.Windows.Input;
 
-namespace ConPtyTerminal.Tests;
+namespace Terminal.Tests;
 
 public sealed class TerminalKeyChordTranslatorTests
 {

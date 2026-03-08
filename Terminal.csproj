@@ -9,9 +9,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="ConPtyTerminal.Tests\**\*.cs" />
-    <EmbeddedResource Remove="ConPtyTerminal.Tests\**\*" />
-    <None Remove="ConPtyTerminal.Tests\**\*" />
+    <Compile Remove="Terminal.Tests\**\*.cs" />
+    <EmbeddedResource Remove="Terminal.Tests\**\*" />
+    <None Remove="Terminal.Tests\**\*" />
   </ItemGroup>
 
 </Project>

@@ -3,7 +3,7 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Media;
 
-namespace ConPtyTerminal.Tests;
+namespace Terminal.Tests;
 
 public sealed class TerminalSurfaceControlTests
 {

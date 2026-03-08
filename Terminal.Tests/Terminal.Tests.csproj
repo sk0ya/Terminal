@@ -20,7 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ConPtyTerminal.csproj" />
+    <ProjectReference Include="..\Terminal.csproj" />
   </ItemGroup>
 
 </Project>

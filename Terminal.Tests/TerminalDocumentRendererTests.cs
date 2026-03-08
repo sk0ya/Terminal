@@ -4,7 +4,7 @@ using System.Threading;
 using System.Windows.Documents;
 using System.Windows.Media;
 
-namespace ConPtyTerminal.Tests;
+namespace Terminal.Tests;
 
 public sealed class TerminalDocumentRendererTests
 {

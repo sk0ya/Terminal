@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.IO;
 
-namespace ConPtyTerminal;
+namespace Terminal;
 
 public sealed class TerminalAppSettings
 {
@@ -57,6 +57,6 @@ public sealed class TerminalAppSettings
     private static string GetSettingsPath()
     {
         string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        return Path.Combine(localAppData, "ConPtyTerminal", "settings.json");
+        return Path.Combine(localAppData, "Terminal", "settings.json");
     }
 }

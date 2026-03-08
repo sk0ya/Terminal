@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 
-namespace ConPtyTerminal.Tests;
+namespace Terminal.Tests;
 
 public sealed class SessionSmokeTests
 {
@@ -191,7 +191,7 @@ public sealed class SessionSmokeTests
 
     private static string CreateTemporaryWorkingDirectory()
     {
-        string workingDirectory = Path.Combine(Path.GetTempPath(), "ConPtyTerminal.Tests", Guid.NewGuid().ToString("N"));
+        string workingDirectory = Path.Combine(Path.GetTempPath(), "Terminal.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workingDirectory);
         return workingDirectory;
     }

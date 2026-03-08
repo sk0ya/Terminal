@@ -1,6 +1,6 @@
 using System.IO;
 
-namespace ConPtyTerminal.Tests;
+namespace Terminal.Tests;
 
 public sealed class TerminalProfileCatalogTests
 {
@@ -139,7 +139,7 @@ public sealed class TerminalProfileCatalogTests
 
     private static string CreateTemporaryDirectory()
     {
-        string directory = Path.Combine(Path.GetTempPath(), "ConPtyTerminal.Tests", Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(Path.GetTempPath(), "Terminal.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         return directory;
     }

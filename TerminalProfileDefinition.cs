@@ -1,4 +1,4 @@
-namespace ConPtyTerminal;
+namespace Terminal;
 
 internal sealed record TerminalProfileDefinition(
     string Id,

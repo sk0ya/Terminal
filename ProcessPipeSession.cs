@@ -3,7 +3,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace ConPtyTerminal;
+namespace Terminal;
 
 public sealed class ProcessPipeSession : ITerminalSession
 {

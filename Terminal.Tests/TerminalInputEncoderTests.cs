@@ -1,7 +1,7 @@
 using System.Text;
 using System.Windows.Input;
 
-namespace ConPtyTerminal.Tests;
+namespace Terminal.Tests;
 
 public sealed class TerminalInputEncoderTests
 {
