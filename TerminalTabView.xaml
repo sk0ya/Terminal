@@ -347,6 +347,7 @@
                              PreviewMouseUp="TerminalOutput_PreviewMouseUp"
                              PreviewMouseMove="TerminalOutput_PreviewMouseMove"
                              PreviewMouseWheel="TerminalOutput_PreviewMouseWheel"
+                             LostMouseCapture="TerminalOutput_LostMouseCapture"
                              GotKeyboardFocus="TerminalOutput_GotKeyboardFocus"
                              LostKeyboardFocus="TerminalOutput_LostKeyboardFocus" />
 

@@ -57,6 +57,7 @@ public partial class TerminalTabView : UserControl
     private bool _pendingRestoreFocusAfterRender;
     private bool _resettingInputProxyText;
     private bool _pendingProxyFlushAfterImeConfirm;
+    private bool _terminalMouseCaptureActive;
     private double _pendingDistanceFromBottom;
     private DateTime _lastDocumentRenderUtc = DateTime.MinValue;
     private readonly string _initialCommandLine;
@@ -130,6 +131,7 @@ public partial class TerminalTabView : UserControl
         _sessionWatchdog.Stop();
         _cursorBlinkTimer.Stop();
         _renderThrottleTimer.Stop();
+        ReleaseTerminalMouseCapture(force: true);
         ResetInputProxyText();
         UpdateUiState(_session is not null);
         try
@@ -206,6 +208,8 @@ public partial class TerminalTabView : UserControl
     {
         if (TrySendMouseButtonEvent(e, pressed: true))
         {
+            TryCaptureTerminalMouse();
+            QueueTerminalInputFocus();
             e.Handled = true;
         }
     }
@@ -214,7 +218,9 @@ public partial class TerminalTabView : UserControl
     {
         QueueTerminalInputFocus();
 
-        if (TrySendMouseButtonEvent(e, pressed: false))
+        bool handled = TrySendMouseButtonEvent(e, pressed: false);
+        ReleaseTerminalMouseCaptureIfIdle();
+        if (handled)
         {
             e.Handled = true;
         }
@@ -224,6 +230,11 @@ public partial class TerminalTabView : UserControl
     {
         if (TrySendMouseMoveEvent(e))
         {
+            if (HasTrackedMouseButtonPressed())
+            {
+                TryCaptureTerminalMouse();
+            }
+
             e.Handled = true;
         }
     }
@@ -234,6 +245,11 @@ public partial class TerminalTabView : UserControl
         {
             e.Handled = true;
         }
+    }
+
+    private void TerminalOutput_LostMouseCapture(object sender, MouseEventArgs e)
+    {
+        _terminalMouseCaptureActive = false;
     }
 
     private void TerminalOutput_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
@@ -616,6 +632,7 @@ public partial class TerminalTabView : UserControl
             Exception? stopError = await DisposeSessionAsync(previousSession);
 
             ClearPendingOutput();
+            ReleaseTerminalMouseCapture(force: true);
             ResetInputProxyText();
             (_currentColumns, _currentRows) = CalculateTerminalSize();
             ReplaceTerminalBuffer(new AnsiTerminalBuffer(_currentColumns, _currentRows));
@@ -710,6 +727,7 @@ public partial class TerminalTabView : UserControl
             ITerminalSession? session = DetachCurrentSession();
             ClearActiveLaunchState();
             ClearPendingOutput();
+            ReleaseTerminalMouseCapture(force: true);
             ResetInputProxyText();
             _prioritizeInitialOutputRender = false;
             UpdateOverlayState();
@@ -1865,6 +1883,59 @@ public partial class TerminalTabView : UserControl
         }
 
         return 3;
+    }
+
+    private void TryCaptureTerminalMouse()
+    {
+        if (_terminalMouseCaptureActive || !SupportsMouseCapture())
+        {
+            return;
+        }
+
+        if (Mouse.Capture(TerminalOutput, CaptureMode.Element))
+        {
+            _terminalMouseCaptureActive = true;
+        }
+    }
+
+    private void ReleaseTerminalMouseCaptureIfIdle()
+    {
+        ReleaseTerminalMouseCapture(force: false);
+    }
+
+    private void ReleaseTerminalMouseCapture(bool force)
+    {
+        bool hasCapture = _terminalMouseCaptureActive || ReferenceEquals(Mouse.Captured, TerminalOutput);
+        if (!hasCapture)
+        {
+            return;
+        }
+
+        if (!force && HasTrackedMouseButtonPressed())
+        {
+            return;
+        }
+
+        if (ReferenceEquals(Mouse.Captured, TerminalOutput))
+        {
+            Mouse.Capture(null);
+        }
+
+        _terminalMouseCaptureActive = false;
+    }
+
+    private bool SupportsMouseCapture()
+    {
+        return _session is not null &&
+            SupportsTerminalInput() &&
+            _terminalBuffer.MouseTrackingMode != TerminalMouseTrackingMode.Off;
+    }
+
+    private static bool HasTrackedMouseButtonPressed()
+    {
+        return Mouse.LeftButton == MouseButtonState.Pressed ||
+            Mouse.MiddleButton == MouseButtonState.Pressed ||
+            Mouse.RightButton == MouseButtonState.Pressed;
     }
 
     private static ModifierKeys GetTerminalModifiers()
