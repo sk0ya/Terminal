@@ -1861,10 +1861,10 @@ public partial class TerminalTabView : UserControl
 
     private void UpdateWindowTitle()
     {
-        string terminalTitle = _terminalBuffer.WindowTitle;
-        string nextTitle = string.IsNullOrWhiteSpace(terminalTitle)
-            ? BuildFallbackTabTitle(CommandTextBox.Text)
-            : terminalTitle;
+        string nextTitle = TerminalTabTitleResolver.Resolve(
+            _terminalBuffer.WindowTitle,
+            GetEffectiveTabTitleCommandLine(),
+            GetSelectedProfile());
         if (string.Equals(HeaderTitle, nextTitle, StringComparison.Ordinal))
         {
             return;
@@ -1872,6 +1872,13 @@ public partial class TerminalTabView : UserControl
 
         HeaderTitle = nextTitle;
         HeaderTitleChanged?.Invoke(this, nextTitle);
+    }
+
+    private string GetEffectiveTabTitleCommandLine()
+    {
+        return string.IsNullOrWhiteSpace(_activeCommandLine)
+            ? CommandTextBox.Text
+            : _activeCommandLine;
     }
 
     private void SetStatus(string message)
@@ -1908,25 +1915,6 @@ public partial class TerminalTabView : UserControl
         }
 
         return $"{ex.Message} (HRESULT=0x{ex.HResult:X8})";
-    }
-
-    private static string BuildFallbackTabTitle(string? commandLine)
-    {
-        if (string.IsNullOrWhiteSpace(commandLine))
-        {
-            return "Terminal";
-        }
-
-        try
-        {
-            (string fileName, _) = ProcessPipeSession.SplitCommandLine(commandLine);
-            string title = Path.GetFileNameWithoutExtension(fileName);
-            return string.IsNullOrWhiteSpace(title) ? "Terminal" : title;
-        }
-        catch
-        {
-            return "Terminal";
-        }
     }
 
     private void SessionWatchdog_Tick(object? sender, EventArgs e)

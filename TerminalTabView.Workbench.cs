@@ -199,6 +199,7 @@ public partial class TerminalTabView
 
         UpdateProfileHint();
         UpdateTerminalChrome();
+        UpdateWindowTitle();
     }
 
     private void CommandTextBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -213,6 +214,7 @@ public partial class TerminalTabView
         ProfileComboBox.SelectedItem = matchedProfile;
         _suppressProfileSelectionChanged = false;
         UpdateProfileHint();
+        UpdateWindowTitle();
     }
 
     private void WorkingDirectoryTextBox_TextChanged(object sender, TextChangedEventArgs e)
