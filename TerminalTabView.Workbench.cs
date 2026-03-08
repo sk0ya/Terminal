@@ -3,7 +3,6 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -461,122 +460,14 @@ public partial class TerminalTabView
             ? StringComparison.Ordinal
             : StringComparison.OrdinalIgnoreCase;
 
-        bool wrapped = false;
-        TextPointer? matchStart;
-        TextPointer? matchEnd;
-        if (forward)
-        {
-            TextPointer searchStart = TerminalOutput.Selection.IsEmpty
-                ? TerminalOutput.Document.ContentStart
-                : TerminalOutput.Selection.End;
-            if (!TryFindForward(searchStart, query, comparison, out matchStart, out matchEnd))
-            {
-                wrapped = TryFindForward(TerminalOutput.Document.ContentStart, query, comparison, out matchStart, out matchEnd);
-            }
-        }
-        else
-        {
-            TextPointer limit = TerminalOutput.Selection.IsEmpty
-                ? TerminalOutput.Document.ContentEnd
-                : TerminalOutput.Selection.Start;
-            if (!TryFindBackward(limit, query, comparison, out matchStart, out matchEnd))
-            {
-                wrapped = TryFindBackward(TerminalOutput.Document.ContentEnd, query, comparison, out matchStart, out matchEnd);
-            }
-        }
-
-        if (matchStart is null || matchEnd is null)
+        if (!TerminalOutput.TrySelectNextMatch(query, comparison, forward, out bool wrapped))
         {
             FindCountText.Text = "No match";
             return false;
         }
 
-        TerminalOutput.Selection.Select(matchStart, matchEnd);
-        matchStart.Paragraph?.BringIntoView();
         FindCountText.Text = wrapped ? "Wrapped" : "Match";
         return true;
-    }
-
-    private static bool TryFindForward(
-        TextPointer start,
-        string query,
-        StringComparison comparison,
-        out TextPointer? matchStart,
-        out TextPointer? matchEnd)
-    {
-        for (TextPointer? navigator = start; navigator is not null; navigator = navigator.GetNextContextPosition(LogicalDirection.Forward))
-        {
-            if (navigator.GetPointerContext(LogicalDirection.Forward) != TextPointerContext.Text)
-            {
-                continue;
-            }
-
-            string run = navigator.GetTextInRun(LogicalDirection.Forward);
-            int index = run.IndexOf(query, comparison);
-            if (index < 0)
-            {
-                continue;
-            }
-
-            matchStart = navigator.GetPositionAtOffset(index);
-            matchEnd = matchStart?.GetPositionAtOffset(query.Length);
-            return matchStart is not null && matchEnd is not null;
-        }
-
-        matchStart = null;
-        matchEnd = null;
-        return false;
-    }
-
-    private bool TryFindBackward(
-        TextPointer limit,
-        string query,
-        StringComparison comparison,
-        out TextPointer? matchStart,
-        out TextPointer? matchEnd)
-    {
-        matchStart = null;
-        matchEnd = null;
-
-        for (TextPointer? navigator = TerminalOutput.Document.ContentStart;
-             navigator is not null && navigator.CompareTo(limit) < 0;
-             navigator = navigator.GetNextContextPosition(LogicalDirection.Forward))
-        {
-            if (navigator.GetPointerContext(LogicalDirection.Forward) != TextPointerContext.Text)
-            {
-                continue;
-            }
-
-            string run = navigator.GetTextInRun(LogicalDirection.Forward);
-            int searchIndex = 0;
-            while (searchIndex < run.Length)
-            {
-                int index = run.IndexOf(query, searchIndex, comparison);
-                if (index < 0)
-                {
-                    break;
-                }
-
-                TextPointer? candidateStart = navigator.GetPositionAtOffset(index);
-                TextPointer? candidateEnd = candidateStart?.GetPositionAtOffset(query.Length);
-                if (candidateStart is null || candidateEnd is null)
-                {
-                    break;
-                }
-
-                if (candidateEnd.CompareTo(limit) <= 0)
-                {
-                    matchStart = candidateStart;
-                    matchEnd = candidateEnd;
-                    searchIndex = index + 1;
-                    continue;
-                }
-
-                break;
-            }
-        }
-
-        return matchStart is not null && matchEnd is not null;
     }
 
     private void UpdateFindMatchCount()
@@ -593,36 +484,11 @@ public partial class TerminalTabView
             return;
         }
 
-        string transcript = _terminalBuffer.CreatePlainTextSnapshot();
         StringComparison comparison = FindCaseSensitiveCheckBox.IsChecked == true
             ? StringComparison.Ordinal
             : StringComparison.OrdinalIgnoreCase;
-        int matchCount = CountMatches(transcript, query, comparison);
+        int matchCount = TerminalOutput.CountMatches(query, comparison);
         FindCountText.Text = matchCount == 1 ? "1 match" : $"{matchCount} matches";
-    }
-
-    private static int CountMatches(string text, string query, StringComparison comparison)
-    {
-        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(query))
-        {
-            return 0;
-        }
-
-        int count = 0;
-        int index = 0;
-        while (index < text.Length)
-        {
-            int foundIndex = text.IndexOf(query, index, comparison);
-            if (foundIndex < 0)
-            {
-                break;
-            }
-
-            count++;
-            index = foundIndex + query.Length;
-        }
-
-        return count;
     }
 
     private void SaveTranscript()

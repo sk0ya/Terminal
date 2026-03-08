@@ -2077,18 +2077,20 @@ internal sealed class AnsiTerminalBuffer
         {
             return new TerminalRenderLineSnapshot(
                 anchorColumn == 0 ? 0 : -1,
+                0,
                 Array.Empty<TerminalRenderSegmentSnapshot>());
         }
 
         var text = new StringBuilder();
         var segments = new List<TerminalRenderSegmentSnapshot>();
         ResolvedStyle? currentStyle = null;
+        int currentSegmentCellLength = 0;
         int anchorSegmentIndex = -1;
         for (int column = 0; column < visibleLength; column++)
         {
             if (anchorColumn == column)
             {
-                FlushSegment(segments, text, currentStyle);
+                FlushSegment(segments, text, currentStyle, ref currentSegmentCellLength);
                 anchorSegmentIndex = segments.Count;
             }
 
@@ -2102,20 +2104,21 @@ internal sealed class AnsiTerminalBuffer
             ResolvedStyle style = ResolveStyle(cell.Style, cell.Hyperlink, isCursor);
             if (currentStyle is null || currentStyle.Value != style)
             {
-                FlushSegment(segments, text, currentStyle);
+                FlushSegment(segments, text, currentStyle, ref currentSegmentCellLength);
                 currentStyle = style;
             }
 
             text.Append(cell.Text);
+            currentSegmentCellLength += Math.Max(1, cell.Width);
         }
 
-        FlushSegment(segments, text, currentStyle);
+        FlushSegment(segments, text, currentStyle, ref currentSegmentCellLength);
         if (anchorColumn == visibleLength)
         {
             anchorSegmentIndex = segments.Count;
         }
 
-        return new TerminalRenderLineSnapshot(anchorSegmentIndex, segments.ToArray());
+        return new TerminalRenderLineSnapshot(anchorSegmentIndex, visibleLength, segments.ToArray());
     }
 
     private static void AppendLineSnapshot(InlineCollection inlines, TerminalRenderLineSnapshot lineSnapshot, ref bool isFirstLine, ref FrameworkElement? cursorAnchor)
@@ -2223,7 +2226,11 @@ internal sealed class AnsiTerminalBuffer
         return cursorColumn >= 0 ? cursorColumn + 1 : 0;
     }
 
-    private static void FlushSegment(List<TerminalRenderSegmentSnapshot> segments, StringBuilder text, ResolvedStyle? style)
+    private static void FlushSegment(
+        List<TerminalRenderSegmentSnapshot> segments,
+        StringBuilder text,
+        ResolvedStyle? style,
+        ref int cellLength)
     {
         if (text.Length == 0 || style is null)
         {
@@ -2232,12 +2239,14 @@ internal sealed class AnsiTerminalBuffer
 
         segments.Add(new TerminalRenderSegmentSnapshot(
             text.ToString(),
+            cellLength,
             style.Value.Foreground,
             style.Value.Background,
             style.Value.Bold,
             style.Value.Underline,
             style.Value.Hyperlink));
         text.Clear();
+        cellLength = 0;
     }
 
     internal static void AppendSegment(InlineCollection inlines, TerminalRenderSegmentSnapshot segment)
@@ -2582,11 +2591,13 @@ internal sealed class AnsiTerminalBuffer
 
     internal readonly record struct TerminalRenderLineSnapshot(
         int AnchorSegmentIndex,
+        int CellLength,
         TerminalRenderSegmentSnapshot[] Segments)
     {
         public bool ContentEquals(TerminalRenderLineSnapshot other)
         {
             if (AnchorSegmentIndex != other.AnchorSegmentIndex ||
+                CellLength != other.CellLength ||
                 Segments.Length != other.Segments.Length)
             {
                 return false;
@@ -2606,6 +2617,7 @@ internal sealed class AnsiTerminalBuffer
 
     internal readonly record struct TerminalRenderSegmentSnapshot(
         string Text,
+        int CellLength,
         Color Foreground,
         Color Background,
         bool Bold,

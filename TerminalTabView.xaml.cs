@@ -5,10 +5,8 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Navigation;
 using System.Windows.Threading;
 
 namespace ConPtyTerminal;
@@ -17,7 +15,6 @@ public partial class TerminalTabView : UserControl
 {
     private const int MaxAutoRecoveryAttempts = 1;
     private const double AutoFollowThreshold = 2.0;
-    private const bool PreferDocumentCursorRendering = false;
 
     private static readonly TimeSpan InitialOutputTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan IdleOutputTimeout = TimeSpan.FromSeconds(20);
@@ -35,30 +32,23 @@ public partial class TerminalTabView : UserControl
     private readonly DispatcherTimer _cursorBlinkTimer = new(DispatcherPriority.Background);
     private readonly DispatcherTimer _renderThrottleTimer = new(DispatcherPriority.Background);
     private readonly SemaphoreSlim _sessionLifecycleGate = new(1, 1);
-    private readonly TerminalDocumentRenderer _documentRenderer = new();
     private readonly object _pendingOutputLock = new();
     private readonly StringBuilder _pendingOutput = new();
-    private ScrollViewer? _terminalScrollViewer;
-    private FrameworkElement? _cursorAnchorElement;
     private int _autoRecoveryAttempts;
     private bool _isRecovering;
     private bool _isSessionTransitionActive;
     private bool _isClosingWindow;
-    private bool _postRenderUiSyncScheduled;
     private bool _isRenderingTerminal;
     private bool _documentRenderScheduled;
     private bool _outputFlushScheduled;
     private bool _prioritizeInitialOutputRender;
-    private bool _cursorAnchorLayoutPending;
     private bool _followTerminalOutput = true;
     private bool _useCompatibilityMode;
     private bool _cursorBlinkVisible = true;
     private bool _reportedUnsupportedResize;
-    private bool _pendingRestoreFocusAfterRender;
     private bool _resettingInputProxyText;
     private bool _pendingProxyFlushAfterImeConfirm;
     private bool _terminalMouseCaptureActive;
-    private double _pendingDistanceFromBottom;
     private DateTime _lastDocumentRenderUtc = DateTime.MinValue;
     private readonly string _initialCommandLine;
     private readonly string _initialWorkingDirectory;
@@ -80,7 +70,6 @@ public partial class TerminalTabView : UserControl
         InitializeComponent();
         InputMethod.SetIsInputMethodEnabled(TerminalOutput, false);
         InputMethod.SetIsInputMethodSuspended(TerminalOutput, true);
-        TerminalOutput.Document = _documentRenderer.Document;
         InitializeTerminalWorkbench();
         CommandTextBox.Text = _initialCommandLine;
         WorkingDirectoryTextBox.Text = _initialWorkingDirectory;
@@ -96,18 +85,16 @@ public partial class TerminalTabView : UserControl
 
         _renderThrottleTimer.Tick += RenderThrottleTimer_Tick;
 
-        TerminalOutput.AddHandler(Hyperlink.RequestNavigateEvent, new RequestNavigateEventHandler(TerminalOutput_RequestNavigate));
+        TerminalOutput.HyperlinkActivated += TerminalOutput_HyperlinkActivated;
         TerminalInputProxy.AddHandler(TextCompositionManager.PreviewTextInputStartEvent, new TextCompositionEventHandler(TerminalInputProxy_PreviewTextInputStart), handledEventsToo: true);
         TerminalInputProxy.AddHandler(TextCompositionManager.PreviewTextInputUpdateEvent, new TextCompositionEventHandler(TerminalInputProxy_PreviewTextInputUpdate), handledEventsToo: true);
         TerminalInputProxy.AddHandler(TextCompositionManager.TextInputEvent, new TextCompositionEventHandler(TerminalInputProxy_TextInput), handledEventsToo: true);
 
         Loaded += OnLoaded;
-        TerminalOutput.SizeChanged += OnTerminalOutputSizeChanged;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
-        AttachTerminalScrollViewer();
         UpdateInputProxyPosition();
         UpdateTerminalChrome();
         RequestDocumentRender();
@@ -171,7 +158,7 @@ public partial class TerminalTabView : UserControl
         await RecoverSessionAsync(isAutomatic: false);
     }
 
-    private void TerminalOutput_RequestNavigate(object sender, RequestNavigateEventArgs e)
+    private void TerminalOutput_HyperlinkActivated(object? sender, TerminalHyperlinkActivatedEventArgs e)
     {
         try
         {
@@ -179,7 +166,6 @@ public partial class TerminalTabView : UserControl
             {
                 UseShellExecute = true
             });
-            e.Handled = true;
         }
         catch (Exception ex)
         {
@@ -878,12 +864,6 @@ public partial class TerminalTabView : UserControl
         }
 
         _cursorBlinkVisible = nextVisible;
-        if (UsesDocumentCursorRendering())
-        {
-            RequestDocumentRender();
-            return;
-        }
-
         UpdateOverlayState();
     }
 
@@ -1032,18 +1012,14 @@ public partial class TerminalTabView : UserControl
 
     private void CopySelectionToClipboard()
     {
-        TextSelection selection = TerminalOutput.Selection;
-        if (selection.IsEmpty)
+        string text = TerminalOutput.GetSelectedText();
+        if (string.IsNullOrEmpty(text))
         {
             return;
         }
 
-        string text = new TextRange(selection.Start, selection.End).Text;
-        if (!string.IsNullOrEmpty(text))
-        {
-            Clipboard.SetText(text);
-            SetStatus("Copied selection.");
-        }
+        Clipboard.SetText(text);
+        SetStatus("Copied selection.");
     }
 
     private void UpdateUiState(bool isRunning)
@@ -1121,23 +1097,14 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        AttachTerminalScrollViewer();
-        bool shouldRestoreFocus = HasTerminalInputFocus();
         double preservedDistanceFromBottom = GetDistanceFromBottom();
         _isRenderingTerminal = true;
         try
         {
-            bool showDocumentCursor = ShouldRenderBlockCursorInDocument();
-            AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = _terminalBuffer.CreateRenderSnapshot(showDocumentCursor);
-            _documentRenderer.Update(
-                snapshot,
-                TerminalOutput.FontFamily,
-                TerminalOutput.FontSize,
-                TerminalOutput.Background);
-            _cursorAnchorElement = _documentRenderer.CursorAnchor;
-            _cursorAnchorLayoutPending = _cursorAnchorElement is not null;
+            AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = _terminalBuffer.CreateRenderSnapshot(showCursor: false);
+            TerminalOutput.UpdateSnapshot(snapshot);
             UpdateInputProxyPosition();
-            SchedulePostRenderUiSync(shouldRestoreFocus, preservedDistanceFromBottom);
+            RestoreTerminalViewport(preservedDistanceFromBottom);
             UpdateWindowTitle();
             UpdateFindMatchCount();
             UpdateTerminalChrome();
@@ -1156,19 +1123,6 @@ public partial class TerminalTabView : UserControl
             (!_terminalBuffer.CursorBlinkEnabled || _cursorBlinkVisible);
     }
 
-    private bool UsesDocumentCursorRendering()
-    {
-        return PreferDocumentCursorRendering &&
-            _terminalBuffer.CursorShape == TerminalCursorShape.Block;
-    }
-
-    private bool ShouldRenderBlockCursorInDocument()
-    {
-        return UsesDocumentCursorRendering() &&
-            ShouldShowCursor() &&
-            _terminalBuffer.CursorVisible;
-    }
-
     private bool HasTerminalInputFocus()
     {
         return TerminalInputProxy.IsKeyboardFocusWithin || TerminalOutput.IsKeyboardFocusWithin;
@@ -1179,12 +1133,6 @@ public partial class TerminalTabView : UserControl
         _cursorBlinkVisible = focused || !_terminalBuffer.CursorBlinkEnabled;
         if (_isRenderingTerminal)
         {
-            return;
-        }
-
-        if (UsesDocumentCursorRendering())
-        {
-            RequestDocumentRender();
             return;
         }
 
@@ -1227,59 +1175,24 @@ public partial class TerminalTabView : UserControl
         TerminalInputProxy.FlowDirection = FlowDirection.LeftToRight;
         TerminalInputProxy.CaretBrush = Brushes.Transparent;
 
-        bool usedAnchor = TryGetCursorAnchorPosition(out double left, out double top);
-        if (!usedAnchor)
+        int absoluteCursorLine = Math.Clamp(
+            _terminalBuffer.ScrollbackLineCount + _terminalBuffer.CursorRow,
+            0,
+            Math.Max(0, TerminalOutput.LineCount - 1));
+        Rect cursorRect = TerminalOutput.GetCellRect(absoluteCursorLine, _terminalBuffer.CursorColumn);
+        Point translated = TerminalOutput.TranslatePoint(cursorRect.TopLeft, TerminalViewportHost);
+        double left = translated.X;
+        double top = translated.Y;
+        if (double.IsNaN(left) || double.IsNaN(top))
         {
             left = viewport.ContentLeft + (_terminalBuffer.CursorColumn * charWidth);
-            top = viewport.ContentTop + (_terminalBuffer.CursorRow * charHeight);
-        }
-        else
-        {
-            top -= charHeight;
+            top = viewport.ContentTop + (absoluteCursorLine * charHeight);
         }
 
         (double proxyLeft, double proxyTop) = ClampToViewport(left, top, proxyWidth, proxyHeight, viewport);
         Canvas.SetLeft(TerminalInputProxy, proxyLeft);
         Canvas.SetTop(TerminalInputProxy, proxyTop);
         UpdateCursorOverlay(proxyLeft + GetInputProxyCaretOffset(), proxyTop, charWidth, charHeight, viewport);
-    }
-
-    private bool TryGetCursorAnchorPosition(out double left, out double top)
-    {
-        left = 0;
-        top = 0;
-
-        if (_cursorAnchorElement is null)
-        {
-            return false;
-        }
-
-        if (_cursorAnchorLayoutPending)
-        {
-            return false;
-        }
-
-        if (TerminalOutput.Parent is not UIElement overlayHost)
-        {
-            return false;
-        }
-
-        try
-        {
-            Point anchorPoint = _cursorAnchorElement.TranslatePoint(new Point(0, 0), overlayHost);
-            if (double.IsNaN(anchorPoint.X) || double.IsNaN(anchorPoint.Y))
-            {
-                return false;
-            }
-
-            left = anchorPoint.X;
-            top = anchorPoint.Y;
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     private void ResetInputProxyText()
@@ -1345,40 +1258,9 @@ public partial class TerminalTabView : UserControl
             Math.Clamp(top, viewport.ViewportTop, maxTop));
     }
 
-    private void SchedulePostRenderUiSync(bool shouldRestoreFocus, double preservedDistanceFromBottom)
-    {
-        _pendingRestoreFocusAfterRender |= shouldRestoreFocus;
-        _pendingDistanceFromBottom = preservedDistanceFromBottom;
-        if (_postRenderUiSyncScheduled)
-        {
-            return;
-        }
-
-        _postRenderUiSyncScheduled = true;
-        _ = Dispatcher.BeginInvoke(ApplyPostRenderUiSync, DispatcherPriority.Loaded);
-    }
-
-    private void ApplyPostRenderUiSync()
-    {
-        _postRenderUiSyncScheduled = false;
-        bool shouldRestoreFocus = _pendingRestoreFocusAfterRender;
-        double preservedDistanceFromBottom = _pendingDistanceFromBottom;
-        _pendingRestoreFocusAfterRender = false;
-        _cursorAnchorLayoutPending = false;
-
-        UpdateInputProxyPosition();
-        if (shouldRestoreFocus && !HasTerminalInputFocus())
-        {
-            FocusTerminalInput();
-        }
-
-        RestoreTerminalViewport(preservedDistanceFromBottom);
-    }
-
     private bool ShouldShowCursorOverlay()
     {
-        return !UsesDocumentCursorRendering() &&
-            ShouldShowCursor() &&
+        return ShouldShowCursor() &&
             _terminalBuffer.CursorVisible;
     }
 
@@ -1557,25 +1439,6 @@ public partial class TerminalTabView : UserControl
         }
     }
 
-    private void AttachTerminalScrollViewer()
-    {
-        if (_terminalScrollViewer is not null)
-        {
-            return;
-        }
-
-        TerminalOutput.ApplyTemplate();
-        TerminalOutput.UpdateLayout();
-        _terminalScrollViewer = FindDescendant<ScrollViewer>(TerminalOutput);
-        if (_terminalScrollViewer is null)
-        {
-            return;
-        }
-
-        _terminalScrollViewer.ScrollChanged += TerminalScrollViewer_ScrollChanged;
-        UpdateFollowOutputState();
-    }
-
     private void TerminalScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         if (_isRenderingTerminal)
@@ -1588,38 +1451,23 @@ public partial class TerminalTabView : UserControl
 
     private double GetDistanceFromBottom()
     {
-        if (_terminalScrollViewer is null)
-        {
-            return 0;
-        }
-
         return Math.Max(
             0,
-            _terminalScrollViewer.ExtentHeight - _terminalScrollViewer.VerticalOffset - _terminalScrollViewer.ViewportHeight);
+            TerminalScrollHost.ExtentHeight - TerminalScrollHost.VerticalOffset - TerminalScrollHost.ViewportHeight);
     }
 
     private void RestoreTerminalViewport(double preservedDistanceFromBottom)
     {
-        if (_terminalScrollViewer is null)
-        {
-            if (_followTerminalOutput)
-            {
-                TerminalOutput.ScrollToEnd();
-            }
-
-            return;
-        }
-
         if (_followTerminalOutput || preservedDistanceFromBottom <= AutoFollowThreshold)
         {
-            _terminalScrollViewer.ScrollToBottom();
+            TerminalScrollHost.ScrollToBottom();
         }
         else
         {
             double targetOffset = Math.Max(
                 0,
-                _terminalScrollViewer.ExtentHeight - _terminalScrollViewer.ViewportHeight - preservedDistanceFromBottom);
-            _terminalScrollViewer.ScrollToVerticalOffset(targetOffset);
+                TerminalScrollHost.ExtentHeight - TerminalScrollHost.ViewportHeight - preservedDistanceFromBottom);
+            TerminalScrollHost.ScrollToVerticalOffset(targetOffset);
         }
 
         UpdateFollowOutputState();
@@ -1627,29 +1475,8 @@ public partial class TerminalTabView : UserControl
 
     private void UpdateFollowOutputState()
     {
-        _followTerminalOutput = _terminalScrollViewer is null || GetDistanceFromBottom() <= AutoFollowThreshold;
+        _followTerminalOutput = GetDistanceFromBottom() <= AutoFollowThreshold;
         UpdateTerminalChrome();
-    }
-
-    private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
-    {
-        int childCount = VisualTreeHelper.GetChildrenCount(root);
-        for (int index = 0; index < childCount; index++)
-        {
-            DependencyObject child = VisualTreeHelper.GetChild(root, index);
-            if (child is T match)
-            {
-                return match;
-            }
-
-            T? nested = FindDescendant<T>(child);
-            if (nested is not null)
-            {
-                return nested;
-            }
-        }
-
-        return null;
     }
 
     private void ReplaceTerminalBuffer(AnsiTerminalBuffer nextBuffer)
@@ -1729,7 +1556,7 @@ public partial class TerminalTabView : UserControl
             return false;
         }
 
-        if (!TryGetMouseCell(e.GetPosition(TerminalOutput), out int column, out int row))
+        if (!TryGetMouseCell(e.GetPosition(TerminalScrollHost), out int column, out int row))
         {
             return false;
         }
@@ -1770,7 +1597,7 @@ public partial class TerminalTabView : UserControl
             return false;
         }
 
-        if (!TryGetMouseCell(e.GetPosition(TerminalOutput), out int column, out int row))
+        if (!TryGetMouseCell(e.GetPosition(TerminalScrollHost), out int column, out int row))
         {
             return false;
         }
@@ -1791,7 +1618,7 @@ public partial class TerminalTabView : UserControl
             return TrySendAlternateScrollEvent(e);
         }
 
-        if (!TryGetMouseCell(e.GetPosition(TerminalOutput), out int column, out int row))
+        if (!TryGetMouseCell(e.GetPosition(TerminalScrollHost), out int column, out int row))
         {
             return false;
         }
@@ -1968,9 +1795,8 @@ public partial class TerminalTabView : UserControl
     private bool TryGetMouseCell(Point position, out int column, out int row)
     {
         var (charWidth, charHeight) = MeasureCharacterCell();
-        TerminalViewportMetrics viewport = GetTerminalViewportMetrics();
-        double x = Math.Max(0, position.X - viewport.ViewportLeft + viewport.HorizontalOffset);
-        double y = Math.Max(0, position.Y - viewport.ViewportTop + viewport.VerticalOffset);
+        double x = Math.Max(0, position.X - TerminalOutput.Padding.Left);
+        double y = Math.Max(0, position.Y - TerminalOutput.Padding.Top);
         column = Math.Clamp((int)(x / charWidth) + 1, 1, _currentColumns);
         row = Math.Clamp((int)(y / charHeight) + 1, 1, _currentRows);
         return true;
@@ -1978,28 +1804,27 @@ public partial class TerminalTabView : UserControl
 
     private (double Width, double Height) MeasureCharacterCell()
     {
-        const int SampleLength = 32;
-        Size size = MeasureTerminalText(new string('W', SampleLength));
-        return (
-            Math.Max(size.Width / SampleLength, 1.0),
-            Math.Max(size.Height, 1.0));
+        Size size = TerminalOutput.CharacterCellSize;
+        return (Math.Max(size.Width, 1.0), Math.Max(size.Height, 1.0));
     }
 
     private TerminalViewportMetrics GetTerminalViewportMetrics()
     {
-        double horizontalOffset = _terminalScrollViewer?.HorizontalOffset ?? 0;
-        double verticalOffset = _terminalScrollViewer?.VerticalOffset ?? 0;
-        Size viewportSize = TerminalViewportSizing.ResolveViewportSize(
-            new Size(TerminalOutput.ActualWidth, TerminalOutput.ActualHeight),
-            TerminalOutput.BorderThickness,
-            TerminalOutput.Padding,
-            _terminalScrollViewer is null
-                ? null
-                : new Size(_terminalScrollViewer.ViewportWidth, _terminalScrollViewer.ViewportHeight));
-        double viewportLeft = TerminalOutput.BorderThickness.Left + TerminalOutput.Padding.Left;
-        double viewportTop = TerminalOutput.BorderThickness.Top + TerminalOutput.Padding.Top;
-        double viewportRight = viewportLeft + viewportSize.Width;
-        double viewportBottom = viewportTop + viewportSize.Height;
+        Point viewportOrigin = TerminalScrollHost.TranslatePoint(
+            new Point(TerminalOutput.Padding.Left, TerminalOutput.Padding.Top),
+            TerminalViewportHost);
+        double horizontalOffset = TerminalScrollHost.HorizontalOffset;
+        double verticalOffset = TerminalScrollHost.VerticalOffset;
+        double viewportWidth = Math.Max(
+            0,
+            TerminalScrollHost.ViewportWidth - TerminalOutput.Padding.Left - TerminalOutput.Padding.Right);
+        double viewportHeight = Math.Max(
+            0,
+            TerminalScrollHost.ViewportHeight - TerminalOutput.Padding.Top - TerminalOutput.Padding.Bottom);
+        double viewportLeft = viewportOrigin.X;
+        double viewportTop = viewportOrigin.Y;
+        double viewportRight = viewportLeft + viewportWidth;
+        double viewportBottom = viewportTop + viewportHeight;
 
         return new TerminalViewportMetrics(
             viewportLeft,

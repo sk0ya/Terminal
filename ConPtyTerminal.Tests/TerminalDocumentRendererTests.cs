@@ -64,9 +64,11 @@ public sealed class TerminalDocumentRendererTests
     {
         return new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
             anchorSegmentIndex,
+            text.Length,
             [
                 new AnsiTerminalBuffer.TerminalRenderSegmentSnapshot(
                     text,
+                    text.Length,
                     Colors.White,
                     Colors.Black,
                     Bold: false,
