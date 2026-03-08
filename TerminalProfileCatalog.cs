@@ -56,6 +56,36 @@ internal static class TerminalProfileCatalog
         return "cmd.exe /K";
     }
 
+    internal static TerminalProfileDefinition ResolveSelectedProfile(
+        IReadOnlyList<TerminalProfileDefinition> profiles,
+        TerminalProfileDefinition customProfile,
+        string? profileId,
+        string? commandLine)
+    {
+        TerminalProfileDefinition? matchedProfile = MatchProfileByCommandLine(profiles, commandLine);
+        if (matchedProfile is not null)
+        {
+            return matchedProfile;
+        }
+
+        TerminalProfileDefinition? profileById = profiles.FirstOrDefault(profile =>
+            string.Equals(profile.Id, profileId, StringComparison.OrdinalIgnoreCase));
+        if (profileById is null)
+        {
+            return customProfile;
+        }
+
+        string normalizedCommandLine = NormalizeCommandLine(commandLine);
+        if (!profileById.IsCustom &&
+            normalizedCommandLine.Length > 0 &&
+            !AreEquivalentCommandLines(profileById.CommandLine, normalizedCommandLine))
+        {
+            return customProfile;
+        }
+
+        return profileById;
+    }
+
     private static bool TryBuildExecutableCommandLine(string executableName, string arguments, out string commandLine)
     {
         string? executablePath = TryFindExecutable(executableName);
@@ -69,6 +99,21 @@ internal static class TerminalProfileCatalog
             ? QuoteCommand(executablePath)
             : $"{QuoteCommand(executablePath)} {arguments}";
         return true;
+    }
+
+    internal static TerminalProfileDefinition? MatchProfileByCommandLine(
+        IReadOnlyList<TerminalProfileDefinition> profiles,
+        string? commandLine)
+    {
+        string normalizedCommandLine = NormalizeCommandLine(commandLine);
+        if (normalizedCommandLine.Length == 0)
+        {
+            return null;
+        }
+
+        return profiles.FirstOrDefault(profile =>
+            !profile.IsCustom &&
+            AreEquivalentCommandLines(profile.CommandLine, normalizedCommandLine));
     }
 
     private static bool TryBuildGitBashCommandLine(out string commandLine)
@@ -185,4 +230,107 @@ internal static class TerminalProfileCatalog
     {
         return path.Contains(' ') ? $"\"{path}\"" : path;
     }
+
+    private static string NormalizeCommandLine(string? commandLine)
+    {
+        return string.IsNullOrWhiteSpace(commandLine)
+            ? string.Empty
+            : commandLine.Trim();
+    }
+
+    private static bool AreEquivalentCommandLines(string left, string right)
+    {
+        string normalizedLeft = NormalizeCommandLine(left);
+        string normalizedRight = NormalizeCommandLine(right);
+        if (normalizedLeft.Length == 0 || normalizedRight.Length == 0)
+        {
+            return false;
+        }
+
+        if (string.Equals(normalizedLeft, normalizedRight, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!TryParseCommandLine(normalizedLeft, out ParsedCommandLine leftCommandLine) ||
+            !TryParseCommandLine(normalizedRight, out ParsedCommandLine rightCommandLine))
+        {
+            return false;
+        }
+
+        if (!AreEquivalentExecutables(leftCommandLine.ExecutablePath, rightCommandLine.ExecutablePath))
+        {
+            return false;
+        }
+
+        if (leftCommandLine.Arguments.Length != rightCommandLine.Arguments.Length)
+        {
+            return false;
+        }
+
+        for (int index = 0; index < leftCommandLine.Arguments.Length; index++)
+        {
+            if (!string.Equals(leftCommandLine.Arguments[index], rightCommandLine.Arguments[index], StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryParseCommandLine(string commandLine, out ParsedCommandLine parsedCommandLine)
+    {
+        try
+        {
+            (string executable, string[] arguments) = ProcessPipeSession.SplitCommandLine(commandLine);
+            parsedCommandLine = new ParsedCommandLine(
+                ResolveExecutablePath(executable),
+                arguments);
+            return true;
+        }
+        catch
+        {
+            parsedCommandLine = new ParsedCommandLine(string.Empty, []);
+            return false;
+        }
+    }
+
+    private static string ResolveExecutablePath(string executable)
+    {
+        if (string.IsNullOrWhiteSpace(executable))
+        {
+            return string.Empty;
+        }
+
+        string trimmedExecutable = executable.Trim();
+        if (Path.IsPathRooted(trimmedExecutable))
+        {
+            try
+            {
+                return Path.GetFullPath(trimmedExecutable);
+            }
+            catch
+            {
+                return trimmedExecutable;
+            }
+        }
+
+        return TryFindExecutable(trimmedExecutable) ?? trimmedExecutable;
+    }
+
+    private static bool AreEquivalentExecutables(string leftExecutable, string rightExecutable)
+    {
+        if (string.Equals(leftExecutable, rightExecutable, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        string leftFileName = Path.GetFileName(leftExecutable);
+        string rightFileName = Path.GetFileName(rightExecutable);
+        return leftFileName.Length > 0 &&
+            string.Equals(leftFileName, rightFileName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed record ParsedCommandLine(string ExecutablePath, string[] Arguments);
 }

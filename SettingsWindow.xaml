@@ -6,8 +6,8 @@
         xmlns:primitives="clr-namespace:System.Windows.Controls.Primitives;assembly=PresentationFramework"
         mc:Ignorable="d"
         Title="Settings"
-        Width="560"
-        Height="420"
+        Width="520"
+        SizeToContent="Height"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
         Background="#131313"
@@ -20,10 +20,15 @@
         <SolidColorBrush x:Key="MutedBrush" Color="#A6A6A6" />
         <SolidColorBrush x:Key="HoverBrush" Color="#1A1A1A" />
         <SolidColorBrush x:Key="SelectedBrush" Color="#1E3552" />
+        <SolidColorBrush x:Key="InvalidBrush" Color="#D35F5F" />
+
+        <DataTemplate x:Key="TerminalProfileItemTemplate">
+            <TextBlock Text="{Binding DisplayName}" />
+        </DataTemplate>
 
         <Style x:Key="InputTextBoxStyle" TargetType="TextBox">
-            <Setter Property="Height" Value="34" />
-            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Padding" Value="10,5" />
             <Setter Property="Background" Value="{StaticResource InputBrush}" />
             <Setter Property="Foreground" Value="#F0F0F0" />
             <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
@@ -116,7 +121,7 @@
         </Style>
 
         <Style x:Key="InputComboBoxStyle" TargetType="ComboBox">
-            <Setter Property="Height" Value="34" />
+            <Setter Property="Height" Value="32" />
             <Setter Property="Padding" Value="8,4" />
             <Setter Property="Background" Value="{StaticResource InputBrush}" />
             <Setter Property="Foreground" Value="#F0F0F0" />
@@ -173,40 +178,23 @@
             </Setter>
         </Style>
 
-        <Style x:Key="ButtonStyle" TargetType="Button">
-            <Setter Property="Height" Value="34" />
-            <Setter Property="Padding" Value="14,0" />
-            <Setter Property="Foreground" Value="#F0F0F0" />
-            <Setter Property="Background" Value="#242424" />
-            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Margin" Value="0,0,8,0" />
-        </Style>
-
-        <Style x:Key="AccentButtonStyle" TargetType="Button" BasedOn="{StaticResource ButtonStyle}">
-            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
-            <Setter Property="Foreground" Value="#08131F" />
-        </Style>
     </Window.Resources>
 
-    <Border Margin="18"
-            Padding="18"
+    <Border Margin="14"
+            Padding="16"
             Background="{StaticResource PanelBrush}"
             BorderBrush="{StaticResource BorderBrush}"
-            BorderThickness="1">
+            BorderThickness="1"
+            CornerRadius="12">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
-                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="120" />
+                <ColumnDefinition Width="90" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
@@ -214,81 +202,57 @@
                        Grid.Column="0"
                        VerticalAlignment="Center"
                        Foreground="{StaticResource MutedBrush}"
-                       Text="Default profile" />
+                       Text="Profile" />
             <ComboBox x:Name="ProfileComboBox"
                       Grid.Row="0"
                       Grid.Column="1"
                       Style="{StaticResource InputComboBoxStyle}"
+                      ItemTemplate="{StaticResource TerminalProfileItemTemplate}"
+                      TextSearch.TextPath="DisplayName"
                       SelectionChanged="ProfileComboBox_SelectionChanged" />
 
             <TextBlock Grid.Row="1"
                        Grid.Column="0"
-                       Margin="0,16,0,0"
+                       Margin="0,10,0,0"
                        VerticalAlignment="Center"
                        Foreground="{StaticResource MutedBrush}"
                        Text="Command" />
             <TextBox x:Name="CommandTextBox"
                      Grid.Row="1"
                      Grid.Column="1"
-                     Margin="0,16,0,0"
+                     Margin="0,10,0,0"
                      Style="{StaticResource InputTextBoxStyle}"
                      TextChanged="CommandTextBox_TextChanged" />
 
             <TextBlock Grid.Row="2"
                        Grid.Column="0"
-                       Margin="0,16,0,0"
+                       Margin="0,10,0,0"
                        VerticalAlignment="Center"
                        Foreground="{StaticResource MutedBrush}"
                        Text="Start in" />
             <TextBox x:Name="WorkingDirectoryTextBox"
                      Grid.Row="2"
                      Grid.Column="1"
-                     Margin="0,16,0,0"
-                     Style="{StaticResource InputTextBoxStyle}" />
+                     Margin="0,10,0,0"
+                     Style="{StaticResource InputTextBoxStyle}"
+                     TextChanged="WorkingDirectoryTextBox_TextChanged"
+                     LostKeyboardFocus="WorkingDirectoryTextBox_LostKeyboardFocus" />
 
             <TextBlock Grid.Row="3"
                        Grid.Column="0"
-                       Margin="0,16,0,0"
+                       Margin="0,10,0,0"
                        VerticalAlignment="Center"
                        Foreground="{StaticResource MutedBrush}"
                        Text="Font size" />
             <TextBox x:Name="FontSizeTextBox"
                      Grid.Row="3"
                      Grid.Column="1"
-                     Margin="0,16,0,0"
-                     Width="96"
+                     Margin="0,10,0,0"
+                     Width="84"
                      HorizontalAlignment="Left"
-                     Style="{StaticResource InputTextBoxStyle}" />
-
-            <TextBlock x:Name="DescriptionText"
-                       Grid.Row="4"
-                       Grid.Column="0"
-                       Grid.ColumnSpan="2"
-                       Margin="0,18,0,0"
-                       Foreground="{StaticResource MutedBrush}"
-                       TextWrapping="Wrap" />
-
-            <TextBlock Grid.Row="5"
-                       Grid.Column="0"
-                       Grid.ColumnSpan="2"
-                       Margin="0,18,0,0"
-                       Foreground="{StaticResource MutedBrush}"
-                       Text="These defaults are used for new tabs and startup. Font size is also applied to open tabs immediately."
-                       TextWrapping="Wrap" />
-
-            <StackPanel Grid.Row="6"
-                        Grid.Column="1"
-                        Margin="0,22,0,0"
-                        Orientation="Horizontal"
-                        HorizontalAlignment="Right">
-                <Button Content="Cancel"
-                        Style="{StaticResource ButtonStyle}"
-                        Click="CancelButton_Click" />
-                <Button Content="Save"
-                        Style="{StaticResource AccentButtonStyle}"
-                        Margin="0"
-                        Click="SaveButton_Click" />
-            </StackPanel>
+                     Style="{StaticResource InputTextBoxStyle}"
+                     TextChanged="FontSizeTextBox_TextChanged"
+                     LostKeyboardFocus="FontSizeTextBox_LostKeyboardFocus" />
         </Grid>
     </Border>
 </Window>

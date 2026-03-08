@@ -13,6 +13,7 @@ public partial class MainWindow : Window
 {
     private readonly List<TerminalTabItem> _tabs = [];
     private TerminalAppSettings _settings;
+    private SettingsWindow? _settingsWindow;
     private bool _isClosing;
     private bool _allowClose;
 
@@ -386,18 +387,31 @@ public partial class MainWindow : Window
 
     private void OpenSettings()
     {
-        TerminalAppSettings seed = GetSettingsSeed();
-        var window = new SettingsWindow(seed)
+        if (_settingsWindow is not null)
         {
-            Owner = this
-        };
+            if (_settingsWindow.WindowState == WindowState.Minimized)
+            {
+                _settingsWindow.WindowState = WindowState.Normal;
+            }
 
-        if (window.ShowDialog() != true)
-        {
+            _settingsWindow.Activate();
             return;
         }
 
-        _settings = window.SavedSettings;
+        _settingsWindow = new SettingsWindow(GetSettingsSeed())
+        {
+            Owner = this,
+            ShowInTaskbar = false
+        };
+        _settingsWindow.SettingsChanged += ApplyUpdatedSettings;
+        _settingsWindow.Closed += SettingsWindow_Closed;
+        _settingsWindow.Show();
+        _settingsWindow.Activate();
+    }
+
+    private void ApplyUpdatedSettings(TerminalAppSettings settings)
+    {
+        _settings = settings;
         SaveWindowSettings();
         _settings.Save();
 
@@ -406,6 +420,18 @@ public partial class MainWindow : Window
             tab.View.ApplySettings(_settings);
             UpdateTabHeader(tab, tab.View.HeaderTitle);
         }
+    }
+
+    private void SettingsWindow_Closed(object? sender, EventArgs e)
+    {
+        if (_settingsWindow is null)
+        {
+            return;
+        }
+
+        _settingsWindow.SettingsChanged -= ApplyUpdatedSettings;
+        _settingsWindow.Closed -= SettingsWindow_Closed;
+        _settingsWindow = null;
     }
 
     private TerminalAppSettings GetSettingsSeed()

@@ -17,6 +17,10 @@
         <SolidColorBrush x:Key="ForegroundMutedBrush" Color="#B9AD9E" />
         <SolidColorBrush x:Key="ForegroundDimBrush" Color="#8B7E70" />
 
+        <DataTemplate x:Key="TerminalProfileItemTemplate">
+            <TextBlock Text="{Binding DisplayName}" />
+        </DataTemplate>
+
         <Style x:Key="PanelBorderStyle" TargetType="Border">
             <Setter Property="Background" Value="{StaticResource PanelBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
@@ -178,6 +182,8 @@
                               Grid.Column="1"
                               Margin="0,0,14,0"
                               Style="{StaticResource InputComboBoxStyle}"
+                              ItemTemplate="{StaticResource TerminalProfileItemTemplate}"
+                              TextSearch.TextPath="DisplayName"
                               SelectionChanged="ProfileComboBox_SelectionChanged" />
 
                     <TextBlock Grid.Column="2"
@@ -374,9 +380,7 @@
                              PreviewKeyDown="TerminalInputProxy_PreviewKeyDown"
                              TextChanged="TerminalInputProxy_TextChanged"
                              GotKeyboardFocus="TerminalInputProxy_GotKeyboardFocus"
-                             LostKeyboardFocus="TerminalInputProxy_LostKeyboardFocus"
-                             InputMethod.IsInputMethodEnabled="True"
-                             InputMethod.PreferredImeState="On" />
+                             LostKeyboardFocus="TerminalInputProxy_LostKeyboardFocus" />
                 </Canvas>
             </Grid>
         </Border>

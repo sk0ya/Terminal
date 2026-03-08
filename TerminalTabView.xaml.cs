@@ -116,7 +116,7 @@ public partial class TerminalTabView : UserControl
         }
 
         _hasStartedInitialSession = true;
-        await StartTerminalAsync();
+        await StartTerminalAsync(focusTerminal: true);
     }
 
     public async Task CloseAsync()
@@ -155,7 +155,7 @@ public partial class TerminalTabView : UserControl
     {
         _autoRecoveryAttempts = 0;
         _useCompatibilityMode = false;
-        await StartTerminalAsync();
+        await StartTerminalAsync(focusTerminal: true);
     }
 
     private async void StopButton_Click(object sender, RoutedEventArgs e)
@@ -593,7 +593,7 @@ public partial class TerminalTabView : UserControl
         UpdateTerminalChrome();
     }
 
-    private async Task StartTerminalAsync()
+    private async Task StartTerminalAsync(bool focusTerminal = false)
     {
         if (!TryBuildLaunchRequest(out string commandLine, out string workingDirectory))
         {
@@ -663,7 +663,10 @@ public partial class TerminalTabView : UserControl
             _cursorBlinkVisible = true;
             UpdateUiState(isRunning: true);
             UpdateActiveLaunchState(commandLine, workingDirectory);
-            FocusTerminalInput();
+            if (focusTerminal)
+            {
+                FocusTerminalInput();
+            }
             SetStatus(BuildSessionStartedMessage(commandLine));
         }
         catch (Exception ex)
@@ -2067,7 +2070,7 @@ public partial class TerminalTabView : UserControl
             SetStatus(isAutomatic
                 ? "Initial output stalled. Unlocking and restarting in compatibility mode..."
                 : "Recover requested. Unlocking and restarting in compatibility mode...");
-            await StartTerminalAsync();
+            await StartTerminalAsync(focusTerminal: true);
         }
         catch (Exception ex)
         {

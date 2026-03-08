@@ -5,6 +5,78 @@ namespace ConPtyTerminal.Tests;
 public sealed class TerminalProfileCatalogTests
 {
     [Fact]
+    public void ResolveSelectedProfilePrefersMatchingCandidateOverStoredCustomId()
+    {
+        TerminalProfileDefinition candidateProfile = new(
+            "pwsh",
+            "PowerShell 7",
+            "pwsh.exe -NoLogo",
+            "PowerShell");
+        TerminalProfileDefinition customProfile = new(
+            "custom",
+            "Custom",
+            string.Empty,
+            "Custom",
+            IsCustom: true);
+
+        TerminalProfileDefinition selectedProfile = TerminalProfileCatalog.ResolveSelectedProfile(
+            [candidateProfile, customProfile],
+            customProfile,
+            profileId: "custom",
+            commandLine: "pwsh.exe -NoLogo");
+
+        Assert.Equal(candidateProfile, selectedProfile);
+    }
+
+    [Fact]
+    public void ResolveSelectedProfileReturnsCustomWhenStoredCandidateNoLongerMatchesCommandLine()
+    {
+        TerminalProfileDefinition candidateProfile = new(
+            "pwsh",
+            "PowerShell 7",
+            "pwsh.exe -NoLogo",
+            "PowerShell");
+        TerminalProfileDefinition customProfile = new(
+            "custom",
+            "Custom",
+            string.Empty,
+            "Custom",
+            IsCustom: true);
+
+        TerminalProfileDefinition selectedProfile = TerminalProfileCatalog.ResolveSelectedProfile(
+            [candidateProfile, customProfile],
+            customProfile,
+            profileId: "pwsh",
+            commandLine: "pwsh.exe -NoLogo -NoProfile");
+
+        Assert.Equal(customProfile, selectedProfile);
+    }
+
+    [Fact]
+    public void ResolveSelectedProfileMatchesEquivalentExecutablePathAndArguments()
+    {
+        TerminalProfileDefinition candidateProfile = new(
+            "pwsh",
+            "PowerShell 7",
+            "pwsh.exe -NoLogo",
+            "PowerShell");
+        TerminalProfileDefinition customProfile = new(
+            "custom",
+            "Custom",
+            string.Empty,
+            "Custom",
+            IsCustom: true);
+
+        TerminalProfileDefinition selectedProfile = TerminalProfileCatalog.ResolveSelectedProfile(
+            [candidateProfile, customProfile],
+            customProfile,
+            profileId: "custom",
+            commandLine: "\"C:\\Users\\koya\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe\" -NoLogo");
+
+        Assert.Equal(candidateProfile, selectedProfile);
+    }
+
+    [Fact]
     public void ResolveGitBashExecutablePrefersGitInstallOverWindowsSystemBash()
     {
         string rootDirectory = CreateTemporaryDirectory();

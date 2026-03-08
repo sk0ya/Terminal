@@ -44,7 +44,6 @@ public partial class TerminalTabView
         _profiles.AddRange(TerminalProfileCatalog.CreateProfiles());
         _profiles.Add(_customProfile);
         ProfileComboBox.ItemsSource = _profiles;
-        ProfileComboBox.DisplayMemberPath = nameof(TerminalProfileDefinition.DisplayName);
     }
 
     private void ApplySavedWorkbenchSettings()
@@ -80,10 +79,11 @@ public partial class TerminalTabView
 
     private void SetSelectedProfile(string? profileId, string commandLine)
     {
-        TerminalProfileDefinition selectedProfile =
-            _profiles.FirstOrDefault(profile => string.Equals(profile.Id, profileId, StringComparison.OrdinalIgnoreCase)) ??
-            MatchProfileByCommandLine(commandLine) ??
-            _customProfile;
+        TerminalProfileDefinition selectedProfile = TerminalProfileCatalog.ResolveSelectedProfile(
+            _profiles,
+            _customProfile,
+            profileId,
+            commandLine);
 
         string effectiveCommandLine = string.IsNullOrWhiteSpace(commandLine) && !selectedProfile.IsCustom
             ? selectedProfile.CommandLine
@@ -107,15 +107,7 @@ public partial class TerminalTabView
 
     private TerminalProfileDefinition? MatchProfileByCommandLine(string? commandLine)
     {
-        if (string.IsNullOrWhiteSpace(commandLine))
-        {
-            return null;
-        }
-
-        string normalized = commandLine.Trim();
-        return _profiles.FirstOrDefault(profile =>
-            !profile.IsCustom &&
-            string.Equals(profile.CommandLine, normalized, StringComparison.OrdinalIgnoreCase));
+        return TerminalProfileCatalog.MatchProfileByCommandLine(_profiles, commandLine);
     }
 
     private void UpdateProfileHint()
@@ -235,7 +227,7 @@ public partial class TerminalTabView
     private async void RestartButton_Click(object sender, RoutedEventArgs e)
     {
         _autoRecoveryAttempts = 0;
-        await StartTerminalAsync();
+        await StartTerminalAsync(focusTerminal: true);
     }
 
     private void SaveTranscriptButton_Click(object sender, RoutedEventArgs e)
