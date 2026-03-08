@@ -175,7 +175,7 @@
                                 VerticalContentAlignment="Stretch">
                     <Grid x:Name="ChromePanelLayoutGrid"
                           Background="Transparent"
-                          MouseLeftButtonDown="ChromePanelLayoutGrid_MouseLeftButtonDown">
+                          PreviewMouseLeftButtonDown="ChromePanelLayoutGrid_PreviewMouseLeftButtonDown">
                         <Grid.RowDefinitions>
                             <RowDefinition x:Name="ChromeRow0" Height="*" />
                             <RowDefinition x:Name="ChromeRow1" Height="0" />

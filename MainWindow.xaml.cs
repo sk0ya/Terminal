@@ -556,13 +556,8 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ChromePanelLayoutGrid_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    private void ChromePanelLayoutGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (_settings.TabStripPlacement == TerminalTabStripPlacementCatalog.Top)
-        {
-            return;
-        }
-
         if (e.OriginalSource is not DependencyObject source)
         {
             return;
@@ -572,6 +567,15 @@ public partial class MainWindow : Window
             || FindVisualAncestor<ListBoxItem>(source) is not null
             || FindVisualAncestor<ScrollBar>(source) is not null)
         {
+            return;
+        }
+
+        if (e.ClickCount == 2)
+        {
+            WindowState = WindowState == WindowState.Maximized
+                ? WindowState.Normal
+                : WindowState.Maximized;
+            e.Handled = true;
             return;
         }
 
