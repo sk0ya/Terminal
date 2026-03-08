@@ -1989,10 +1989,17 @@ public partial class TerminalTabView : UserControl
     {
         double horizontalOffset = _terminalScrollViewer?.HorizontalOffset ?? 0;
         double verticalOffset = _terminalScrollViewer?.VerticalOffset ?? 0;
+        Size viewportSize = TerminalViewportSizing.ResolveViewportSize(
+            new Size(TerminalOutput.ActualWidth, TerminalOutput.ActualHeight),
+            TerminalOutput.BorderThickness,
+            TerminalOutput.Padding,
+            _terminalScrollViewer is null
+                ? null
+                : new Size(_terminalScrollViewer.ViewportWidth, _terminalScrollViewer.ViewportHeight));
         double viewportLeft = TerminalOutput.BorderThickness.Left + TerminalOutput.Padding.Left;
         double viewportTop = TerminalOutput.BorderThickness.Top + TerminalOutput.Padding.Top;
-        double viewportRight = Math.Max(viewportLeft, TerminalOutput.ActualWidth - TerminalOutput.BorderThickness.Right - TerminalOutput.Padding.Right);
-        double viewportBottom = Math.Max(viewportTop, TerminalOutput.ActualHeight - TerminalOutput.BorderThickness.Bottom - TerminalOutput.Padding.Bottom);
+        double viewportRight = viewportLeft + viewportSize.Width;
+        double viewportBottom = viewportTop + viewportSize.Height;
 
         return new TerminalViewportMetrics(
             viewportLeft,
@@ -2162,33 +2169,25 @@ public partial class TerminalTabView : UserControl
 
     private (short Columns, short Rows) CalculateTerminalSize()
     {
-        if (TerminalOutput.ActualWidth <= 0 || TerminalOutput.ActualHeight <= 0)
-        {
-            return (120, 30);
-        }
+        TerminalViewportMetrics viewport = GetTerminalViewportMetrics();
+        double viewportWidth = viewport.ViewportRight - viewport.ViewportLeft;
+        double viewportHeight = viewport.ViewportBottom - viewport.ViewportTop;
+        var (charWidth, charHeight) = MeasureCharacterCell();
 
-        var typeface = new Typeface(
-            TerminalOutput.FontFamily,
-            TerminalOutput.FontStyle,
-            TerminalOutput.FontWeight,
-            TerminalOutput.FontStretch);
+        short columns = TerminalViewportSizing.CalculateCellCount(
+            viewportWidth,
+            charWidth,
+            fallback: 120,
+            min: 20,
+            max: 500);
+        short rows = TerminalViewportSizing.CalculateCellCount(
+            viewportHeight,
+            charHeight,
+            fallback: 30,
+            min: 10,
+            max: 300);
 
-        var sample = new FormattedText(
-            "W",
-            CultureInfo.CurrentCulture,
-            FlowDirection.LeftToRight,
-            typeface,
-            TerminalOutput.FontSize,
-            Brushes.White,
-            VisualTreeHelper.GetDpi(this).PixelsPerDip);
-
-        double charWidth = Math.Max(sample.WidthIncludingTrailingWhitespace, 1.0);
-        double charHeight = Math.Max(sample.Height, 1.0);
-
-        int columns = Math.Clamp((int)(TerminalOutput.ActualWidth / charWidth), 20, 500);
-        int rows = Math.Clamp((int)(TerminalOutput.ActualHeight / charHeight), 10, 300);
-
-        return ((short)columns, (short)rows);
+        return (columns, rows);
     }
 
     private readonly record struct TerminalViewportMetrics(
