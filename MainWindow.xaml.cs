@@ -497,8 +497,9 @@ public partial class MainWindow : Window
         ScrollViewer.SetVerticalScrollBarVisibility(
             TabStrip,
             isHorizontal ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto);
-        NewTabButton.HorizontalAlignment = isHorizontal ? HorizontalAlignment.Left : HorizontalAlignment.Center;
-        NewTabButton.VerticalAlignment = isHorizontal ? VerticalAlignment.Stretch : VerticalAlignment.Center;
+        NewTabButton.Width = isHorizontal ? 34 : double.NaN;
+        NewTabButton.HorizontalAlignment = isHorizontal ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
+        NewTabButton.VerticalAlignment = isHorizontal ? VerticalAlignment.Stretch : VerticalAlignment.Top;
     }
 
     private void ConfigureProfilePickerPlacement(string placement)
