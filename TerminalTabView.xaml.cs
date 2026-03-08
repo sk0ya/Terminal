@@ -455,19 +455,25 @@ public partial class TerminalTabView : UserControl
 
     private bool TryHandleControlShortcut(KeyEventArgs e)
     {
-        if (GetTerminalModifiers() != ModifierKeys.Control || !SupportsTerminalInput())
+        if (!SupportsTerminalInput())
+        {
+            return false;
+        }
+
+        ModifierKeys modifiers = GetTerminalModifiers();
+        if ((modifiers & ModifierKeys.Control) == 0)
         {
             return false;
         }
 
         Key key = GetEffectiveKey(e);
-        string? chord = TerminalKeyChordTranslator.TranslateCtrlChord(key);
+        string? chord = TerminalKeyChordTranslator.TranslateCtrlChord(key, modifiers);
         if (chord is null)
         {
             return false;
         }
 
-        if (key == Key.C)
+        if (key == Key.C && modifiers == ModifierKeys.Control)
         {
             SendInterrupt();
             return true;

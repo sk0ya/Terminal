@@ -31,6 +31,28 @@ public sealed class TerminalKeyChordTranslatorTests
     }
 
     [Fact]
+    public void TranslateCtrlChordPrefixesEscapeForAltCtrlChord()
+    {
+        Assert.Equal(
+            "\u001b\u0001",
+            TerminalKeyChordTranslator.TranslateCtrlChord(Key.A, ModifierKeys.Control | ModifierKeys.Alt));
+    }
+
+    [Fact]
+    public void TranslateCtrlChordAllowsShiftWithControlChord()
+    {
+        Assert.Equal(
+            "\u001f",
+            TerminalKeyChordTranslator.TranslateCtrlChord(Key.OemMinus, ModifierKeys.Control | ModifierKeys.Shift));
+    }
+
+    [Fact]
+    public void TranslateCtrlChordReturnsNullWithoutControlModifier()
+    {
+        Assert.Null(TerminalKeyChordTranslator.TranslateCtrlChord(Key.A, ModifierKeys.Alt));
+    }
+
+    [Fact]
     public void TranslateSpecialKeyEncodesNavigationWithModifiers()
     {
         string? sequence = TerminalKeyChordTranslator.TranslateSpecialKey(

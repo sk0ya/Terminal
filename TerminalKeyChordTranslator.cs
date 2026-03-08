@@ -6,6 +6,29 @@ internal static class TerminalKeyChordTranslator
 {
     public static string? TranslateCtrlChord(Key key)
     {
+        return TranslateCtrlChord(key, ModifierKeys.Control);
+    }
+
+    public static string? TranslateCtrlChord(Key key, ModifierKeys modifiers)
+    {
+        if ((modifiers & ModifierKeys.Control) == 0)
+        {
+            return null;
+        }
+
+        string? chord = TranslateCtrlChordCore(key);
+        if (chord is null)
+        {
+            return null;
+        }
+
+        return (modifiers & ModifierKeys.Alt) != 0
+            ? $"\u001b{chord}"
+            : chord;
+    }
+
+    private static string? TranslateCtrlChordCore(Key key)
+    {
         if (key == Key.C)
         {
             return "\u0003";
