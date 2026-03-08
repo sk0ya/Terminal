@@ -15,6 +15,7 @@ public sealed class TerminalAppSettings
     public string WorkingDirectory { get; set; } = string.Empty;
     public string FontFamilyName { get; set; } = TerminalFontCatalog.DefaultFontFamilyName;
     public double FontSize { get; set; } = 14;
+    public string TabStripPlacement { get; set; } = TerminalTabStripPlacementCatalog.Top;
     public double WindowWidth { get; set; } = 1000;
     public double WindowHeight { get; set; } = 720;
 
@@ -34,6 +35,8 @@ public sealed class TerminalAppSettings
             {
                 settings.FontFamilyName = TerminalFontCatalog.DefaultFontFamilyName;
             }
+
+            settings.TabStripPlacement = TerminalTabStripPlacementCatalog.Normalize(settings.TabStripPlacement);
 
             return settings;
         }

@@ -30,6 +30,10 @@
             <TextBlock Text="{Binding}" FontFamily="{Binding}" />
         </DataTemplate>
 
+        <DataTemplate x:Key="TabStripPlacementItemTemplate">
+            <TextBlock Text="{Binding DisplayName}" />
+        </DataTemplate>
+
         <Style x:Key="InputTextBoxStyle" TargetType="TextBox">
             <Setter Property="Height" Value="32" />
             <Setter Property="Padding" Value="10,5" />
@@ -197,6 +201,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="90" />
@@ -272,6 +277,20 @@
                      Style="{StaticResource InputTextBoxStyle}"
                      TextChanged="FontSizeTextBox_TextChanged"
                      LostKeyboardFocus="FontSizeTextBox_LostKeyboardFocus" />
+
+            <TextBlock Grid.Row="5"
+                       Grid.Column="0"
+                       Margin="0,10,0,0"
+                       VerticalAlignment="Center"
+                       Foreground="{StaticResource MutedBrush}"
+                       Text="Tabs" />
+            <ComboBox x:Name="TabStripPlacementComboBox"
+                      Grid.Row="5"
+                      Grid.Column="1"
+                      Margin="0,10,0,0"
+                      Style="{StaticResource InputComboBoxStyle}"
+                      ItemTemplate="{StaticResource TabStripPlacementItemTemplate}"
+                      SelectionChanged="TabStripPlacementComboBox_SelectionChanged" />
         </Grid>
     </Border>
 </Window>

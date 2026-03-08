@@ -11,6 +11,7 @@ public partial class SettingsWindow : Window
     private static readonly TimeSpan AutoApplyDelay = TimeSpan.FromMilliseconds(300);
     private readonly List<TerminalProfileDefinition> _profiles = [];
     private readonly List<string> _fontFamilyNames = [];
+    private readonly List<TerminalTabStripPlacementOption> _tabStripPlacements = [];
     private readonly TerminalProfileDefinition _customProfile = new(
         "custom",
         "Custom",
@@ -34,6 +35,7 @@ public partial class SettingsWindow : Window
         _fontSizeApplyTimer.Tick += FontSizeApplyTimer_Tick;
         BuildProfileCatalog();
         BuildFontFamilyCatalog();
+        BuildTabStripPlacementCatalog();
         ApplySettings(_currentSettings);
     }
 
@@ -54,6 +56,13 @@ public partial class SettingsWindow : Window
         FontFamilyComboBox.ItemsSource = _fontFamilyNames;
     }
 
+    private void BuildTabStripPlacementCatalog()
+    {
+        _tabStripPlacements.Clear();
+        _tabStripPlacements.AddRange(TerminalTabStripPlacementCatalog.CreateOptions());
+        TabStripPlacementComboBox.ItemsSource = _tabStripPlacements;
+    }
+
     private void ApplySettings(TerminalAppSettings settings)
     {
         _suppressAutoApply = true;
@@ -69,6 +78,7 @@ public partial class SettingsWindow : Window
             WorkingDirectoryTextBox.Text = workingDirectory;
             FontFamilyComboBox.SelectedItem = TerminalFontCatalog.NormalizeFontFamilyName(settings.FontFamilyName);
             FontSizeTextBox.Text = settings.FontSize.ToString("0");
+            TabStripPlacementComboBox.SelectedItem = TerminalTabStripPlacementCatalog.ResolveSelectedOption(settings.TabStripPlacement);
             SetSelectedProfile(settings.SelectedProfileId, commandLine);
             SetInputValidationState(WorkingDirectoryTextBox, isValid: true);
             SetInputValidationState(FontSizeTextBox, isValid: true);
@@ -179,6 +189,16 @@ public partial class SettingsWindow : Window
         CommitFontFamilySetting();
     }
 
+    private void TabStripPlacementComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressAutoApply)
+        {
+            return;
+        }
+
+        CommitTabStripPlacementSetting();
+    }
+
     private void FontSizeTextBox_LostKeyboardFocus(object sender, System.Windows.Input.KeyboardFocusChangedEventArgs e)
     {
         CommitFontSizeSetting();
@@ -253,6 +273,22 @@ public partial class SettingsWindow : Window
         _currentSettings.FontSize = fontSize;
         SetInputValidationState(FontSizeTextBox, isValid: true);
         SetTextSilently(FontSizeTextBox, fontSize.ToString("0"));
+        PublishSettingsChanged();
+    }
+
+    private void CommitTabStripPlacementSetting()
+    {
+        if (_suppressAutoApply)
+        {
+            return;
+        }
+
+        string placement = TerminalTabStripPlacementCatalog.Normalize(
+            (TabStripPlacementComboBox.SelectedItem as TerminalTabStripPlacementOption)?.Id);
+        _currentSettings.TabStripPlacement = placement;
+        SetComboSelectionSilently(
+            TabStripPlacementComboBox,
+            TerminalTabStripPlacementCatalog.ResolveSelectedOption(placement));
         PublishSettingsChanged();
     }
 
@@ -343,6 +379,7 @@ public partial class SettingsWindow : Window
             WorkingDirectory = settings.WorkingDirectory,
             FontFamilyName = settings.FontFamilyName,
             FontSize = settings.FontSize,
+            TabStripPlacement = TerminalTabStripPlacementCatalog.Normalize(settings.TabStripPlacement),
             WindowWidth = settings.WindowWidth,
             WindowHeight = settings.WindowHeight
         };

@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Controls.Primitives;
+using System.Windows.Shell;
 using System.Windows.Threading;
 
 namespace ConPtyTerminal;
@@ -22,6 +23,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         _settings = TerminalAppSettings.Load();
         ApplyWindowSettings(_settings);
+        ApplyTabStripPlacement(_settings.TabStripPlacement);
+        UpdateMaximizeRestoreButton();
         Loaded += OnLoaded;
         Closing += OnClosing;
     }
@@ -71,6 +74,23 @@ public partial class MainWindow : Window
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
         OpenSettings();
+    }
+
+    private void MinimizeButton_Click(object sender, RoutedEventArgs e)
+    {
+        WindowState = WindowState.Minimized;
+    }
+
+    private void MaximizeRestoreButton_Click(object sender, RoutedEventArgs e)
+    {
+        WindowState = WindowState == WindowState.Maximized
+            ? WindowState.Normal
+            : WindowState.Maximized;
+    }
+
+    private void CloseWindowButton_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
     }
 
     private void AddNewTabFromSettings()
@@ -228,6 +248,11 @@ public partial class MainWindow : Window
         };
 
         var tab = new TerminalTabItem(view, listBoxItem, border, titleText, closeButton);
+        WindowChrome.SetIsHitTestVisibleInChrome(titleText, true);
+        WindowChrome.SetIsHitTestVisibleInChrome(closeButton, true);
+        WindowChrome.SetIsHitTestVisibleInChrome(headerPanel, true);
+        WindowChrome.SetIsHitTestVisibleInChrome(border, true);
+        WindowChrome.SetIsHitTestVisibleInChrome(listBoxItem, true);
         closeButton.Click += async (_, _) => await CloseTabAsync(tab);
         return tab;
     }
@@ -342,6 +367,174 @@ public partial class MainWindow : Window
         }
     }
 
+    private void Window_StateChanged(object? sender, EventArgs e)
+    {
+        UpdateMaximizeRestoreButton();
+    }
+
+    private void ApplyTabStripPlacement(string? rawPlacement)
+    {
+        string placement = TerminalTabStripPlacementCatalog.Normalize(rawPlacement);
+        _settings.TabStripPlacement = placement;
+        bool isTop = placement == TerminalTabStripPlacementCatalog.Top;
+
+        TopTabHost.Content = null;
+        LeftTabHost.Content = null;
+        RightTabHost.Content = null;
+        BottomTabHost.Content = null;
+        LeftTabChrome.Visibility = Visibility.Collapsed;
+        RightTabChrome.Visibility = Visibility.Collapsed;
+        BottomTabChrome.Visibility = Visibility.Collapsed;
+
+        switch (placement)
+        {
+            case TerminalTabStripPlacementCatalog.Bottom:
+                BottomTabHost.Content = ChromePanelLayoutGrid;
+                BottomTabChrome.Visibility = Visibility.Visible;
+                break;
+            case TerminalTabStripPlacementCatalog.Left:
+                LeftTabHost.Content = ChromePanelLayoutGrid;
+                LeftTabChrome.Visibility = Visibility.Visible;
+                break;
+            case TerminalTabStripPlacementCatalog.Right:
+                RightTabHost.Content = ChromePanelLayoutGrid;
+                RightTabChrome.Visibility = Visibility.Visible;
+                break;
+            default:
+                TopTabHost.Content = ChromePanelLayoutGrid;
+                break;
+        }
+
+        WindowTitleText.Visibility = Visibility.Collapsed;
+        TopChromeBar.Visibility = isTop ? Visibility.Visible : Visibility.Collapsed;
+        TopChromeRow.Height = isTop ? new GridLength(40) : new GridLength(0);
+        if (WindowChrome.GetWindowChrome(this) is WindowChrome chrome)
+        {
+            chrome.CaptionHeight = isTop ? 40 : 0;
+        }
+
+        ConfigureChromePanelLayout(placement);
+        ConfigureProfilePickerPlacement(placement);
+        UpdateTabVisuals();
+    }
+
+    private void ConfigureChromePanelLayout(string placement)
+    {
+        bool isHorizontal = TerminalTabStripPlacementCatalog.IsHorizontal(placement);
+        bool isVertical = !isHorizontal;
+
+        Grid.SetRow(TabStripLayoutGrid, isHorizontal ? 0 : 1);
+        Grid.SetColumn(TabStripLayoutGrid, 0);
+        Grid.SetRow(SettingsButton, isHorizontal ? 0 : 3);
+        Grid.SetColumn(SettingsButton, isHorizontal ? 1 : 0);
+        Grid.SetRow(WindowCommandBar, 0);
+        Grid.SetColumn(WindowCommandBar, isHorizontal ? 2 : 0);
+
+        ChromeRow0.Height = isHorizontal ? new GridLength(1, GridUnitType.Star) : GridLength.Auto;
+        ChromeRow1.Height = isHorizontal ? new GridLength(0) : GridLength.Auto;
+        ChromeRow2.Height = isHorizontal ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+        ChromeRow3.Height = isHorizontal ? new GridLength(0) : GridLength.Auto;
+        ChromeColumn0.Width = new GridLength(1, GridUnitType.Star);
+        ChromeColumn1.Width = isHorizontal ? GridLength.Auto : new GridLength(0);
+        ChromeColumn2.Width = isHorizontal ? GridLength.Auto : new GridLength(0);
+
+        WindowCommandBar.Orientation = Orientation.Horizontal;
+        WindowCommandBar.HorizontalAlignment = HorizontalAlignment.Right;
+        WindowCommandBar.VerticalAlignment = VerticalAlignment.Center;
+        WindowCommandBar.Margin = isHorizontal ? new Thickness(0) : new Thickness(0, 6, 8, 0);
+
+        SettingsButton.Width = isHorizontal ? double.NaN : 92;
+        SettingsButton.HorizontalAlignment = isHorizontal ? HorizontalAlignment.Left : HorizontalAlignment.Center;
+        SettingsButton.VerticalAlignment = isHorizontal ? VerticalAlignment.Center : VerticalAlignment.Bottom;
+        SettingsButton.Margin = isHorizontal ? new Thickness(0) : new Thickness(0, 0, 0, 10);
+
+        TabStripLayoutGrid.Margin = isHorizontal ? new Thickness(0) : new Thickness(0, 6, 0, 0);
+        TabStripLayoutGrid.VerticalAlignment = isHorizontal ? VerticalAlignment.Stretch : VerticalAlignment.Top;
+        VerticalDragRegion.Visibility = isVertical ? Visibility.Visible : Visibility.Collapsed;
+
+        ConfigureTabStripLayout(isHorizontal);
+    }
+
+    private void ConfigureTabStripLayout(bool isHorizontal)
+    {
+        Grid.SetRow(TabStrip, 0);
+        Grid.SetColumn(TabStrip, 0);
+        Grid.SetRow(NewTabButton, isHorizontal ? 0 : 1);
+        Grid.SetColumn(NewTabButton, isHorizontal ? 1 : 0);
+
+        TabStripPrimaryRow.Height = isHorizontal ? new GridLength(1, GridUnitType.Star) : GridLength.Auto;
+        TabStripSecondaryRow.Height = isHorizontal ? new GridLength(0) : GridLength.Auto;
+        TabStripPrimaryColumn.Width = new GridLength(1, GridUnitType.Star);
+        TabStripSecondaryColumn.Width = isHorizontal ? GridLength.Auto : new GridLength(0);
+
+        TabStrip.ItemsPanel = (ItemsPanelTemplate)FindResource(
+            isHorizontal ? "HorizontalTabItemsPanelTemplate" : "VerticalTabItemsPanelTemplate");
+        ScrollViewer.SetHorizontalScrollBarVisibility(
+            TabStrip,
+            isHorizontal ? ScrollBarVisibility.Hidden : ScrollBarVisibility.Disabled);
+        ScrollViewer.SetVerticalScrollBarVisibility(
+            TabStrip,
+            isHorizontal ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto);
+        NewTabButton.HorizontalAlignment = isHorizontal ? HorizontalAlignment.Left : HorizontalAlignment.Center;
+        NewTabButton.VerticalAlignment = isHorizontal ? VerticalAlignment.Stretch : VerticalAlignment.Center;
+    }
+
+    private void ConfigureProfilePickerPlacement(string placement)
+    {
+        switch (TerminalTabStripPlacementCatalog.Normalize(placement))
+        {
+            case TerminalTabStripPlacementCatalog.Bottom:
+                ProfilePickerPopup.Placement = PlacementMode.Top;
+                ProfilePickerPopup.HorizontalOffset = -8;
+                ProfilePickerPopup.VerticalOffset = -4;
+                break;
+            case TerminalTabStripPlacementCatalog.Left:
+                ProfilePickerPopup.Placement = PlacementMode.Right;
+                ProfilePickerPopup.HorizontalOffset = 4;
+                ProfilePickerPopup.VerticalOffset = -8;
+                break;
+            case TerminalTabStripPlacementCatalog.Right:
+                ProfilePickerPopup.Placement = PlacementMode.Left;
+                ProfilePickerPopup.HorizontalOffset = -4;
+                ProfilePickerPopup.VerticalOffset = -8;
+                break;
+            default:
+                ProfilePickerPopup.Placement = PlacementMode.Bottom;
+                ProfilePickerPopup.HorizontalOffset = -8;
+                ProfilePickerPopup.VerticalOffset = 4;
+                break;
+        }
+    }
+
+    private void ChromePanelLayoutGrid_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_settings.TabStripPlacement == TerminalTabStripPlacementCatalog.Top)
+        {
+            return;
+        }
+
+        if (e.OriginalSource is not DependencyObject source)
+        {
+            return;
+        }
+
+        if (FindVisualAncestor<Button>(source) is not null
+            || FindVisualAncestor<ListBoxItem>(source) is not null
+            || FindVisualAncestor<ScrollBar>(source) is not null)
+        {
+            return;
+        }
+
+        try
+        {
+            DragMove();
+            e.Handled = true;
+        }
+        catch
+        {
+        }
+    }
+
     private void MoveSelection(int delta)
     {
         if (_tabs.Count == 0)
@@ -370,12 +563,17 @@ public partial class MainWindow : Window
 
     private void UpdateTabVisuals()
     {
+        bool isHorizontal = TerminalTabStripPlacementCatalog.IsHorizontal(_settings.TabStripPlacement);
+
         foreach (TerminalTabItem tab in _tabs)
         {
             bool isSelected = ReferenceEquals(TabStrip.SelectedItem, tab.ListBoxItem);
             tab.HeaderBorder.Background = new SolidColorBrush(isSelected
                 ? Color.FromRgb(0x0E, 0x0E, 0x0E)
                 : Color.FromRgb(0x1B, 0x1B, 0x1B));
+            tab.HeaderBorder.BorderThickness = isHorizontal
+                ? new Thickness(0, 0, 1, 0)
+                : new Thickness(0, 0, 0, 1);
             tab.TitleText.Foreground = new SolidColorBrush(isSelected
                 ? Color.FromRgb(0xED, 0xED, 0xED)
                 : Color.FromRgb(0xA7, 0xA7, 0xA7));
@@ -412,6 +610,7 @@ public partial class MainWindow : Window
     private void ApplyUpdatedSettings(TerminalAppSettings settings)
     {
         _settings = settings;
+        ApplyTabStripPlacement(_settings.TabStripPlacement);
         SaveWindowSettings();
         _settings.Save();
 
@@ -450,6 +649,7 @@ public partial class MainWindow : Window
             WorkingDirectory = tabSettings.WorkingDirectory,
             FontFamilyName = tabSettings.FontFamilyName,
             FontSize = tabSettings.FontSize,
+            TabStripPlacement = _settings.TabStripPlacement,
             WindowWidth = _settings.WindowWidth,
             WindowHeight = _settings.WindowHeight
         };
@@ -472,6 +672,34 @@ public partial class MainWindow : Window
     {
         _settings.WindowWidth = ActualWidth;
         _settings.WindowHeight = ActualHeight;
+    }
+
+    private void UpdateMaximizeRestoreButton()
+    {
+        if (MaximizeRestoreButton is null)
+        {
+            return;
+        }
+
+        MaximizeRestoreButton.Content = WindowState == WindowState.Maximized
+            ? "\uE923"
+            : "\uE922";
+    }
+
+    private static T? FindVisualAncestor<T>(DependencyObject? source)
+        where T : DependencyObject
+    {
+        while (source is not null)
+        {
+            if (source is T match)
+            {
+                return match;
+            }
+
+            source = VisualTreeHelper.GetParent(source);
+        }
+
+        return null;
     }
 
     private sealed record TerminalTabItem(

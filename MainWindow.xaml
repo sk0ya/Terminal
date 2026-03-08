@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         mc:Ignorable="d"
         Title="ConPTY Terminal"
         Width="1200"
@@ -11,7 +12,17 @@
         MinHeight="520"
         Background="#0E0E0E"
         Foreground="#F3F3F3"
+        WindowStyle="None"
+        StateChanged="Window_StateChanged"
         PreviewKeyDown="Window_PreviewKeyDown">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="40"
+                            CornerRadius="0"
+                            GlassFrameThickness="0"
+                            ResizeBorderThickness="8"
+                            UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
+
     <Window.Resources>
         <SolidColorBrush x:Key="ChromeBrush" Color="#151515" />
         <SolidColorBrush x:Key="ChromeBorderBrush" Color="#2A2A2A" />
@@ -21,6 +32,14 @@
         <SolidColorBrush x:Key="TabTextBrush" Color="#EDEDED" />
         <SolidColorBrush x:Key="TabTextMutedBrush" Color="#A7A7A7" />
         <SolidColorBrush x:Key="AccentBrush" Color="#4BA3FF" />
+
+        <ItemsPanelTemplate x:Key="HorizontalTabItemsPanelTemplate">
+            <StackPanel Orientation="Horizontal" />
+        </ItemsPanelTemplate>
+
+        <ItemsPanelTemplate x:Key="VerticalTabItemsPanelTemplate">
+            <StackPanel Orientation="Vertical" />
+        </ItemsPanelTemplate>
 
         <Style x:Key="TabActionButtonStyle" TargetType="Button">
             <Setter Property="Height" Value="34" />
@@ -38,6 +57,61 @@
             <Setter Property="Width" Value="Auto" />
             <Setter Property="Padding" Value="10,0" />
             <Setter Property="FontSize" Value="12" />
+        </Style>
+
+        <Style x:Key="WindowCommandButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="46" />
+            <Setter Property="Height" Value="39" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets" />
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="Foreground" Value="{StaticResource TabTextBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonBorder"
+                                Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="#242424" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="#2D2D2D" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="CloseWindowButtonStyle" TargetType="Button" BasedOn="{StaticResource WindowCommandButtonStyle}">
+            <Setter Property="Width" Value="52" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonBorder"
+                                Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="#C42B1C" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="#A52619" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
         <Style x:Key="ProfilePickerButtonStyle" TargetType="Button">
@@ -77,45 +151,167 @@
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="40" />
+            <RowDefinition x:Name="TopChromeRow" Height="40" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
 
-        <Border Grid.Row="0"
+        <Border x:Name="TopChromeBar"
+                Grid.Row="0"
+                Grid.ColumnSpan="3"
                 Background="{StaticResource ChromeBrush}"
                 BorderBrush="{StaticResource ChromeBorderBrush}"
                 BorderThickness="0,0,0,1">
-            <DockPanel LastChildFill="False">
-                <ListBox x:Name="TabStrip"
-                         DockPanel.Dock="Left"
-                         BorderThickness="0"
-                         Background="Transparent"
-                         SelectionChanged="TabStrip_SelectionChanged"
-                         ScrollViewer.HorizontalScrollBarVisibility="Hidden"
-                         ScrollViewer.VerticalScrollBarVisibility="Disabled">
-                    <ListBox.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal" />
-                        </ItemsPanelTemplate>
-                    </ListBox.ItemsPanel>
-                </ListBox>
+            <Grid>
+                <ContentControl x:Name="TopTabHost"
+                                HorizontalContentAlignment="Stretch"
+                                VerticalContentAlignment="Stretch">
+                    <Grid x:Name="ChromePanelLayoutGrid"
+                          Background="Transparent"
+                          MouseLeftButtonDown="ChromePanelLayoutGrid_MouseLeftButtonDown">
+                        <Grid.RowDefinitions>
+                            <RowDefinition x:Name="ChromeRow0" Height="*" />
+                            <RowDefinition x:Name="ChromeRow1" Height="0" />
+                            <RowDefinition x:Name="ChromeRow2" Height="0" />
+                            <RowDefinition x:Name="ChromeRow3" Height="0" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition x:Name="ChromeColumn0" Width="*" />
+                            <ColumnDefinition x:Name="ChromeColumn1" Width="Auto" />
+                            <ColumnDefinition x:Name="ChromeColumn2" Width="Auto" />
+                        </Grid.ColumnDefinitions>
 
-                <Button x:Name="NewTabButton"
-                        DockPanel.Dock="Left"
-                        Style="{StaticResource TabActionButtonStyle}"
-                        FontSize="20"
-                        Content="+"
-                        Click="NewTabButton_Click" />
-                <Button x:Name="SettingsButton"
-                        DockPanel.Dock="Left"
-                        Style="{StaticResource TabTextButtonStyle}"
-                        Content="Settings"
-                        Click="SettingsButton_Click" />
-            </DockPanel>
+                        <Grid x:Name="TabStripLayoutGrid"
+                              Grid.Row="0"
+                              Grid.Column="0"
+                              shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                            <Grid.RowDefinitions>
+                                <RowDefinition x:Name="TabStripPrimaryRow" Height="*" />
+                                <RowDefinition x:Name="TabStripSecondaryRow" Height="0" />
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition x:Name="TabStripPrimaryColumn" Width="*" />
+                                <ColumnDefinition x:Name="TabStripSecondaryColumn" Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <ListBox x:Name="TabStrip"
+                                     Grid.Row="0"
+                                     Grid.Column="0"
+                                     Padding="0"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     SelectionChanged="TabStrip_SelectionChanged"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                                     ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                     shell:WindowChrome.IsHitTestVisibleInChrome="True" />
+
+                            <Button x:Name="NewTabButton"
+                                    Grid.Row="0"
+                                    Grid.Column="1"
+                                    Style="{StaticResource TabActionButtonStyle}"
+                                    FontSize="20"
+                                    Content="+"
+                                    Click="NewTabButton_Click"
+                                    shell:WindowChrome.IsHitTestVisibleInChrome="True" />
+                        </Grid>
+
+                        <Border x:Name="VerticalDragRegion"
+                                Grid.Row="2"
+                                Grid.Column="0"
+                                Background="Transparent"
+                                Visibility="Collapsed" />
+
+                        <Button x:Name="SettingsButton"
+                                Grid.Row="0"
+                                Grid.Column="1"
+                                Style="{StaticResource TabTextButtonStyle}"
+                                Content="Settings"
+                                Click="SettingsButton_Click"
+                                shell:WindowChrome.IsHitTestVisibleInChrome="True" />
+
+                        <StackPanel x:Name="WindowCommandBar"
+                                    Grid.Row="0"
+                                    Grid.Column="2"
+                                    Orientation="Horizontal"
+                                    HorizontalAlignment="Right">
+                            <Button x:Name="MinimizeButton"
+                                    Style="{StaticResource WindowCommandButtonStyle}"
+                                    Content="&#xE921;"
+                                    Click="MinimizeButton_Click"
+                                    shell:WindowChrome.IsHitTestVisibleInChrome="True" />
+                            <Button x:Name="MaximizeRestoreButton"
+                                    Style="{StaticResource WindowCommandButtonStyle}"
+                                    Content="&#xE922;"
+                                    Click="MaximizeRestoreButton_Click"
+                                    shell:WindowChrome.IsHitTestVisibleInChrome="True" />
+                            <Button x:Name="CloseWindowButton"
+                                    Style="{StaticResource CloseWindowButtonStyle}"
+                                    Content="&#xE8BB;"
+                                    Click="CloseWindowButton_Click"
+                                    shell:WindowChrome.IsHitTestVisibleInChrome="True" />
+                        </StackPanel>
+                    </Grid>
+                </ContentControl>
+
+                <TextBlock x:Name="WindowTitleText"
+                           Margin="12,0,0,0"
+                           VerticalAlignment="Center"
+                           Foreground="{StaticResource TabTextMutedBrush}"
+                           Text="ConPTY Terminal"
+                           Visibility="Collapsed" />
+            </Grid>
+        </Border>
+
+        <Border x:Name="LeftTabChrome"
+                Grid.Row="1"
+                Grid.Column="0"
+                MinWidth="190"
+                Background="{StaticResource ChromeBrush}"
+                BorderBrush="{StaticResource ChromeBorderBrush}"
+                BorderThickness="0,0,1,0"
+                Visibility="Collapsed">
+            <ContentControl x:Name="LeftTabHost"
+                            HorizontalContentAlignment="Stretch"
+                            VerticalContentAlignment="Stretch" />
+        </Border>
+
+        <ContentControl x:Name="ActiveTabHost"
+                        Grid.Row="1"
+                        Grid.Column="1"
+                        Focusable="False"
+                        Background="#0E0E0E" />
+
+        <Border x:Name="RightTabChrome"
+                Grid.Row="1"
+                Grid.Column="2"
+                MinWidth="190"
+                Background="{StaticResource ChromeBrush}"
+                BorderBrush="{StaticResource ChromeBorderBrush}"
+                BorderThickness="1,0,0,0"
+                Visibility="Collapsed">
+            <ContentControl x:Name="RightTabHost"
+                            HorizontalContentAlignment="Stretch"
+                            VerticalContentAlignment="Stretch" />
+        </Border>
+
+        <Border x:Name="BottomTabChrome"
+                Grid.Row="2"
+                Grid.ColumnSpan="3"
+                Background="{StaticResource ChromeBrush}"
+                BorderBrush="{StaticResource ChromeBorderBrush}"
+                BorderThickness="0,1,0,0"
+                Visibility="Collapsed">
+            <ContentControl x:Name="BottomTabHost"
+                            HorizontalContentAlignment="Stretch"
+                            VerticalContentAlignment="Stretch" />
         </Border>
 
         <Popup x:Name="ProfilePickerPopup"
-               Grid.Row="0"
                PlacementTarget="{Binding ElementName=NewTabButton}"
                Placement="Bottom"
                HorizontalOffset="-8"
@@ -131,10 +327,5 @@
                 <StackPanel x:Name="ProfilePickerPanel" />
             </Border>
         </Popup>
-
-        <ContentControl x:Name="ActiveTabHost"
-                        Grid.Row="1"
-                        Focusable="False"
-                        Background="#0E0E0E" />
     </Grid>
 </Window>
