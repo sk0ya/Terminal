@@ -68,11 +68,19 @@ public partial class MainWindow : Window
 
     private void NewTabButton_Click(object sender, RoutedEventArgs e)
     {
+        AppMenuPopup.IsOpen = false;
         ToggleProfilePicker();
     }
 
-    private void SettingsButton_Click(object sender, RoutedEventArgs e)
+    private void AppMenuButton_Click(object sender, RoutedEventArgs e)
     {
+        ProfilePickerPopup.IsOpen = false;
+        ToggleAppMenu();
+    }
+
+    private void AppMenuSettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        AppMenuPopup.IsOpen = false;
         OpenSettings();
     }
 
@@ -142,6 +150,18 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ToggleAppMenu()
+    {
+        if (AppMenuPopup.IsOpen)
+        {
+            AppMenuPopup.IsOpen = false;
+            return;
+        }
+
+        AppMenuPopup.IsOpen = true;
+        _ = Dispatcher.BeginInvoke(AppMenuSettingsButton.Focus, DispatcherPriority.Input);
+    }
+
     private void PopulateProfilePicker()
     {
         ProfilePickerPanel.Children.Clear();
@@ -165,7 +185,6 @@ public partial class MainWindow : Window
         var descriptionText = new TextBlock
         {
             Text = profile.Description,
-            Margin = new Thickness(0, 2, 0, 0),
             FontSize = 11,
             Foreground = new SolidColorBrush(Color.FromRgb(0xA7, 0xA7, 0xA7)),
             TextWrapping = TextWrapping.Wrap
@@ -201,7 +220,6 @@ public partial class MainWindow : Window
         var titleText = new TextBlock
         {
             Text = "Terminal",
-            Margin = new Thickness(0, 0, 10, 0),
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
             Width = 150
@@ -212,8 +230,6 @@ public partial class MainWindow : Window
             Content = "×",
             Width = 20,
             Height = 20,
-            Padding = new Thickness(0),
-            Margin = new Thickness(0),
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
             Foreground = new SolidColorBrush(Color.FromRgb(0xA7, 0xA7, 0xA7)),
@@ -233,14 +249,12 @@ public partial class MainWindow : Window
             Background = new SolidColorBrush(Color.FromRgb(0x1B, 0x1B, 0x1B)),
             BorderBrush = new SolidColorBrush(Color.FromRgb(0x2A, 0x2A, 0x2A)),
             BorderThickness = new Thickness(0, 0, 1, 0),
-            Padding = new Thickness(14, 8, 12, 8),
             Child = headerPanel
         };
 
         var listBoxItem = new ListBoxItem
         {
             Content = border,
-            Padding = new Thickness(0),
             BorderThickness = new Thickness(0),
             Background = Brushes.Transparent,
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
@@ -331,6 +345,13 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (AppMenuPopup.IsOpen && key == Key.Escape)
+        {
+            AppMenuPopup.IsOpen = false;
+            e.Handled = true;
+            return;
+        }
+
         if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.W)
         {
             if (GetActiveTab() is TerminalTabItem activeTab)
@@ -415,6 +436,7 @@ public partial class MainWindow : Window
 
         ConfigureChromePanelLayout(placement);
         ConfigureProfilePickerPlacement(placement);
+        ConfigureAppMenuPlacement(placement);
         UpdateTabVisuals();
     }
 
@@ -423,32 +445,32 @@ public partial class MainWindow : Window
         bool isHorizontal = TerminalTabStripPlacementCatalog.IsHorizontal(placement);
         bool isVertical = !isHorizontal;
 
+        Grid.SetRow(AppMenuButton, 0);
+        Grid.SetColumn(AppMenuButton, 0);
         Grid.SetRow(TabStripLayoutGrid, isHorizontal ? 0 : 1);
-        Grid.SetColumn(TabStripLayoutGrid, 0);
-        Grid.SetRow(SettingsButton, isHorizontal ? 0 : 3);
-        Grid.SetColumn(SettingsButton, isHorizontal ? 1 : 0);
+        Grid.SetColumn(TabStripLayoutGrid, isHorizontal ? 1 : 0);
+        Grid.SetColumnSpan(TabStripLayoutGrid, isHorizontal ? 1 : 3);
         Grid.SetRow(WindowCommandBar, 0);
         Grid.SetColumn(WindowCommandBar, isHorizontal ? 2 : 0);
+        Grid.SetColumnSpan(WindowCommandBar, isHorizontal ? 1 : 3);
+        Grid.SetRow(VerticalDragRegion, 2);
+        Grid.SetColumn(VerticalDragRegion, 0);
+        Grid.SetColumnSpan(VerticalDragRegion, 3);
 
         ChromeRow0.Height = isHorizontal ? new GridLength(1, GridUnitType.Star) : GridLength.Auto;
         ChromeRow1.Height = isHorizontal ? new GridLength(0) : GridLength.Auto;
         ChromeRow2.Height = isHorizontal ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
         ChromeRow3.Height = isHorizontal ? new GridLength(0) : GridLength.Auto;
-        ChromeColumn0.Width = new GridLength(1, GridUnitType.Star);
-        ChromeColumn1.Width = isHorizontal ? GridLength.Auto : new GridLength(0);
+        ChromeColumn0.Width = GridLength.Auto;
+        ChromeColumn1.Width = new GridLength(1, GridUnitType.Star);
         ChromeColumn2.Width = isHorizontal ? GridLength.Auto : new GridLength(0);
 
         WindowCommandBar.Orientation = Orientation.Horizontal;
         WindowCommandBar.HorizontalAlignment = HorizontalAlignment.Right;
         WindowCommandBar.VerticalAlignment = VerticalAlignment.Center;
-        WindowCommandBar.Margin = isHorizontal ? new Thickness(0) : new Thickness(0, 6, 8, 0);
+        AppMenuButton.HorizontalAlignment = HorizontalAlignment.Left;
+        AppMenuButton.VerticalAlignment = VerticalAlignment.Center;
 
-        SettingsButton.Width = isHorizontal ? double.NaN : 92;
-        SettingsButton.HorizontalAlignment = isHorizontal ? HorizontalAlignment.Left : HorizontalAlignment.Center;
-        SettingsButton.VerticalAlignment = isHorizontal ? VerticalAlignment.Center : VerticalAlignment.Bottom;
-        SettingsButton.Margin = isHorizontal ? new Thickness(0) : new Thickness(0, 0, 0, 10);
-
-        TabStripLayoutGrid.Margin = isHorizontal ? new Thickness(0) : new Thickness(0, 6, 0, 0);
         TabStripLayoutGrid.VerticalAlignment = isHorizontal ? VerticalAlignment.Stretch : VerticalAlignment.Top;
         VerticalDragRegion.Visibility = isVertical ? Visibility.Visible : Visibility.Collapsed;
 
@@ -502,6 +524,33 @@ public partial class MainWindow : Window
                 ProfilePickerPopup.Placement = PlacementMode.Bottom;
                 ProfilePickerPopup.HorizontalOffset = -8;
                 ProfilePickerPopup.VerticalOffset = 4;
+                break;
+        }
+    }
+
+    private void ConfigureAppMenuPlacement(string placement)
+    {
+        switch (TerminalTabStripPlacementCatalog.Normalize(placement))
+        {
+            case TerminalTabStripPlacementCatalog.Bottom:
+                AppMenuPopup.Placement = PlacementMode.Top;
+                AppMenuPopup.HorizontalOffset = -8;
+                AppMenuPopup.VerticalOffset = -4;
+                break;
+            case TerminalTabStripPlacementCatalog.Left:
+                AppMenuPopup.Placement = PlacementMode.Right;
+                AppMenuPopup.HorizontalOffset = 4;
+                AppMenuPopup.VerticalOffset = -6;
+                break;
+            case TerminalTabStripPlacementCatalog.Right:
+                AppMenuPopup.Placement = PlacementMode.Left;
+                AppMenuPopup.HorizontalOffset = -4;
+                AppMenuPopup.VerticalOffset = -6;
+                break;
+            default:
+                AppMenuPopup.Placement = PlacementMode.Bottom;
+                AppMenuPopup.HorizontalOffset = -8;
+                AppMenuPopup.VerticalOffset = 4;
                 break;
         }
     }
@@ -585,6 +634,8 @@ public partial class MainWindow : Window
 
     private void OpenSettings()
     {
+        AppMenuPopup.IsOpen = false;
+
         if (_settingsWindow is not null)
         {
             if (_settingsWindow.WindowState == WindowState.Minimized)

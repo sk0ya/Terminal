@@ -339,7 +339,7 @@
                               SizeChanged="OnTerminalOutputSizeChanged">
                     <local:TerminalSurfaceControl x:Name="TerminalOutput"
                                                   Margin="0"
-                                                  Padding="12"
+                                                  Padding="0"
                                                   Focusable="True"
                                                   IsTabStop="True"
                                                   FontFamily="Cascadia Mono"

@@ -84,7 +84,6 @@ public sealed class TerminalSurfaceControlTests
         {
             FontFamily = new FontFamily("Cascadia Mono"),
             FontSize = 14,
-            Padding = new Thickness(12),
             Width = 640,
             Height = 320
         };

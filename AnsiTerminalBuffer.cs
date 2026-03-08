@@ -280,15 +280,11 @@ internal sealed class AnsiTerminalBuffer
         {
             FontFamily = fontFamily,
             FontSize = fontSize,
-            PagePadding = new Thickness(0),
             Background = GetBrush(DefaultBackground),
             TextAlignment = TextAlignment.Left
         };
 
-        var paragraph = new Paragraph
-        {
-            Margin = new Thickness(0)
-        };
+        var paragraph = new Paragraph();
         FrameworkElement? cursorAnchor = null;
 
         bool isFirstLine = true;

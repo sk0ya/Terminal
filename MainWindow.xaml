@@ -53,10 +53,11 @@
             <Setter Property="BorderThickness" Value="0" />
         </Style>
 
-        <Style x:Key="TabTextButtonStyle" TargetType="Button" BasedOn="{StaticResource TabActionButtonStyle}">
-            <Setter Property="Width" Value="Auto" />
-            <Setter Property="Padding" Value="10,0" />
-            <Setter Property="FontSize" Value="12" />
+        <Style x:Key="MenuButtonStyle" TargetType="Button" BasedOn="{StaticResource TabActionButtonStyle}">
+            <Setter Property="Width" Value="40" />
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Foreground" Value="{StaticResource TabTextBrush}" />
         </Style>
 
         <Style x:Key="WindowCommandButtonStyle" TargetType="Button">
@@ -147,6 +148,7 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
     </Window.Resources>
 
     <Grid>
@@ -181,14 +183,22 @@
                             <RowDefinition x:Name="ChromeRow3" Height="0" />
                         </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition x:Name="ChromeColumn0" Width="*" />
-                            <ColumnDefinition x:Name="ChromeColumn1" Width="Auto" />
+                            <ColumnDefinition x:Name="ChromeColumn0" Width="Auto" />
+                            <ColumnDefinition x:Name="ChromeColumn1" Width="*" />
                             <ColumnDefinition x:Name="ChromeColumn2" Width="Auto" />
                         </Grid.ColumnDefinitions>
 
+                        <Button x:Name="AppMenuButton"
+                                Grid.Row="0"
+                                Grid.Column="0"
+                                Style="{StaticResource MenuButtonStyle}"
+                                Content="&#xE700;"
+                                Click="AppMenuButton_Click"
+                                shell:WindowChrome.IsHitTestVisibleInChrome="True" />
+
                         <Grid x:Name="TabStripLayoutGrid"
                               Grid.Row="0"
-                              Grid.Column="0"
+                              Grid.Column="1"
                               shell:WindowChrome.IsHitTestVisibleInChrome="True">
                             <Grid.RowDefinitions>
                                 <RowDefinition x:Name="TabStripPrimaryRow" Height="*" />
@@ -223,16 +233,9 @@
                         <Border x:Name="VerticalDragRegion"
                                 Grid.Row="2"
                                 Grid.Column="0"
+                                Grid.ColumnSpan="3"
                                 Background="Transparent"
                                 Visibility="Collapsed" />
-
-                        <Button x:Name="SettingsButton"
-                                Grid.Row="0"
-                                Grid.Column="1"
-                                Style="{StaticResource TabTextButtonStyle}"
-                                Content="Settings"
-                                Click="SettingsButton_Click"
-                                shell:WindowChrome.IsHitTestVisibleInChrome="True" />
 
                         <StackPanel x:Name="WindowCommandBar"
                                     Grid.Row="0"
@@ -325,6 +328,35 @@
                     CornerRadius="14"
                     Padding="8">
                 <StackPanel x:Name="ProfilePickerPanel" />
+            </Border>
+        </Popup>
+
+        <Popup x:Name="AppMenuPopup"
+               PlacementTarget="{Binding ElementName=AppMenuButton}"
+               Placement="Bottom"
+               HorizontalOffset="-8"
+               VerticalOffset="4"
+               AllowsTransparency="True"
+               StaysOpen="False">
+            <Border MinWidth="180"
+                    Background="#151515"
+                    BorderBrush="{StaticResource ChromeBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="14"
+                    Padding="0">
+                <DockPanel
+                           LastChildFill="True">
+                    <Border DockPanel.Dock="Bottom"
+                            Height="1"
+                            Background="{StaticResource ChromeBorderBrush}" />
+                    <Button x:Name="AppMenuSettingsButton"
+                            DockPanel.Dock="Bottom"
+                            Style="{StaticResource ProfilePickerButtonStyle}"
+                            Margin="0"
+                            Padding="10,8"
+                            Content="Settings"
+                            Click="AppMenuSettingsButton_Click" />
+                </DockPanel>
             </Border>
         </Popup>
     </Grid>

@@ -9,7 +9,6 @@ internal sealed class TerminalDocumentRenderer
 {
     private readonly FlowDocument _document = new()
     {
-        PagePadding = new Thickness(0),
         TextAlignment = TextAlignment.Left
     };
 
@@ -131,10 +130,7 @@ internal sealed class TerminalDocumentRenderer
 
     private static Paragraph CreateParagraph(AnsiTerminalBuffer.TerminalRenderLineSnapshot lineSnapshot, ref FrameworkElement? cursorAnchor)
     {
-        var paragraph = new Paragraph
-        {
-            Margin = new Thickness(0)
-        };
+        var paragraph = new Paragraph();
         PopulateParagraph(paragraph, lineSnapshot, ref cursorAnchor);
         return paragraph;
     }
