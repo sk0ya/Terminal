@@ -13,6 +13,7 @@ public sealed class TerminalAppSettings
     public string SelectedProfileId { get; set; } = "cmd";
     public string CommandLine { get; set; } = string.Empty;
     public string WorkingDirectory { get; set; } = string.Empty;
+    public string FontFamilyName { get; set; } = TerminalFontCatalog.DefaultFontFamilyName;
     public double FontSize { get; set; } = 14;
     public double WindowWidth { get; set; } = 1000;
     public double WindowHeight { get; set; } = 720;
@@ -28,7 +29,13 @@ public sealed class TerminalAppSettings
         try
         {
             string json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<TerminalAppSettings>(json, SerializerOptions) ?? new TerminalAppSettings();
+            TerminalAppSettings settings = JsonSerializer.Deserialize<TerminalAppSettings>(json, SerializerOptions) ?? new TerminalAppSettings();
+            if (string.IsNullOrWhiteSpace(settings.FontFamilyName))
+            {
+                settings.FontFamilyName = TerminalFontCatalog.DefaultFontFamilyName;
+            }
+
+            return settings;
         }
         catch
         {

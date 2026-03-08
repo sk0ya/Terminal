@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace ConPtyTerminal;
@@ -58,6 +59,7 @@ public partial class TerminalTabView
             : settings.WorkingDirectory.Trim();
 
         WorkingDirectoryTextBox.Text = workingDirectory;
+        ApplyTerminalFontFamily(settings.FontFamilyName, persist: false);
         ApplyTerminalFontSize(settings.FontSize <= 0 ? DefaultTerminalFontSize : settings.FontSize, persist: false);
         SetSelectedProfile(settings.SelectedProfileId, commandLine);
     }
@@ -73,6 +75,7 @@ public partial class TerminalTabView
             WorkingDirectory = string.IsNullOrWhiteSpace(WorkingDirectoryTextBox.Text)
                 ? Environment.CurrentDirectory
                 : WorkingDirectoryTextBox.Text.Trim(),
+            FontFamilyName = TerminalOutput.FontFamily.Source,
             FontSize = TerminalOutput.FontSize
         };
     }
@@ -384,6 +387,21 @@ public partial class TerminalTabView
         _ = Dispatcher.BeginInvoke(UpdateTerminalViewportSize, DispatcherPriority.Loaded);
     }
 
+    private void ApplyTerminalFontFamily(string? fontFamilyName, bool persist = true)
+    {
+        string normalized = TerminalFontCatalog.NormalizeFontFamilyName(fontFamilyName);
+        if (!string.Equals(TerminalOutput.FontFamily.Source, normalized, StringComparison.Ordinal))
+        {
+            FontFamily fontFamily = TerminalFontCatalog.CreateFontFamily(normalized);
+            TerminalOutput.FontFamily = fontFamily;
+            TerminalInputProxy.FontFamily = fontFamily;
+        }
+
+        UpdateTerminalChrome();
+        RequestDocumentRender(immediate: true);
+        _ = Dispatcher.BeginInvoke(UpdateTerminalViewportSize, DispatcherPriority.Loaded);
+    }
+
     public void ApplySettings(TerminalAppSettings settings)
     {
         string commandLine = string.IsNullOrWhiteSpace(settings.CommandLine)
@@ -394,6 +412,7 @@ public partial class TerminalTabView
             : settings.WorkingDirectory.Trim();
 
         WorkingDirectoryTextBox.Text = workingDirectory;
+        ApplyTerminalFontFamily(settings.FontFamilyName, persist: false);
         ApplyTerminalFontSize(settings.FontSize <= 0 ? DefaultTerminalFontSize : settings.FontSize, persist: false);
         SetSelectedProfile(settings.SelectedProfileId, commandLine);
         UpdateWindowTitle();

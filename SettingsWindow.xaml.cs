@@ -10,6 +10,7 @@ public partial class SettingsWindow : Window
 {
     private static readonly TimeSpan AutoApplyDelay = TimeSpan.FromMilliseconds(300);
     private readonly List<TerminalProfileDefinition> _profiles = [];
+    private readonly List<string> _fontFamilyNames = [];
     private readonly TerminalProfileDefinition _customProfile = new(
         "custom",
         "Custom",
@@ -32,6 +33,7 @@ public partial class SettingsWindow : Window
         _fontSizeApplyTimer.Interval = AutoApplyDelay;
         _fontSizeApplyTimer.Tick += FontSizeApplyTimer_Tick;
         BuildProfileCatalog();
+        BuildFontFamilyCatalog();
         ApplySettings(_currentSettings);
     }
 
@@ -43,6 +45,13 @@ public partial class SettingsWindow : Window
         _profiles.AddRange(TerminalProfileCatalog.CreateProfiles());
         _profiles.Add(_customProfile);
         ProfileComboBox.ItemsSource = _profiles;
+    }
+
+    private void BuildFontFamilyCatalog()
+    {
+        _fontFamilyNames.Clear();
+        _fontFamilyNames.AddRange(TerminalFontCatalog.CreateFontFamilyNames());
+        FontFamilyComboBox.ItemsSource = _fontFamilyNames;
     }
 
     private void ApplySettings(TerminalAppSettings settings)
@@ -58,6 +67,7 @@ public partial class SettingsWindow : Window
                 : settings.WorkingDirectory.Trim();
 
             WorkingDirectoryTextBox.Text = workingDirectory;
+            FontFamilyComboBox.SelectedItem = TerminalFontCatalog.NormalizeFontFamilyName(settings.FontFamilyName);
             FontSizeTextBox.Text = settings.FontSize.ToString("0");
             SetSelectedProfile(settings.SelectedProfileId, commandLine);
             SetInputValidationState(WorkingDirectoryTextBox, isValid: true);
@@ -159,6 +169,16 @@ public partial class SettingsWindow : Window
         RestartTimer(_fontSizeApplyTimer);
     }
 
+    private void FontFamilyComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressAutoApply)
+        {
+            return;
+        }
+
+        CommitFontFamilySetting();
+    }
+
     private void FontSizeTextBox_LostKeyboardFocus(object sender, System.Windows.Input.KeyboardFocusChangedEventArgs e)
     {
         CommitFontSizeSetting();
@@ -200,6 +220,19 @@ public partial class SettingsWindow : Window
         _currentSettings.WorkingDirectory = workingDirectory;
         SetInputValidationState(WorkingDirectoryTextBox, isValid: true);
         SetTextSilently(WorkingDirectoryTextBox, workingDirectory);
+        PublishSettingsChanged();
+    }
+
+    private void CommitFontFamilySetting()
+    {
+        if (_suppressAutoApply)
+        {
+            return;
+        }
+
+        string fontFamilyName = TerminalFontCatalog.NormalizeFontFamilyName(FontFamilyComboBox.SelectedItem as string);
+        _currentSettings.FontFamilyName = fontFamilyName;
+        SetComboSelectionSilently(FontFamilyComboBox, fontFamilyName);
         PublishSettingsChanged();
     }
 
@@ -252,6 +285,24 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void SetComboSelectionSilently(ComboBox comboBox, object value)
+    {
+        if (Equals(comboBox.SelectedItem, value))
+        {
+            return;
+        }
+
+        _suppressAutoApply = true;
+        try
+        {
+            comboBox.SelectedItem = value;
+        }
+        finally
+        {
+            _suppressAutoApply = false;
+        }
+    }
+
     private void SetInputValidationState(Control control, bool isValid)
     {
         control.BorderBrush = (Brush)FindResource(isValid ? "BorderBrush" : "InvalidBrush");
@@ -290,6 +341,7 @@ public partial class SettingsWindow : Window
             SelectedProfileId = settings.SelectedProfileId,
             CommandLine = settings.CommandLine,
             WorkingDirectory = settings.WorkingDirectory,
+            FontFamilyName = settings.FontFamilyName,
             FontSize = settings.FontSize,
             WindowWidth = settings.WindowWidth,
             WindowHeight = settings.WindowHeight

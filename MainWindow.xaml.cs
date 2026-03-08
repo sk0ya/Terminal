@@ -448,6 +448,7 @@ public partial class MainWindow : Window
             SelectedProfileId = tabSettings.SelectedProfileId,
             CommandLine = tabSettings.CommandLine,
             WorkingDirectory = tabSettings.WorkingDirectory,
+            FontFamilyName = tabSettings.FontFamilyName,
             FontSize = tabSettings.FontSize,
             WindowWidth = _settings.WindowWidth,
             WindowHeight = _settings.WindowHeight
