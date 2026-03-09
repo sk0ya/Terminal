@@ -216,6 +216,21 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void CreateRenderSnapshotOmitsScrollbackWhileAlternateScreenIsActive()
+    {
+        var buffer = new AnsiTerminalBuffer(8, 2);
+
+        buffer.Process("A\r\nB");
+        buffer.Process("\u001b[?1049h");
+        buffer.Process("C");
+
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+
+        Assert.Single(snapshot.Lines);
+        Assert.Equal("C", string.Concat(snapshot.Lines[0].Segments.Select(segment => segment.Text)));
+    }
+
+    [Fact]
     public void CreatePlainTextSnapshotIncludesScrollbackAndVisibleScreen()
     {
         var buffer = new AnsiTerminalBuffer(8, 2);

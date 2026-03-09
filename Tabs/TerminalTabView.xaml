@@ -387,6 +387,7 @@
                              VerticalContentAlignment="Top"
                              PreviewKeyDown="TerminalInputProxy_PreviewKeyDown"
                              TextChanged="TerminalInputProxy_TextChanged"
+                             SelectionChanged="TerminalInputProxy_SelectionChanged"
                              GotKeyboardFocus="TerminalInputProxy_GotKeyboardFocus"
                              LostKeyboardFocus="TerminalInputProxy_LostKeyboardFocus" />
                 </Canvas>

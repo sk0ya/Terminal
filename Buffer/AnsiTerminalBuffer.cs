@@ -249,11 +249,13 @@ internal sealed class AnsiTerminalBuffer
         }
 
         int visibleScreenLineCount = lastScreenRow + 1;
-        int totalLineCount = _scrollbackRenderCache.Count + visibleScreenLineCount;
+        bool includeScrollback = _primaryScreenBackup is null;
+        int renderScrollbackCount = includeScrollback ? _scrollbackRenderCache.Count : 0;
+        int totalLineCount = renderScrollbackCount + visibleScreenLineCount;
         if (_renderCacheDirty || _combinedRenderCache.Length != totalLineCount)
         {
             _combinedRenderCache = new TerminalRenderLineSnapshot[totalLineCount];
-            if (_scrollbackRenderCache.Count > 0)
+            if (renderScrollbackCount > 0)
             {
                 _scrollbackRenderCache.CopyTo(_combinedRenderCache, 0);
             }
@@ -264,7 +266,7 @@ internal sealed class AnsiTerminalBuffer
                     _screenRenderCache,
                     0,
                     _combinedRenderCache,
-                    _scrollbackRenderCache.Count,
+                    renderScrollbackCount,
                     visibleScreenLineCount);
             }
 

@@ -55,6 +55,8 @@ public partial class TerminalTabView : UserControl
     private bool _resettingInputProxyText;
     private bool _pendingProxyFlushAfterImeConfirm;
     private bool _terminalMouseCaptureActive;
+    private bool _overlayUpdateQueued;
+    private bool _imeCompositionActive;
     private DateTime _lastDocumentRenderUtc = DateTime.MinValue;
     private readonly string _initialCommandLine;
     private readonly string _initialWorkingDirectory;
@@ -282,12 +284,14 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalInputProxy_PreviewTextInputStart(object sender, TextCompositionEventArgs e)
     {
-        UpdateOverlayState();
+        _imeCompositionActive = true;
+        QueueOverlayStateUpdate();
     }
 
     private void TerminalInputProxy_PreviewTextInputUpdate(object sender, TextCompositionEventArgs e)
     {
-        UpdateOverlayState();
+        _imeCompositionActive = true;
+        QueueOverlayStateUpdate();
     }
 
     private void TerminalInputProxy_TextChanged(object sender, TextChangedEventArgs e)
@@ -297,7 +301,17 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        UpdateOverlayState();
+        QueueOverlayStateUpdate();
+    }
+
+    private void TerminalInputProxy_SelectionChanged(object sender, RoutedEventArgs e)
+    {
+        if (_resettingInputProxyText)
+        {
+            return;
+        }
+
+        QueueOverlayStateUpdate();
     }
 
     private void TerminalInputProxy_TextInput(object sender, TextCompositionEventArgs e)
@@ -307,10 +321,11 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
+        _imeCompositionActive = false;
         _pendingProxyFlushAfterImeConfirm = false;
         if (!HasPendingProxyText())
         {
-            UpdateOverlayState();
+            QueueOverlayStateUpdate();
             return;
         }
 
@@ -321,7 +336,7 @@ public partial class TerminalTabView : UserControl
     {
         if (!FlushInputProxyText())
         {
-            UpdateOverlayState();
+            QueueOverlayStateUpdate();
         }
     }
 
@@ -1171,6 +1186,11 @@ public partial class TerminalTabView : UserControl
     {
         var (charWidth, charHeight) = MeasureCharacterCell();
         TerminalViewportMetrics viewport = GetTerminalViewportMetrics();
+        Rect viewportBounds = new(
+            viewport.ViewportLeft,
+            viewport.ViewportTop,
+            Math.Max(0, viewport.ViewportRight - viewport.ViewportLeft),
+            Math.Max(0, viewport.ViewportBottom - viewport.ViewportTop));
         Size proxyTextSize = string.IsNullOrEmpty(TerminalInputProxy.Text)
             ? new Size(charWidth, charHeight)
             : MeasureTerminalText(TerminalInputProxy.Text);
@@ -1181,10 +1201,11 @@ public partial class TerminalTabView : UserControl
         TerminalInputProxy.FlowDirection = FlowDirection.LeftToRight;
         TerminalInputProxy.CaretBrush = Brushes.Transparent;
 
-        int absoluteCursorLine = Math.Clamp(
-            _terminalBuffer.ScrollbackLineCount + _terminalBuffer.CursorRow,
-            0,
-            Math.Max(0, TerminalOutput.LineCount - 1));
+        int absoluteCursorLine = ResolveRenderedCursorLine(
+            _terminalBuffer.CursorRow,
+            _terminalBuffer.ScrollbackLineCount,
+            _terminalBuffer.IsAlternateScreenActive,
+            TerminalOutput.LineCount);
         Rect cursorRect = TerminalOutput.GetCellRect(absoluteCursorLine, _terminalBuffer.CursorColumn);
         Point translated = TerminalOutput.TranslatePoint(cursorRect.TopLeft, TerminalViewportHost);
         double left = translated.X;
@@ -1195,14 +1216,34 @@ public partial class TerminalTabView : UserControl
             top = viewport.ContentTop + (absoluteCursorLine * charHeight);
         }
 
-        (double proxyLeft, double proxyTop) = ClampToViewport(left, top, proxyWidth, proxyHeight, viewport);
-        Canvas.SetLeft(TerminalInputProxy, proxyLeft);
-        Canvas.SetTop(TerminalInputProxy, proxyTop);
-        UpdateCursorOverlay(proxyLeft + GetInputProxyCaretOffset(), proxyTop, charWidth, charHeight, viewport);
+        Rect proxyBounds = CalculateProxyBounds(left, top, proxyWidth, proxyHeight, viewportBounds);
+        Canvas.SetLeft(TerminalInputProxy, proxyBounds.Left);
+        Canvas.SetTop(TerminalInputProxy, proxyBounds.Top);
+        TerminalInputProxy.UpdateLayout();
+
+        Rect? proxyCaretBounds = ShouldUseProxyCaret()
+            && TryGetInputProxyCaretBounds(
+            proxyBounds,
+            charHeight,
+            out Rect resolvedProxyCaretBounds)
+            ? resolvedProxyCaretBounds
+            : null;
+        (_, Rect cursorBounds) = CalculateOverlayLayout(
+            left,
+            top,
+            proxyWidth,
+            proxyHeight,
+            charWidth,
+            charHeight,
+            viewportBounds,
+            _terminalBuffer.CursorShape,
+            proxyCaretBounds);
+        UpdateCursorOverlay(cursorBounds);
     }
 
     private void ResetInputProxyText()
     {
+        _imeCompositionActive = false;
         _pendingProxyFlushAfterImeConfirm = false;
         if (!string.IsNullOrEmpty(TerminalInputProxy.Text))
         {
@@ -1217,10 +1258,47 @@ public partial class TerminalTabView : UserControl
             }
         }
 
-        UpdateOverlayState();
+        QueueOverlayStateUpdate();
     }
 
-    private void UpdateCursorOverlay(double left, double top, double charWidth, double charHeight, TerminalViewportMetrics viewport)
+    internal static (Rect ProxyBounds, Rect CursorBounds) CalculateOverlayLayout(
+        double cursorLeft,
+        double cursorTop,
+        double proxyWidth,
+        double proxyHeight,
+        double charWidth,
+        double charHeight,
+        Rect viewportBounds,
+        TerminalCursorShape cursorShape,
+        Rect? proxyCaretBounds = null)
+    {
+        Rect proxyBounds = CalculateProxyBounds(cursorLeft, cursorTop, proxyWidth, proxyHeight, viewportBounds);
+        double visualCursorLeft = proxyCaretBounds?.Left ?? cursorLeft;
+        double visualCursorTop = proxyCaretBounds?.Top ?? cursorTop;
+        Rect cursorBounds = CalculateCursorOverlayBounds(
+            visualCursorLeft,
+            visualCursorTop,
+            charWidth,
+            charHeight,
+            viewportBounds,
+            cursorShape);
+        return (proxyBounds, cursorBounds);
+    }
+
+    internal static int ResolveRenderedCursorLine(
+        int cursorRow,
+        int scrollbackLineCount,
+        bool isAlternateScreenActive,
+        int renderedLineCount)
+    {
+        int renderedScrollbackCount = isAlternateScreenActive ? 0 : scrollbackLineCount;
+        return Math.Clamp(
+            renderedScrollbackCount + cursorRow,
+            0,
+            Math.Max(0, renderedLineCount - 1));
+    }
+
+    private void UpdateCursorOverlay(Rect bounds)
     {
         if (!ShouldShowCursorOverlay())
         {
@@ -1228,40 +1306,93 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        double overlayWidth = Math.Max(2, Math.Ceiling(charWidth));
-        double overlayHeight = Math.Max(2, Math.Ceiling(charHeight));
         Brush background = BlockCursorBrush;
 
         switch (_terminalBuffer.CursorShape)
         {
             case TerminalCursorShape.Underline:
-                overlayHeight = Math.Max(2, Math.Ceiling(charHeight / 6));
-                top += Math.Max(0, charHeight - overlayHeight);
                 background = AccentCursorBrush;
                 break;
             case TerminalCursorShape.Bar:
-                overlayWidth = Math.Max(2, Math.Ceiling(charWidth / 6));
                 background = AccentCursorBrush;
                 break;
         }
 
-        (double overlayLeft, double overlayTop) = ClampToViewport(left, top, overlayWidth, overlayHeight, viewport);
-
-        TerminalCursorOverlay.Width = overlayWidth;
-        TerminalCursorOverlay.Height = overlayHeight;
+        TerminalCursorOverlay.Width = bounds.Width;
+        TerminalCursorOverlay.Height = bounds.Height;
         TerminalCursorOverlay.Background = background;
-        Canvas.SetLeft(TerminalCursorOverlay, overlayLeft);
-        Canvas.SetTop(TerminalCursorOverlay, overlayTop);
+        Canvas.SetLeft(TerminalCursorOverlay, bounds.Left);
+        Canvas.SetTop(TerminalCursorOverlay, bounds.Top);
         TerminalCursorOverlay.Visibility = Visibility.Visible;
     }
 
-    private static (double Left, double Top) ClampToViewport(double left, double top, double width, double height, TerminalViewportMetrics viewport)
+    private bool TryGetInputProxyCaretBounds(Rect proxyBounds, double charHeight, out Rect caretBounds)
     {
-        double maxLeft = Math.Max(viewport.ViewportLeft, viewport.ViewportRight - width);
-        double maxTop = Math.Max(viewport.ViewportTop, viewport.ViewportBottom - height);
+        caretBounds = Rect.Empty;
+        if (!HasPendingProxyText())
+        {
+            return false;
+        }
+
+        int caretIndex = Math.Clamp(TerminalInputProxy.CaretIndex, 0, TerminalInputProxy.Text.Length);
+        string prefix = caretIndex == 0
+            ? string.Empty
+            : TerminalInputProxy.Text[..caretIndex];
+        double caretOffset = string.IsNullOrEmpty(prefix)
+            ? 0
+            : Math.Ceiling(MeasureTerminalText(prefix).Width);
+        if (double.IsNaN(caretOffset) || double.IsInfinity(caretOffset))
+        {
+            return false;
+        }
+
+        caretBounds = new Rect(
+            proxyBounds.Left + caretOffset,
+            proxyBounds.Top,
+            0,
+            Math.Max(0, charHeight));
+        return true;
+    }
+
+    private static Rect CalculateCursorOverlayBounds(
+        double left,
+        double top,
+        double charWidth,
+        double charHeight,
+        Rect viewportBounds,
+        TerminalCursorShape cursorShape)
+    {
+        double overlayWidth = Math.Max(2, Math.Ceiling(charWidth));
+        double overlayHeight = Math.Max(2, Math.Ceiling(charHeight));
+
+        switch (cursorShape)
+        {
+            case TerminalCursorShape.Underline:
+                overlayHeight = Math.Max(2, Math.Ceiling(charHeight / 6));
+                top += Math.Max(0, charHeight - overlayHeight);
+                break;
+            case TerminalCursorShape.Bar:
+                overlayWidth = Math.Max(2, Math.Ceiling(charWidth / 6));
+                break;
+        }
+
+        (double overlayLeft, double overlayTop) = ClampToViewport(left, top, overlayWidth, overlayHeight, viewportBounds);
+        return new Rect(overlayLeft, overlayTop, overlayWidth, overlayHeight);
+    }
+
+    private static Rect CalculateProxyBounds(double left, double top, double width, double height, Rect viewportBounds)
+    {
+        (double proxyLeft, double proxyTop) = ClampToViewport(left, top, width, height, viewportBounds);
+        return new Rect(proxyLeft, proxyTop, width, height);
+    }
+
+    private static (double Left, double Top) ClampToViewport(double left, double top, double width, double height, Rect viewportBounds)
+    {
+        double maxLeft = Math.Max(viewportBounds.Left, viewportBounds.Right - width);
+        double maxTop = Math.Max(viewportBounds.Top, viewportBounds.Bottom - height);
         return (
-            Math.Clamp(left, viewport.ViewportLeft, maxLeft),
-            Math.Clamp(top, viewport.ViewportTop, maxTop));
+            Math.Clamp(left, viewportBounds.Left, maxLeft),
+            Math.Clamp(top, viewportBounds.Top, maxTop));
     }
 
     private bool ShouldShowCursorOverlay()
@@ -1359,20 +1490,34 @@ public partial class TerminalTabView : UserControl
         return Key.ImeProcessed;
     }
 
-    private double GetInputProxyCaretOffset()
-    {
-        string text = TerminalInputProxy.Text;
-        if (string.IsNullOrEmpty(text))
-        {
-            return 0;
-        }
-
-        return Math.Ceiling(MeasureTerminalText(text).Width);
-    }
-
     private bool HasPendingProxyText()
     {
         return !string.IsNullOrEmpty(TerminalInputProxy.Text);
+    }
+
+    internal static bool ShouldUseProxyCaret(bool hasPendingProxyText, bool imeCompositionActive)
+    {
+        return hasPendingProxyText && imeCompositionActive;
+    }
+
+    private bool ShouldUseProxyCaret()
+    {
+        return ShouldUseProxyCaret(HasPendingProxyText(), _imeCompositionActive);
+    }
+
+    private void QueueOverlayStateUpdate()
+    {
+        if (_overlayUpdateQueued)
+        {
+            return;
+        }
+
+        _overlayUpdateQueued = true;
+        _ = Dispatcher.BeginInvoke(() =>
+        {
+            _overlayUpdateQueued = false;
+            UpdateOverlayState();
+        }, DispatcherPriority.Render);
     }
 
     private void UpdateOverlayState()
@@ -1441,7 +1586,7 @@ public partial class TerminalTabView : UserControl
         _pendingProxyFlushAfterImeConfirm = false;
         if (!FlushInputProxyText())
         {
-            UpdateOverlayState();
+            QueueOverlayStateUpdate();
         }
     }
 
