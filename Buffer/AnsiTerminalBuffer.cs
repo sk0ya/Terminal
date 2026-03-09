@@ -170,40 +170,95 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
-        var resizedScreen = CreateScreen(newRows, newColumns, TerminalStyle.Default);
-        int sourceStartRow = Math.Max(0, _rows - newRows);
-        int targetStartRow = Math.Max(0, newRows - _rows);
-        int copyRows = Math.Min(_rows, newRows);
-        int copyColumns = Math.Min(_columns, newColumns);
-
-        if (sourceStartRow > 0)
-        {
-            for (int row = 0; row < sourceStartRow; row++)
-            {
-                AppendScrollback(CloneLine(_screen[row]));
-            }
-        }
-
-        for (int row = 0; row < copyRows; row++)
-        {
-            TerminalLine source = _screen[sourceStartRow + row];
-            TerminalLine target = resizedScreen[targetStartRow + row];
-            Array.Copy(source.Cells, 0, target.Cells, 0, copyColumns);
-        }
-
         bool[] resizedTabStops = CreateDefaultTabStops(newColumns);
         Array.Copy(_tabStops, resizedTabStops, Math.Min(_tabStops.Length, resizedTabStops.Length));
-
-        _screen = resizedScreen;
         _tabStops = resizedTabStops;
+
+        if (_primaryScreenBackup is null)
+        {
+            ResizePrimaryScreen(newColumns, newRows);
+        }
+        else
+        {
+            ResizeActiveScreen(newColumns, newRows);
+        }
+
         _columns = newColumns;
         _rows = newRows;
-        _cursorRow = Math.Clamp(_cursorRow - sourceStartRow + targetStartRow, 0, _rows - 1);
-        _cursorColumn = Math.Clamp(_cursorColumn, 0, _columns - 1);
         _savedCursorRow = Math.Clamp(_savedCursorRow, 0, _rows - 1);
         _savedCursorColumn = Math.Clamp(_savedCursorColumn, 0, _columns - 1);
         ResetMargins();
         ResetScreenRenderCache();
+    }
+
+    private void ResizePrimaryScreen(int newColumns, int newRows)
+    {
+        bool preserveBottomRows = newRows < _rows;
+        _screen = ResizeScreenBuffer(_screen, _rows, _columns, newRows, newColumns, preserveBottomRows);
+        _cursorRow = AdjustRowForResize(_cursorRow, _rows, newRows, preserveBottomRows);
+        _cursorColumn = Math.Clamp(_cursorColumn, 0, newColumns - 1);
+        _savedCursorRow = AdjustRowForResize(_savedCursorRow, _rows, newRows, preserveBottomRows);
+    }
+
+    private void ResizeActiveScreen(int newColumns, int newRows)
+    {
+        _screen = ResizeScreenBuffer(_screen, _rows, _columns, newRows, newColumns, preserveBottomRows: false);
+        _cursorRow = AdjustRowForResize(_cursorRow, _rows, newRows, preserveBottomRows: false);
+        _cursorColumn = Math.Clamp(_cursorColumn, 0, newColumns - 1);
+    }
+
+    private static List<TerminalLine> ResizeScreenBuffer(
+        List<TerminalLine> sourceScreen,
+        int sourceRows,
+        int sourceColumns,
+        int targetRows,
+        int targetColumns,
+        bool preserveBottomRows)
+    {
+        var resizedScreen = CreateScreen(targetRows, targetColumns, TerminalStyle.Default);
+        int copyRows = Math.Min(sourceRows, targetRows);
+        int copyColumns = Math.Min(sourceColumns, targetColumns);
+        int sourceStartRow = preserveBottomRows && targetRows < sourceRows
+            ? sourceRows - targetRows
+            : 0;
+        int targetStartRow = preserveBottomRows && targetRows > sourceRows
+            ? targetRows - sourceRows
+            : 0;
+
+        for (int row = 0; row < copyRows; row++)
+        {
+            TerminalLine source = sourceScreen[sourceStartRow + row];
+            TerminalLine target = resizedScreen[targetStartRow + row];
+            Array.Copy(source.Cells, 0, target.Cells, 0, copyColumns);
+            SanitizeRightEdge(source, target, copyColumns, sourceColumns);
+        }
+
+        return resizedScreen;
+    }
+
+    private static int AdjustRowForResize(int row, int sourceRows, int targetRows, bool preserveBottomRows)
+    {
+        int sourceStartRow = preserveBottomRows && targetRows < sourceRows
+            ? sourceRows - targetRows
+            : 0;
+        int targetStartRow = preserveBottomRows && targetRows > sourceRows
+            ? targetRows - sourceRows
+            : 0;
+        return Math.Clamp(row - sourceStartRow + targetStartRow, 0, targetRows - 1);
+    }
+
+    private static void SanitizeRightEdge(TerminalLine source, TerminalLine target, int copiedColumns, int sourceColumns)
+    {
+        if (copiedColumns <= 0 || copiedColumns >= sourceColumns)
+        {
+            return;
+        }
+
+        if (source.Cells[copiedColumns].IsContinuation)
+        {
+            int lastCopiedColumn = copiedColumns - 1;
+            target.Cells[lastCopiedColumn] = CreateBlankCell(TerminalStyle.Default);
+        }
     }
 
     public void Process(string text)
@@ -1201,6 +1256,9 @@ internal sealed class AnsiTerminalBuffer
 
         _primaryScreenBackup = new ScreenState(
             CloneScreen(_screen),
+            (bool[])_tabStops.Clone(),
+            _rows,
+            _columns,
             _cursorRow,
             _cursorColumn,
             _savedCursorRow,
@@ -1231,18 +1289,32 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
-        _screen = CloneScreen(_primaryScreenBackup.Screen);
-        _cursorRow = _primaryScreenBackup.CursorRow;
-        _cursorColumn = _primaryScreenBackup.CursorColumn;
-        _savedCursorRow = _primaryScreenBackup.SavedCursorRow;
-        _savedCursorColumn = _primaryScreenBackup.SavedCursorColumn;
-        _scrollTop = _primaryScreenBackup.ScrollTop;
-        _scrollBottom = _primaryScreenBackup.ScrollBottom;
-        _currentStyle = _primaryScreenBackup.Style;
-        _savedStyle = _primaryScreenBackup.SavedStyle;
-        _currentHyperlink = _primaryScreenBackup.CurrentHyperlink;
-        _savedHyperlink = _primaryScreenBackup.SavedHyperlink;
+        int targetRows = _rows;
+        int targetColumns = _columns;
+        ScreenState backup = _primaryScreenBackup;
+
+        _screen = CloneScreen(backup.Screen);
+        _tabStops = (bool[])backup.TabStops.Clone();
+        _rows = backup.Rows;
+        _columns = backup.Columns;
+        _cursorRow = backup.CursorRow;
+        _cursorColumn = backup.CursorColumn;
+        _savedCursorRow = backup.SavedCursorRow;
+        _savedCursorColumn = backup.SavedCursorColumn;
+        _scrollTop = backup.ScrollTop;
+        _scrollBottom = backup.ScrollBottom;
+        _currentStyle = backup.Style;
+        _savedStyle = backup.SavedStyle;
+        _currentHyperlink = backup.CurrentHyperlink;
+        _savedHyperlink = backup.SavedHyperlink;
         _primaryScreenBackup = null;
+
+        if (_rows != targetRows || _columns != targetColumns)
+        {
+            Resize((short)targetColumns, (short)targetRows);
+        }
+
+        InvalidateScreenRenderCache();
     }
 
     private static List<TerminalLine> CloneScreen(List<TerminalLine> source)
@@ -2549,6 +2621,9 @@ internal sealed class AnsiTerminalBuffer
 
     private sealed record ScreenState(
         List<TerminalLine> Screen,
+        bool[] TabStops,
+        int Rows,
+        int Columns,
         int CursorRow,
         int CursorColumn,
         int SavedCursorRow,

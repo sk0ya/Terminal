@@ -203,6 +203,76 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void ResizeKeepsVisibleContentAnchoredAtTopWhenGrowingRowsWithoutScrollback()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("first\r\nsecond");
+        buffer.Resize(32, 14);
+
+        Assert.Equal("first", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("second", buffer.GetScreenLineText(1).TrimEnd());
+    }
+
+    [Fact]
+    public void ResizeTruncatesVisibleContentWhenShrinkingColumnsWithoutReflow()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("ABCDEFGHIJKLMNOPQRSTUVWX");
+        buffer.Resize(20, 10);
+
+        Assert.Equal("ABCDEFGHIJKLMNOPQRST", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(1).TrimEnd());
+    }
+
+    [Fact]
+    public void ResizeKeepsBottomRowsVisibleWhenPrimaryScreenShrinks()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 12);
+        var lines = new List<string>();
+        for (int index = 1; index <= 12; index++)
+        {
+            lines.Add(index.ToString("00"));
+        }
+
+        buffer.Process(string.Join("\r\n", lines));
+        buffer.Resize(32, 10);
+
+        Assert.Equal("03", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("12", buffer.GetScreenLineText(9).TrimEnd());
+    }
+
+    [Fact]
+    public void ResizeKeepsAlternateScreenAnchoredAtTop()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("\u001b[?1049h");
+        buffer.Process("alpha\r\nbeta");
+        buffer.Resize(32, 14);
+
+        Assert.Equal("alpha", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("beta", buffer.GetScreenLineText(1).TrimEnd());
+    }
+
+    [Fact]
+    public void ExitAlternateScreenAfterResizeRestoresPrimaryScreenAtCurrentSize()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("main");
+        buffer.Process("\u001b[?1049h");
+        buffer.Resize(40, 12);
+        buffer.Process("\u001b[?1049l");
+
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+
+        Assert.NotEmpty(snapshot.Lines);
+        Assert.Equal("main", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
     public void CreateRenderSnapshotReusesCombinedArrayWhenBufferIsUnchanged()
     {
         var buffer = new AnsiTerminalBuffer(8, 2);
