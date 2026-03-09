@@ -44,7 +44,9 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     public TerminalSurfaceControl()
     {
         SnapsToDevicePixels = true;
+        UseLayoutRounding = true;
         FocusVisualStyle = null;
+        TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
     }
 
     public bool CanHorizontallyScroll { get; set; } = true;
@@ -604,7 +606,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     private void EnsureMetrics()
     {
-        double pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        DpiScale dpi = VisualTreeHelper.GetDpi(this);
+        double pixelsPerDip = dpi.PixelsPerDip;
         if (!_metricsDirty &&
             DoubleUtil.AreClose(_pixelsPerDip, pixelsPerDip) &&
             _typeface is not null)
@@ -622,10 +625,21 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             FontSize,
             Foreground ?? DefaultForegroundBrush,
             _pixelsPerDip);
+        double measuredHeight = Math.Max(1.0, text.Height);
         _cellSize = new Size(
             Math.Max(1.0, text.WidthIncludingTrailingWhitespace),
-            Math.Max(1.0, text.Height));
+            SnapToDevicePixelsUp(measuredHeight, dpi.DpiScaleY));
         _metricsDirty = false;
+    }
+
+    private static double SnapToDevicePixelsUp(double value, double dpiScale)
+    {
+        if (!double.IsFinite(value) || value <= 0 || !double.IsFinite(dpiScale) || dpiScale <= 0)
+        {
+            return Math.Max(1.0, value);
+        }
+
+        return Math.Ceiling(value * dpiScale) / dpiScale;
     }
 
     private void UpdateViewport(Size size)

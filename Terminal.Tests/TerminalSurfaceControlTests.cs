@@ -101,6 +101,23 @@ public sealed class TerminalSurfaceControlTests
         });
     }
 
+    [Fact]
+    public void SurfaceSnapsLineHeightToDevicePixelsWithoutShrinkingGlyphBounds()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+
+            Size cell = surface.CharacterCellSize;
+            DpiScale dpi = VisualTreeHelper.GetDpi(surface);
+            double devicePixelHeight = cell.Height * dpi.DpiScaleY;
+            double measuredTextHeight = MeasureTextHeight(surface, "W");
+
+            Assert.Equal(Math.Round(devicePixelHeight), devicePixelHeight, precision: 6);
+            Assert.True(cell.Height >= measuredTextHeight);
+        });
+    }
+
     private static TerminalSurfaceControl CreateSurface()
     {
         var surface = new TerminalSurfaceControl
@@ -150,6 +167,24 @@ public sealed class TerminalSurfaceControlTests
             Brushes.White,
             VisualTreeHelper.GetDpi(surface).PixelsPerDip);
         return formatted.WidthIncludingTrailingWhitespace;
+    }
+
+    private static double MeasureTextHeight(TerminalSurfaceControl surface, string text)
+    {
+        var typeface = new Typeface(
+            surface.FontFamily,
+            surface.FontStyle,
+            surface.FontWeight,
+            surface.FontStretch);
+        var formatted = new FormattedText(
+            text,
+            System.Globalization.CultureInfo.CurrentCulture,
+            FlowDirection.LeftToRight,
+            typeface,
+            surface.FontSize,
+            Brushes.White,
+            VisualTreeHelper.GetDpi(surface).PixelsPerDip);
+        return formatted.Height;
     }
 
     private static void RunSta(Action action)
