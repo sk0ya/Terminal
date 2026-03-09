@@ -623,8 +623,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             Foreground ?? DefaultForegroundBrush,
             _pixelsPerDip);
         _cellSize = new Size(
-            Math.Max(1.0, Math.Ceiling(text.WidthIncludingTrailingWhitespace)),
-            Math.Max(1.0, Math.Ceiling(text.Height)));
+            Math.Max(1.0, text.WidthIncludingTrailingWhitespace),
+            Math.Max(1.0, text.Height));
         _metricsDirty = false;
     }
 

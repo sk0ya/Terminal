@@ -81,6 +81,26 @@ public sealed class TerminalSurfaceControlTests
         });
     }
 
+    [Fact]
+    public void SurfaceCellPositionsTrackRenderedTextWidth()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            const string sample = "PS C:\\Projects\\Terminal> ";
+
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                CreateLine(sample)
+            ]));
+
+            Rect cursorCell = surface.GetCellRect(0, sample.Length);
+            double renderedWidth = MeasureTextWidth(surface, sample);
+
+            Assert.Equal(renderedWidth, cursorCell.Left, precision: 1);
+        });
+    }
+
     private static TerminalSurfaceControl CreateSurface()
     {
         var surface = new TerminalSurfaceControl
@@ -112,6 +132,24 @@ public sealed class TerminalSurfaceControlTests
                     Underline: false,
                     Hyperlink: null)
             ]);
+    }
+
+    private static double MeasureTextWidth(TerminalSurfaceControl surface, string text)
+    {
+        var typeface = new Typeface(
+            surface.FontFamily,
+            surface.FontStyle,
+            surface.FontWeight,
+            surface.FontStretch);
+        var formatted = new FormattedText(
+            text,
+            System.Globalization.CultureInfo.CurrentCulture,
+            FlowDirection.LeftToRight,
+            typeface,
+            surface.FontSize,
+            Brushes.White,
+            VisualTreeHelper.GetDpi(surface).PixelsPerDip);
+        return formatted.WidthIncludingTrailingWhitespace;
     }
 
     private static void RunSta(Action action)
