@@ -388,7 +388,7 @@ public partial class TerminalTabView
         TerminalInputProxy.FontSize = clamped;
         UpdateTerminalChrome();
         RequestDocumentRender(immediate: true);
-        _ = Dispatcher.BeginInvoke(UpdateTerminalViewportSize, DispatcherPriority.Loaded);
+        QueueTerminalViewportSizeUpdate();
     }
 
     private void ApplyTerminalFontFamily(string? fontFamilyName, bool persist = true)
@@ -403,7 +403,7 @@ public partial class TerminalTabView
 
         UpdateTerminalChrome();
         RequestDocumentRender(immediate: true);
-        _ = Dispatcher.BeginInvoke(UpdateTerminalViewportSize, DispatcherPriority.Loaded);
+        QueueTerminalViewportSizeUpdate();
     }
 
     public void ApplySettings(TerminalAppSettings settings)

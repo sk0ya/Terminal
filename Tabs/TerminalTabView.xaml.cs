@@ -56,6 +56,7 @@ public partial class TerminalTabView : UserControl
     private bool _pendingProxyFlushAfterImeConfirm;
     private bool _terminalMouseCaptureActive;
     private bool _overlayUpdateQueued;
+    private bool _terminalViewportSizeUpdateQueued;
     private bool _imeCompositionActive;
     private DateTime _lastDocumentRenderUtc = DateTime.MinValue;
     private readonly string _initialCommandLine;
@@ -577,7 +578,22 @@ public partial class TerminalTabView : UserControl
 
     private void OnTerminalOutputSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        UpdateTerminalViewportSize();
+        QueueTerminalViewportSizeUpdate();
+    }
+
+    private void QueueTerminalViewportSizeUpdate()
+    {
+        if (_terminalViewportSizeUpdateQueued)
+        {
+            return;
+        }
+
+        _terminalViewportSizeUpdateQueued = true;
+        _ = Dispatcher.BeginInvoke(() =>
+        {
+            _terminalViewportSizeUpdateQueued = false;
+            UpdateTerminalViewportSize();
+        }, DispatcherPriority.Loaded);
     }
 
     private void UpdateTerminalViewportSize()
@@ -1592,6 +1608,11 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
+        if (ShouldRefreshViewportSize(e.ViewportWidthChange, e.ViewportHeightChange))
+        {
+            QueueTerminalViewportSizeUpdate();
+        }
+
         if (_isRenderingTerminal)
         {
             return;
@@ -1959,19 +1980,32 @@ public partial class TerminalTabView : UserControl
         return (Math.Max(size.Width, 1.0), Math.Max(size.Height, 1.0));
     }
 
+    internal static bool ShouldRefreshViewportSize(double viewportWidthChange, double viewportHeightChange)
+    {
+        return IsSignificantViewportChange(viewportWidthChange) ||
+            IsSignificantViewportChange(viewportHeightChange);
+    }
+
     private TerminalViewportMetrics GetTerminalViewportMetrics()
     {
         Point viewportOrigin = TerminalScrollHost.TranslatePoint(
             new Point(TerminalOutput.Padding.Left, TerminalOutput.Padding.Top),
             TerminalViewportHost);
+        Size viewportSize = TerminalViewportSizing.ResolveViewportSize(
+            TerminalOutput.RenderSize,
+            TerminalOutput.BorderThickness,
+            TerminalOutput.Padding,
+            new Size(
+                Math.Max(
+                    0,
+                    TerminalScrollHost.ViewportWidth - TerminalOutput.Padding.Left - TerminalOutput.Padding.Right),
+                Math.Max(
+                    0,
+                    TerminalScrollHost.ViewportHeight - TerminalOutput.Padding.Top - TerminalOutput.Padding.Bottom)));
         double horizontalOffset = TerminalScrollHost.HorizontalOffset;
         double verticalOffset = TerminalScrollHost.VerticalOffset;
-        double viewportWidth = Math.Max(
-            0,
-            TerminalScrollHost.ViewportWidth - TerminalOutput.Padding.Left - TerminalOutput.Padding.Right);
-        double viewportHeight = Math.Max(
-            0,
-            TerminalScrollHost.ViewportHeight - TerminalOutput.Padding.Top - TerminalOutput.Padding.Bottom);
+        double viewportWidth = viewportSize.Width;
+        double viewportHeight = viewportSize.Height;
         double viewportLeft = viewportOrigin.X;
         double viewportTop = viewportOrigin.Y;
         double viewportRight = viewportLeft + viewportWidth;
@@ -2066,6 +2100,13 @@ public partial class TerminalTabView : UserControl
         }
 
         return $"{ex.Message} (HRESULT=0x{ex.HResult:X8})";
+    }
+
+    private static bool IsSignificantViewportChange(double change)
+    {
+        return !double.IsNaN(change) &&
+            !double.IsInfinity(change) &&
+            Math.Abs(change) > 0.001;
     }
 
     private void SessionWatchdog_Tick(object? sender, EventArgs e)
