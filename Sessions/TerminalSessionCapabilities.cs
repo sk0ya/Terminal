@@ -2,8 +2,7 @@ namespace Terminal.Sessions;
 
 public enum TerminalSessionKind
 {
-    ConPty,
-    Compatibility
+    ConPty
 }
 
 public readonly record struct TerminalSessionCapabilities(
@@ -11,5 +10,5 @@ public readonly record struct TerminalSessionCapabilities(
     bool SupportsResize,
     bool SupportsTerminalInput)
 {
-    public string DisplayName => Kind == TerminalSessionKind.ConPty ? "ConPTY" : "Compat";
+    public string DisplayName => "ConPTY";
 }

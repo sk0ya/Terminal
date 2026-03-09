@@ -7,7 +7,7 @@
 以下は実装済み。
 
 - ConPTY 起動とサイズ変更
-- compatibility session (`ProcessPipeSession`) と quoted command line 解析
+- quoted command line 解析
 - ANSI / VT の基本パーサ
 - スクロールバック、カーソル、色、下線、反転
 - alternate screen の基本
@@ -24,7 +24,7 @@
 - Ctrl 系の主要 ASCII 制御文字入力
 - legacy mouse を含む raw byte / text protocol の入力エンコード
 - WPF input proxy による IME composition の受け取りと candidate / composition window の位置同期
-- stalled startup 検知、recover、compatibility mode への退避
+- stalled startup 検知と recover
 - session smoke test を含む自動テスト
 
 以下はまだ不足している。
@@ -33,7 +33,7 @@
 - 高頻度更新に対する実測チューニング
 - Unicode 幅計算の厳密性
 - VT シーケンスの網羅性
-- fallback セッションの resize / signal 戦略の深掘り
+- ConPTY 起動失敗時の診断と回復導線
 
 ## 優先順位
 ### Phase 1: 入力の完成度を上げる
@@ -112,21 +112,20 @@ TUI の相性改善フェーズ。
 - 代表的な xterm 前提アプリで致命的な表示崩れが残らない
 
 ### Phase 5: セッション層を強化する
-ConPTY 以外の経路も最低限使える状態にする。
+ConPTY セッションの起動・終了・復旧をより堅牢にする。
 
 進捗:
 
-- [x] `ProcessPipeSession` を compatibility mode として切り分ける
-- [x] raw byte write を含む text / binary 入力経路を両 session に持たせる
-- [x] startup stall 検知と compatibility mode への recover
+- [x] raw byte write を含む text / binary 入力経路を ConPTY session に持たせる
+- [x] startup stall 検知と recover
 - [x] 終了処理と dispose / force unlock の見直し
-- [ ] fallback 時の resize 戦略
+- [ ] 起動失敗時の診断導線
 - [ ] signal 戦略の深掘り
 - [ ] 復旧時の状態引き継ぎ
 
 完了条件:
 
-- ConPTY が使えない環境でも退避動作が明確
+- ConPTY 起動失敗時に原因を切り分けしやすい
 - 入出力経路が text / binary の両方で安定する
 
 ### Phase 6: テストと検証基盤を入れる
@@ -137,7 +136,7 @@ ConPTY 以外の経路も最低限使える状態にする。
 - [x] parser / buffer 操作テスト
 - [x] key encoding / mouse encoding テスト
 - [x] OSC / CSI 応答テスト
-- [x] ConPTY / compatibility smoke test
+- [x] ConPTY smoke test
 - [x] surface / viewport / overlay 回帰テスト
 - [ ] IME 実機検証の継続
 - [ ] 実アプリ互換の回帰ケース拡充
@@ -152,7 +151,7 @@ ConPTY 以外の経路も最低限使える状態にする。
 2. Phase 2 の高頻度更新 / 大量ログで実測してボトルネックを潰す
 3. Phase 3 の ambiguous width と hit testing 整合を改善する
 4. Phase 4 の残り VT / xterm 互換性を `vim` / `less` / `fzf` 基準で詰める
-5. Phase 5 / 6 の fallback resize / recover 周辺の回帰ケースを増やす
+5. Phase 5 / 6 の recover / dispose 周辺の回帰ケースを増やす
 
 ## 検証対象アプリ
 最低限、以下で継続確認する。
@@ -166,6 +165,6 @@ ConPTY 以外の経路も最低限使える状態にする。
 - `git log --decorate --graph`
 
 ## メモ
-- `ProcessPipeSession` は本格 terminal 実装の代替にはならない。用途は互換モードまたは切り分け用と割り切る。
+- 現在は ConPTY 前提の実装に寄せている。起動失敗時の診断と recover 導線は継続改善対象。
 - terminal 表示面からは `RichTextBox` / `FlowDocument` 依存を外した。残るのは高頻度更新時の実測チューニングと旧描画資産の整理。
 - 互換性は「仕様追加」だけでなく「既存挙動の検証」を伴うため、今後はテスト追加を優先する。

@@ -285,7 +285,7 @@ internal static class TerminalProfileCatalog
     {
         try
         {
-            (string executable, string[] arguments) = ProcessPipeSession.SplitCommandLine(commandLine);
+            (string executable, string[] arguments) = TerminalCommandLine.SplitCommandLine(commandLine);
             parsedCommandLine = new ParsedCommandLine(
                 ResolveExecutablePath(executable),
                 arguments);

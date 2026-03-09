@@ -117,7 +117,7 @@ internal static class TerminalTabTitleResolver
 
         try
         {
-            (string fileName, _) = ProcessPipeSession.SplitCommandLine(commandLine);
+            (string fileName, _) = TerminalCommandLine.SplitCommandLine(commandLine);
             string title = Path.GetFileNameWithoutExtension(fileName);
             return string.IsNullOrWhiteSpace(title) ? "Terminal" : title;
         }

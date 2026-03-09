@@ -39,7 +39,7 @@ dotnet test Terminal.Tests/
 
 ```
 Terminal/
-├── Sessions/          # ConPTY・パイプセッションと ITerminalSession 抽象
+├── Sessions/          # ConPTY session と ITerminalSession 抽象
 ├── Buffer/            # ANSI/VT パーサとターミナルバッファ
 ├── Rendering/         # TerminalSurfaceControl（カスタム描画）
 ├── Input/             # キー・マウス入力エンコーダ

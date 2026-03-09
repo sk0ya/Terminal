@@ -49,9 +49,7 @@ public partial class TerminalTabView : UserControl
     private bool _outputFlushScheduled;
     private bool _prioritizeInitialOutputRender;
     private bool _followTerminalOutput = true;
-    private bool _useCompatibilityMode;
     private bool _cursorBlinkVisible = true;
-    private bool _reportedUnsupportedResize;
     private bool _resettingInputProxyText;
     private bool _pendingProxyFlushAfterImeConfirm;
     private bool _terminalMouseCaptureActive;
@@ -152,7 +150,6 @@ public partial class TerminalTabView : UserControl
     private async void StartButton_Click(object sender, RoutedEventArgs e)
     {
         _autoRecoveryAttempts = 0;
-        _useCompatibilityMode = false;
         await StartTerminalAsync(focusTerminal: true);
     }
 
@@ -615,17 +612,6 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        if (!_session.Capabilities.SupportsResize)
-        {
-            if (!_reportedUnsupportedResize)
-            {
-                _reportedUnsupportedResize = true;
-                SetStatus("Compatibility mode keeps the local viewport size only.");
-            }
-
-            return;
-        }
-
         try
         {
             _session.Resize(columns, rows);
@@ -660,7 +646,6 @@ public partial class TerminalTabView : UserControl
             (_currentColumns, _currentRows) = CalculateTerminalSize();
             ReplaceTerminalBuffer(new AnsiTerminalBuffer(_currentColumns, _currentRows));
             _cursorBlinkVisible = true;
-            _reportedUnsupportedResize = false;
             _prioritizeInitialOutputRender = true;
             UpdateOverlayState();
             UpdateUiState(isRunning: false);
@@ -801,20 +786,7 @@ public partial class TerminalTabView : UserControl
 
     private async Task<ITerminalSession> CreateSessionAsync(string commandLine, short columns, short rows, string workingDirectory)
     {
-        if (_useCompatibilityMode)
-        {
-            return await Task.Run(() => (ITerminalSession)new ProcessPipeSession(commandLine, columns, rows, workingDirectory));
-        }
-
-        try
-        {
-            return await Task.Run(() => (ITerminalSession)new ConPtySession(columns, rows, commandLine, workingDirectory));
-        }
-        catch
-        {
-            _useCompatibilityMode = true;
-            return await Task.Run(() => (ITerminalSession)new ProcessPipeSession(commandLine, columns, rows, workingDirectory));
-        }
+        return await Task.Run(() => (ITerminalSession)new ConPtySession(columns, rows, commandLine, workingDirectory));
     }
 
     private static async Task<Exception?> DisposeSessionAsync(ITerminalSession? session)
@@ -1022,12 +994,6 @@ public partial class TerminalTabView : UserControl
 
     private void SendInterrupt()
     {
-        if (_session is not null && !_session.Capabilities.SupportsTerminalInput)
-        {
-            SetStatus("Interrupt signaling requires ConPTY mode.");
-            return;
-        }
-
         _ = SendTerminalInput("\u0003");
     }
 
@@ -1959,9 +1925,7 @@ public partial class TerminalTabView : UserControl
             return $"Started: {commandLine}";
         }
 
-        return _session.Capabilities.Kind == TerminalSessionKind.ConPty
-            ? $"Started ({_session.Capabilities.DisplayName}): {commandLine}"
-            : $"Started ({_session.Capabilities.DisplayName}): {commandLine} [limited line mode]";
+        return $"Started ({_session.Capabilities.DisplayName}): {commandLine}";
     }
 
     private bool TryGetMouseCell(Point position, out int column, out int row)
@@ -2123,9 +2087,7 @@ public partial class TerminalTabView : UserControl
 
         if (_autoRecoveryAttempts >= MaxAutoRecoveryAttempts)
         {
-            SetStatus(_useCompatibilityMode
-                ? "Initial output stalled in compatibility mode. Click Recover."
-                : "Initial output stalled. Switching to compatibility mode via Recover.");
+            SetStatus("Initial output stalled. Click Recover.");
             return;
         }
 
@@ -2151,14 +2113,10 @@ public partial class TerminalTabView : UserControl
             }
 
             _ = await Task.Run(() => session.TryForceUnlock());
-            if (!_useCompatibilityMode)
-            {
-                _useCompatibilityMode = true;
-            }
 
             SetStatus(isAutomatic
-                ? "Initial output stalled. Unlocking and restarting in compatibility mode..."
-                : "Recover requested. Unlocking and restarting in compatibility mode...");
+                ? "Initial output stalled. Unlocking and restarting session..."
+                : "Recover requested. Unlocking and restarting session...");
             await StartTerminalAsync(focusTerminal: true);
         }
         catch (Exception ex)

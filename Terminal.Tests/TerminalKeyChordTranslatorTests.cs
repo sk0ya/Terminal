@@ -84,7 +84,7 @@ public sealed class TerminalKeyChordTranslatorTests
     }
 
     [Fact]
-    public void TranslateEnterKeyUsesCrLfInCompatibilityMode()
+    public void TranslateEnterKeyUsesCrLfWhenTerminalInputIsUnavailable()
     {
         Assert.Equal("\r\n", TerminalKeyChordTranslator.TranslateEnterKey(
             ModifierKeys.None,
