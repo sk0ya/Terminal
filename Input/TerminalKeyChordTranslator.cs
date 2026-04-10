@@ -88,6 +88,7 @@ internal static class TerminalKeyChordTranslator
             Key.Enter => TerminalInputEncoder.EncodePrefixedControl("\r", modifiers),
             Key.Back => TerminalInputEncoder.EncodePrefixedControl("\b", modifiers),
             Key.Tab => TerminalInputEncoder.EncodeTabKey(modifiers),
+            Key.Space => TerminalInputEncoder.EncodePrefixedControl(" ", modifiers),
             Key.Escape => TerminalInputEncoder.EncodePrefixedControl("\u001b", modifiers),
             Key.Up => TerminalInputEncoder.EncodeCursorKey('A', modifiers, applicationCursorKeys),
             Key.Down => TerminalInputEncoder.EncodeCursorKey('B', modifiers, applicationCursorKeys),
