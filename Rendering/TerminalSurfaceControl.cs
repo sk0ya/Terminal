@@ -226,16 +226,17 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     public bool TryGetTextPositionFromPoint(Point point, out int lineIndex, out int textIndex)
     {
         EnsureMetrics();
-        Thickness padding = Padding;
-        double x = Math.Max(0, point.X - padding.Left);
-        double y = Math.Max(0, point.Y - padding.Top);
-        lineIndex = Math.Clamp((int)(y / _cellSize.Height), 0, Math.Max(0, _lines.Count - 1));
-
         if (_lines.Count == 0)
         {
+            lineIndex = 0;
             textIndex = 0;
             return false;
         }
+
+        Thickness padding = Padding;
+        double x = Math.Max(0, point.X - padding.Left + _horizontalOffset);
+        double y = Math.Max(0, point.Y - padding.Top + _verticalOffset);
+        lineIndex = Math.Clamp((int)(y / _cellSize.Height), 0, _lines.Count - 1);
 
         LineLayout line = _lines[lineIndex];
         if (line.Map.Length == 0)

@@ -1188,15 +1188,8 @@ public partial class TerminalTabView : UserControl
             _terminalBuffer.ScrollbackLineCount,
             _terminalBuffer.IsAlternateScreenActive,
             TerminalOutput.LineCount);
-        Rect cursorRect = TerminalOutput.GetCellRect(absoluteCursorLine, _terminalBuffer.CursorColumn);
-        Point translated = TerminalOutput.TranslatePoint(cursorRect.TopLeft, TerminalViewportHost);
-        double left = translated.X;
-        double top = translated.Y;
-        if (double.IsNaN(left) || double.IsNaN(top))
-        {
-            left = viewport.ContentLeft + (_terminalBuffer.CursorColumn * charWidth);
-            top = viewport.ContentTop + (absoluteCursorLine * charHeight);
-        }
+        double left = viewport.ContentLeft + (_terminalBuffer.CursorColumn * charWidth);
+        double top = viewport.ContentTop + (absoluteCursorLine * charHeight);
 
         Rect proxyBounds = CalculateProxyBounds(left, top, proxyWidth, proxyHeight, viewportBounds);
         Canvas.SetLeft(TerminalInputProxy, proxyBounds.Left);
@@ -1962,10 +1955,10 @@ public partial class TerminalTabView : UserControl
             new Size(
                 Math.Max(
                     0,
-                    TerminalScrollHost.ViewportWidth - TerminalOutput.Padding.Left - TerminalOutput.Padding.Right),
+                    TerminalScrollHost.ActualWidth - TerminalOutput.Padding.Left - TerminalOutput.Padding.Right),
                 Math.Max(
                     0,
-                    TerminalScrollHost.ViewportHeight - TerminalOutput.Padding.Top - TerminalOutput.Padding.Bottom)));
+                    TerminalScrollHost.ActualHeight - TerminalOutput.Padding.Top - TerminalOutput.Padding.Bottom)));
         double horizontalOffset = TerminalScrollHost.HorizontalOffset;
         double verticalOffset = TerminalScrollHost.VerticalOffset;
         double viewportWidth = viewportSize.Width;
