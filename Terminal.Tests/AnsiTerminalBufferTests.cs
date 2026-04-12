@@ -296,8 +296,178 @@ public sealed class AnsiTerminalBufferTests
 
         AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
 
-        Assert.Single(snapshot.Lines);
+        Assert.Equal(10, snapshot.Lines.Length);
         Assert.Equal("C", string.Concat(snapshot.Lines[0].Segments.Select(segment => segment.Text)));
+        Assert.Empty(snapshot.Lines[1].Segments);
+    }
+
+    [Fact]
+    public void CreateRenderSnapshotKeepsFullViewportWhileAlternateScreenIsActive()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("\u001b[?1049h\u001b[10;1H");
+
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+
+        Assert.Equal(10, snapshot.Lines.Length);
+    }
+
+    [Fact]
+    public void DecPrivate2026TracksSynchronizedUpdateBoundaries()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        bool endedInBeginBatch = buffer.Process("\u001b[?2026hframe");
+        bool endedInEndBatch = buffer.Process("\u001b[?2026l");
+
+        Assert.False(endedInBeginBatch);
+        Assert.True(endedInEndBatch);
+        Assert.False(buffer.SynchronizedUpdateActive);
+    }
+
+    [Fact]
+    public void DecPrivate2026ReportsEndWhenBeginAndEndArriveTogether()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        bool ended = buffer.Process("\u001b[?2026hframe\u001b[?2026l");
+
+        Assert.True(ended);
+        Assert.False(buffer.SynchronizedUpdateActive);
+    }
+
+    [Fact]
+    public void ForceEndSynchronizedUpdateClearsUnclosedBoundary()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("\u001b[?2026hframe");
+
+        Assert.True(buffer.SynchronizedUpdateActive);
+        Assert.True(buffer.ForceEndSynchronizedUpdate());
+        Assert.False(buffer.SynchronizedUpdateActive);
+        Assert.False(buffer.ForceEndSynchronizedUpdate());
+    }
+
+    [Fact]
+    public void ForceEndSynchronizedUpdateDoesNotExitAlternateScreen()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("primary");
+        buffer.Process("\u001b[?1049h\u001b[?2026h");
+
+        Assert.True(buffer.ForceEndSynchronizedUpdate());
+        Assert.True(buffer.IsAlternateScreenActive);
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void ForceExitAlternateScreenRestoresPrimaryScreen()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("primary");
+        buffer.Process("\u001b[?1049h");
+        buffer.Process("alternate");
+
+        Assert.True(buffer.IsAlternateScreenActive);
+        Assert.True(buffer.ForceExitAlternateScreen());
+        Assert.False(buffer.IsAlternateScreenActive);
+        Assert.False(buffer.ForceExitAlternateScreen());
+        Assert.Equal("primary", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void ClaudeTitlePromotesRecentFullClearToSyntheticAlternateScreen()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("primary");
+        buffer.Process("\u001b[2J\u001b[H\u001b]0;claude\u0007");
+        buffer.Process("alternate");
+
+        Assert.True(buffer.IsAlternateScreenActive);
+        Assert.Equal("alternate", buffer.GetScreenLineText(0).TrimEnd());
+
+        buffer.Process("\u001b]0;✳ Claude Code\u0007");
+        buffer.Process("\u001b]0;\u0007");
+
+        Assert.False(buffer.IsAlternateScreenActive);
+        Assert.Equal("primary", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void NonClaudeTitleDiscardsSyntheticAlternateScreenCandidate()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("primary");
+        buffer.Process("\u001b[2J\u001b[H\u001b]0;editor\u0007");
+        buffer.Process("current");
+        buffer.Process("\u001b]0;\u0007");
+
+        Assert.False(buffer.IsAlternateScreenActive);
+        Assert.Equal("current", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void ClaudeTitleWithoutRecentFullClearUsesCurrentScreenAsSyntheticBackup()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("primary");
+        buffer.Process("\u001b]0;Claude Code\u0007");
+        buffer.Process("\r\nalternate");
+
+        Assert.True(buffer.IsAlternateScreenActive);
+        Assert.Equal("alternate", buffer.GetScreenLineText(1).TrimEnd());
+
+        buffer.Process("\u001b]0;\u0007");
+
+        Assert.False(buffer.IsAlternateScreenActive);
+        Assert.Equal("primary", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void ClaudeShellLaunchDoesNotLeaveUiOnPrimaryScreenAfterExit()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 10);
+
+        buffer.Process("PS C:\\Projects\\Terminal> & \"C:\\Users\\koya\\.local\\bin\\claude.exe\"\r\n");
+        buffer.Process("\u001b]0;claude\u0007");
+        buffer.Process("Claude Code UI\r\nMore UI");
+        buffer.Process("\u001b]9;4;0;\u0007\r\n\u001b]0;\u0007\u001b[?25h");
+        buffer.Process("PS C:\\Projects\\Terminal> ");
+
+        Assert.False(buffer.IsAlternateScreenActive);
+        Assert.DoesNotContain("Claude Code UI", buffer.CreatePlainTextSnapshot(), StringComparison.Ordinal);
+        Assert.Equal("PS C:\\Projects\\Terminal>", buffer.GetScreenLineText(1).TrimEnd());
+    }
+
+    [Fact]
+    public void C1CsiDecPrivate1049RestoresPrimaryScreen()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("primary");
+        buffer.Process("\u009b?1049h");
+        buffer.Process("alternate");
+        buffer.Process("\u009b?1049l");
+
+        Assert.False(buffer.IsAlternateScreenActive);
+        Assert.Equal("primary", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void C1ControlsAreNotPrinted()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("A\u009cB");
+
+        Assert.Equal("AB", buffer.GetScreenLineText(0).TrimEnd());
     }
 
     [Fact]

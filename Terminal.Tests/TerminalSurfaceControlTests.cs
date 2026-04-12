@@ -118,6 +118,35 @@ public sealed class TerminalSurfaceControlTests
         });
     }
 
+    [Fact]
+    public void SurfaceKeepsExtentAtLeastViewportFloorWhenSnapshotShrinks()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+
+            surface.SetViewportFloor(new Size(640, 320));
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                CreateLine("short")
+            ]));
+
+            Assert.Equal(640, surface.ExtentWidth, precision: 3);
+            Assert.Equal(320, surface.ExtentHeight, precision: 3);
+
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                CreateLine(string.Empty)
+            ]));
+            surface.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+
+            Assert.Equal(640, surface.ExtentWidth, precision: 3);
+            Assert.Equal(320, surface.ExtentHeight, precision: 3);
+            Assert.Equal(640, surface.DesiredSize.Width, precision: 3);
+            Assert.Equal(320, surface.DesiredSize.Height, precision: 3);
+        });
+    }
+
     private static TerminalSurfaceControl CreateSurface()
     {
         var surface = new TerminalSurfaceControl

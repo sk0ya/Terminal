@@ -101,6 +101,9 @@ internal sealed class AnsiTerminalBuffer
     private bool _alternateScrollEnabled;
     private bool _bracketedPasteEnabled;
     private bool _focusReportingEnabled;
+    private bool _synchronizedUpdateActive;
+    private bool _synchronizedUpdateEndedDuringProcess;
+    private bool _syntheticAlternateScreenActive;
     private bool _useG1CharacterSet;
     private bool _savedUseG1CharacterSet;
     private bool _savedInsertMode;
@@ -118,6 +121,7 @@ internal sealed class AnsiTerminalBuffer
     private string? _currentHyperlink;
     private string? _savedHyperlink;
     private string _windowTitle = string.Empty;
+    private ScreenState? _pendingSyntheticAlternateScreenBackup;
     private string _lastPrintedClusterText = string.Empty;
     private int _lastPrintedClusterWidth;
     private int _pendingClusterWidth;
@@ -155,10 +159,11 @@ internal sealed class AnsiTerminalBuffer
     public bool CursorVisible => _cursorVisible;
     public bool FocusReportingEnabled => _focusReportingEnabled;
     public bool IsAlternateScreenActive => _primaryScreenBackup is not null;
+    public bool SynchronizedUpdateActive => _synchronizedUpdateActive;
     public TerminalMouseEncoding MouseEncoding => ResolveMouseEncoding();
     public TerminalMouseTrackingMode MouseTrackingMode => _mouseTrackingMode;
     public int ScrollbackLineCount => _scrollback.Count;
-    public int VisibleLineCount => FindLastVisibleScreenRow(showCursor: false) + 1;
+    public int VisibleLineCount => GetLastRenderedScreenRow(showCursor: false) + 1;
 
     public void Resize(short columns, short rows)
     {
@@ -261,8 +266,9 @@ internal sealed class AnsiTerminalBuffer
         }
     }
 
-    public void Process(string text)
+    public bool Process(string text)
     {
+        _synchronizedUpdateEndedDuringProcess = false;
         for (int index = 0; index < text.Length;)
         {
             if (_state == ParserState.Normal &&
@@ -281,6 +287,30 @@ internal sealed class AnsiTerminalBuffer
 
         FlushPendingCluster();
         InvalidateScreenRenderCache();
+        return _synchronizedUpdateEndedDuringProcess;
+    }
+
+    public bool ForceEndSynchronizedUpdate()
+    {
+        if (!_synchronizedUpdateActive)
+        {
+            return false;
+        }
+
+        _synchronizedUpdateActive = false;
+        _synchronizedUpdateEndedDuringProcess = false;
+        return true;
+    }
+
+    public bool ForceExitAlternateScreen()
+    {
+        if (_primaryScreenBackup is null)
+        {
+            return false;
+        }
+
+        ExitAlternateScreen();
+        return true;
     }
 
     public TerminalRenderSnapshot CreateRenderSnapshot(bool showCursor)
@@ -296,7 +326,7 @@ internal sealed class AnsiTerminalBuffer
             RebuildScreenRenderCache(showCursor);
         }
 
-        int lastScreenRow = FindLastVisibleScreenRow(showCursor);
+        int lastScreenRow = GetLastRenderedScreenRow(showCursor);
         if (_cachedVisibleScreenRow != lastScreenRow)
         {
             _cachedVisibleScreenRow = lastScreenRow;
@@ -526,12 +556,15 @@ internal sealed class AnsiTerminalBuffer
         _useSgrMouseEncoding = false;
         _useUrxvtMouseEncoding = false;
         _mouseTrackingMode = TerminalMouseTrackingMode.Off;
+        _synchronizedUpdateActive = false;
+        _syntheticAlternateScreenActive = false;
         _g0CharacterSet = TerminalCharacterSet.Ascii;
         _g1CharacterSet = TerminalCharacterSet.Ascii;
         _savedG0CharacterSet = TerminalCharacterSet.Ascii;
         _savedG1CharacterSet = TerminalCharacterSet.Ascii;
         _currentHyperlink = null;
         _savedHyperlink = null;
+        _pendingSyntheticAlternateScreenBackup = null;
         _windowTitle = string.Empty;
         _lastPrintedClusterText = string.Empty;
         _lastPrintedClusterWidth = 0;
@@ -583,6 +616,16 @@ internal sealed class AnsiTerminalBuffer
                 return;
             case '\u001b':
                 _state = ParserState.Escape;
+                return;
+            case '\u009b':
+                _csiBuffer.Clear();
+                _state = ParserState.Csi;
+                return;
+            case '\u009d':
+                _oscBuffer.Clear();
+                _state = ParserState.Osc;
+                return;
+            case '\u009c':
                 return;
             case '\r':
                 _cursorColumn = 0;
@@ -783,7 +826,9 @@ internal sealed class AnsiTerminalBuffer
         string value = content[(separatorIndex + 1)..];
         if (command is "0" or "2")
         {
+            string previousTitle = _windowTitle;
             _windowTitle = value;
+            UpdateSyntheticAlternateScreenFromTitle(previousTitle, value);
             return;
         }
 
@@ -1173,6 +1218,14 @@ internal sealed class AnsiTerminalBuffer
                 case 2004:
                     _bracketedPasteEnabled = enabled;
                     break;
+                case 2026:
+                    if (_synchronizedUpdateActive && !enabled)
+                    {
+                        _synchronizedUpdateEndedDuringProcess = true;
+                    }
+
+                    _synchronizedUpdateActive = enabled;
+                    break;
             }
         }
     }
@@ -1241,6 +1294,8 @@ internal sealed class AnsiTerminalBuffer
         _useSgrMouseEncoding = false;
         _useUrxvtMouseEncoding = false;
         _mouseTrackingMode = TerminalMouseTrackingMode.Off;
+        _synchronizedUpdateActive = false;
+        _pendingSyntheticAlternateScreenBackup = null;
         _g0CharacterSet = TerminalCharacterSet.Ascii;
         _g1CharacterSet = TerminalCharacterSet.Ascii;
         _currentHyperlink = null;
@@ -1254,21 +1309,9 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
-        _primaryScreenBackup = new ScreenState(
-            CloneScreen(_screen),
-            (bool[])_tabStops.Clone(),
-            _rows,
-            _columns,
-            _cursorRow,
-            _cursorColumn,
-            _savedCursorRow,
-            _savedCursorColumn,
-            _scrollTop,
-            _scrollBottom,
-            _currentStyle,
-            _savedStyle,
-            _currentHyperlink,
-            _savedHyperlink);
+        _pendingSyntheticAlternateScreenBackup = null;
+        _syntheticAlternateScreenActive = false;
+        _primaryScreenBackup = CaptureScreenState();
 
         _screen = CreateScreen(_rows, _columns, TerminalStyle.Default);
         _cursorRow = 0;
@@ -1315,6 +1358,72 @@ internal sealed class AnsiTerminalBuffer
         }
 
         InvalidateScreenRenderCache();
+        _syntheticAlternateScreenActive = false;
+    }
+
+    private void CaptureSyntheticAlternateScreenCandidate()
+    {
+        if (_primaryScreenBackup is not null)
+        {
+            return;
+        }
+
+        _pendingSyntheticAlternateScreenBackup = CaptureScreenState();
+    }
+
+    private ScreenState CaptureScreenState()
+    {
+        return new ScreenState(
+            CloneScreen(_screen),
+            (bool[])_tabStops.Clone(),
+            _rows,
+            _columns,
+            _cursorRow,
+            _cursorColumn,
+            _savedCursorRow,
+            _savedCursorColumn,
+            _scrollTop,
+            _scrollBottom,
+            _currentStyle,
+            _savedStyle,
+            _currentHyperlink,
+            _savedHyperlink);
+    }
+
+    private void UpdateSyntheticAlternateScreenFromTitle(string previousTitle, string nextTitle)
+    {
+        bool nextTitleIsClaude = IsClaudeSyntheticAlternateScreenTitle(nextTitle);
+        if (_syntheticAlternateScreenActive)
+        {
+            if (IsClaudeSyntheticAlternateScreenTitle(previousTitle) && !nextTitleIsClaude)
+            {
+                ExitAlternateScreen();
+            }
+
+            return;
+        }
+
+        if (!nextTitleIsClaude)
+        {
+            _pendingSyntheticAlternateScreenBackup = null;
+            return;
+        }
+
+        if (_primaryScreenBackup is not null)
+        {
+            return;
+        }
+
+        _primaryScreenBackup = _pendingSyntheticAlternateScreenBackup ?? CaptureScreenState();
+        _pendingSyntheticAlternateScreenBackup = null;
+        _syntheticAlternateScreenActive = true;
+        InvalidateScreenRenderCache();
+    }
+
+    private static bool IsClaudeSyntheticAlternateScreenTitle(string title)
+    {
+        return title.Equals("claude", StringComparison.OrdinalIgnoreCase) ||
+            title.Contains("Claude Code", StringComparison.OrdinalIgnoreCase);
     }
 
     private static List<TerminalLine> CloneScreen(List<TerminalLine> source)
@@ -1666,6 +1775,7 @@ internal sealed class AnsiTerminalBuffer
                 ClearLine(1);
                 break;
             case 2:
+                CaptureSyntheticAlternateScreenCandidate();
                 for (int row = 0; row < _rows; row++)
                 {
                     ClearEntireLine(row);
@@ -1673,6 +1783,7 @@ internal sealed class AnsiTerminalBuffer
 
                 break;
             case 3:
+                CaptureSyntheticAlternateScreenCandidate();
                 ClearScrollback();
                 for (int row = 0; row < _rows; row++)
                 {
@@ -2097,6 +2208,13 @@ internal sealed class AnsiTerminalBuffer
         return lastNonEmptyRow;
     }
 
+    private int GetLastRenderedScreenRow(bool showCursor)
+    {
+        return _primaryScreenBackup is not null
+            ? _rows - 1
+            : FindLastVisibleScreenRow(showCursor);
+    }
+
     private static bool IsLineBlank(TerminalLine line)
     {
         foreach (TerminalCell cell in line.Cells)
@@ -2501,7 +2619,7 @@ internal sealed class AnsiTerminalBuffer
 
     private static bool IsControlRune(Rune rune)
     {
-        return rune.Value < 0x20 || rune.Value == 0x7F;
+        return rune.Value < 0x20 || rune.Value == 0x7F || rune.Value is >= 0x80 and <= 0x9F;
     }
 
     private static int GetDisplayWidth(Rune rune)

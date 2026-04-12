@@ -26,7 +26,10 @@ public partial class TerminalTabView : UserControl
     private static readonly TimeSpan IdleOutputTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan CursorBlinkInterval = TimeSpan.FromMilliseconds(530);
     private static readonly TimeSpan MinDocumentRenderInterval = TimeSpan.FromMilliseconds(33);
+    private static readonly TimeSpan SynchronizedUpdateRenderTimeout = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan ExitOutputDrainInterval = TimeSpan.FromMilliseconds(50);
     private static readonly TimeSpan CloseShutdownTimeout = TimeSpan.FromSeconds(2);
+    private const int ExitOutputDrainPasses = 3;
     private static readonly Brush BlockCursorBrush = CreateFrozenBrush(Color.FromArgb(0xA0, 0xE3, 0xE3, 0xE3));
     private static readonly Brush AccentCursorBrush = CreateFrozenBrush(Color.FromRgb(0x5F, 0xAF, 0xFF));
 
@@ -37,6 +40,7 @@ public partial class TerminalTabView : UserControl
     private readonly DispatcherTimer _sessionWatchdog = new(DispatcherPriority.Background);
     private readonly DispatcherTimer _cursorBlinkTimer = new(DispatcherPriority.Background);
     private readonly DispatcherTimer _renderThrottleTimer = new(DispatcherPriority.Background);
+    private readonly DispatcherTimer _synchronizedUpdateWatchdogTimer = new(DispatcherPriority.Background);
     private readonly SemaphoreSlim _sessionLifecycleGate = new(1, 1);
     private readonly object _pendingOutputLock = new();
     private readonly StringBuilder _pendingOutput = new();
@@ -49,6 +53,7 @@ public partial class TerminalTabView : UserControl
     private bool _outputFlushScheduled;
     private bool _prioritizeInitialOutputRender;
     private bool _followTerminalOutput = true;
+    private bool _alternateScreenViewportMode;
     private bool _cursorBlinkVisible = true;
     private bool _resettingInputProxyText;
     private bool _pendingProxyFlushAfterImeConfirm;
@@ -91,6 +96,8 @@ public partial class TerminalTabView : UserControl
         _cursorBlinkTimer.Start();
 
         _renderThrottleTimer.Tick += RenderThrottleTimer_Tick;
+        _synchronizedUpdateWatchdogTimer.Interval = SynchronizedUpdateRenderTimeout;
+        _synchronizedUpdateWatchdogTimer.Tick += SynchronizedUpdateWatchdogTimer_Tick;
 
         TerminalOutput.HyperlinkActivated += TerminalOutput_HyperlinkActivated;
         TerminalInputProxy.AddHandler(TextCompositionManager.PreviewTextInputStartEvent, new TextCompositionEventHandler(TerminalInputProxy_PreviewTextInputStart), handledEventsToo: true);
@@ -125,6 +132,7 @@ public partial class TerminalTabView : UserControl
         _sessionWatchdog.Stop();
         _cursorBlinkTimer.Stop();
         _renderThrottleTimer.Stop();
+        _synchronizedUpdateWatchdogTimer.Stop();
         ReleaseTerminalMouseCapture(force: true);
         ResetInputProxyText();
         UpdateUiState(_session is not null);
@@ -575,7 +583,15 @@ public partial class TerminalTabView : UserControl
 
     private void OnTerminalOutputSizeChanged(object sender, SizeChangedEventArgs e)
     {
+        UpdateTerminalSurfaceViewportFloor();
         QueueTerminalViewportSizeUpdate();
+    }
+
+    private void UpdateTerminalSurfaceViewportFloor()
+    {
+        TerminalOutput.SetViewportFloor(new Size(
+            Math.Max(0, TerminalScrollHost.ActualWidth),
+            Math.Max(0, TerminalScrollHost.ActualHeight)));
     }
 
     private void QueueTerminalViewportSizeUpdate()
@@ -641,6 +657,7 @@ public partial class TerminalTabView : UserControl
             Exception? stopError = await DisposeSessionAsync(previousSession);
 
             ClearPendingOutput();
+            StopSynchronizedUpdateWatchdog();
             ReleaseTerminalMouseCapture(force: true);
             ResetInputProxyText();
             (_currentColumns, _currentRows) = CalculateTerminalSize();
@@ -735,6 +752,8 @@ public partial class TerminalTabView : UserControl
             ITerminalSession? session = DetachCurrentSession();
             ClearActiveLaunchState();
             ClearPendingOutput();
+            StopSynchronizedUpdateWatchdog();
+            ForceEndTransientModesAndRender();
             ReleaseTerminalMouseCapture(force: true);
             ResetInputProxyText();
             _prioritizeInitialOutputRender = false;
@@ -839,7 +858,7 @@ public partial class TerminalTabView : UserControl
                 return;
             }
 
-            FlushPendingOutput();
+            await DrainExitedSessionOutputAsync(session);
             await StopTerminalAsync(
                 reportStopped: false,
                 statusOverride: $"Process exited with code {exitCode}.",
@@ -849,6 +868,27 @@ public partial class TerminalTabView : UserControl
         {
             SetStatus($"Exit handling failed: {FormatExceptionMessage(ex)}");
         }
+    }
+
+    private async Task DrainExitedSessionOutputAsync(ITerminalSession session)
+    {
+        for (int pass = 0; pass < ExitOutputDrainPasses; pass++)
+        {
+            if (!ReferenceEquals(session, _session))
+            {
+                return;
+            }
+
+            FlushPendingOutput();
+            await Task.Delay(ExitOutputDrainInterval);
+        }
+
+        if (!ReferenceEquals(session, _session))
+        {
+            return;
+        }
+
+        FlushPendingOutput(forceEndTransientModes: true);
     }
 
     private void CursorBlinkTimer_Tick(object? sender, EventArgs e)
@@ -927,6 +967,11 @@ public partial class TerminalTabView : UserControl
 
     private void FlushPendingOutput()
     {
+        FlushPendingOutput(forceEndTransientModes: false);
+    }
+
+    private void FlushPendingOutput(bool forceEndTransientModes)
+    {
         string? nextBatch = null;
         lock (_pendingOutputLock)
         {
@@ -941,10 +986,23 @@ public partial class TerminalTabView : UserControl
 
         if (!string.IsNullOrEmpty(nextBatch))
         {
-            _terminalBuffer.Process(nextBatch);
+            bool endedSynchronizedUpdate = _terminalBuffer.Process(nextBatch);
             bool prioritizeRender = _prioritizeInitialOutputRender;
             _prioritizeInitialOutputRender = false;
-            RequestDocumentRender(immediate: prioritizeRender);
+            if (!_terminalBuffer.SynchronizedUpdateActive)
+            {
+                StopSynchronizedUpdateWatchdog();
+                RequestDocumentRender(immediate: prioritizeRender || endedSynchronizedUpdate);
+            }
+            else
+            {
+                ScheduleSynchronizedUpdateWatchdog();
+            }
+        }
+
+        if (forceEndTransientModes)
+        {
+            ForceEndTransientModesAndRender();
         }
 
         bool shouldReschedule = false;
@@ -961,6 +1019,53 @@ public partial class TerminalTabView : UserControl
         {
             _ = Dispatcher.BeginInvoke(FlushPendingOutput, DispatcherPriority.Normal);
         }
+    }
+
+    private void ScheduleSynchronizedUpdateWatchdog()
+    {
+        if (_synchronizedUpdateWatchdogTimer.IsEnabled)
+        {
+            return;
+        }
+
+        _synchronizedUpdateWatchdogTimer.Start();
+    }
+
+    private void StopSynchronizedUpdateWatchdog()
+    {
+        _synchronizedUpdateWatchdogTimer.Stop();
+    }
+
+    private void SynchronizedUpdateWatchdogTimer_Tick(object? sender, EventArgs e)
+    {
+        StopSynchronizedUpdateWatchdog();
+        ForceEndSynchronizedUpdateAndRender();
+    }
+
+    private void ForceEndSynchronizedUpdateAndRender()
+    {
+        if (!_terminalBuffer.ForceEndSynchronizedUpdate())
+        {
+            StopSynchronizedUpdateWatchdog();
+            return;
+        }
+
+        StopSynchronizedUpdateWatchdog();
+        RequestDocumentRender(immediate: true);
+    }
+
+    private void ForceEndTransientModesAndRender()
+    {
+        bool changed = _terminalBuffer.ForceEndSynchronizedUpdate();
+        changed |= _terminalBuffer.ForceExitAlternateScreen();
+        if (!changed)
+        {
+            StopSynchronizedUpdateWatchdog();
+            return;
+        }
+
+        StopSynchronizedUpdateWatchdog();
+        RequestDocumentRender(immediate: true);
     }
 
     private void ClearPendingOutput()
@@ -1100,7 +1205,10 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        double preservedDistanceFromBottom = GetDistanceFromBottom();
+        bool isAlternateScreenActive = _terminalBuffer.IsAlternateScreenActive;
+        UpdateTerminalSurfaceViewportFloor();
+        ApplyAlternateScreenViewportMode(isAlternateScreenActive);
+        double preservedDistanceFromBottom = isAlternateScreenActive ? 0 : GetDistanceFromBottom();
         _isRenderingTerminal = true;
         try
         {
@@ -1589,25 +1697,74 @@ public partial class TerminalTabView : UserControl
 
     private void RestoreTerminalViewport(double preservedDistanceFromBottom)
     {
-        if (_followTerminalOutput || preservedDistanceFromBottom <= AutoFollowThreshold)
+        bool isAlternateScreenActive = _terminalBuffer.IsAlternateScreenActive;
+        double targetOffset = ResolveRestoredVerticalOffset(
+            isAlternateScreenActive,
+            _followTerminalOutput,
+            preservedDistanceFromBottom,
+            TerminalScrollHost.ExtentHeight,
+            TerminalScrollHost.ViewportHeight);
+        TerminalScrollHost.ScrollToVerticalOffset(targetOffset);
+        if (isAlternateScreenActive)
         {
-            TerminalScrollHost.ScrollToBottom();
-        }
-        else
-        {
-            double targetOffset = Math.Max(
-                0,
-                TerminalScrollHost.ExtentHeight - TerminalScrollHost.ViewportHeight - preservedDistanceFromBottom);
-            TerminalScrollHost.ScrollToVerticalOffset(targetOffset);
+            TerminalScrollHost.ScrollToHorizontalOffset(0);
         }
 
         UpdateFollowOutputState();
     }
 
+    internal static double ResolveRestoredVerticalOffset(
+        bool isAlternateScreenActive,
+        bool followTerminalOutput,
+        double preservedDistanceFromBottom,
+        double extentHeight,
+        double viewportHeight)
+    {
+        if (isAlternateScreenActive)
+        {
+            return 0;
+        }
+
+        double maxOffset = Math.Max(0, extentHeight - viewportHeight);
+        if (followTerminalOutput || preservedDistanceFromBottom <= AutoFollowThreshold)
+        {
+            return maxOffset;
+        }
+
+        return Math.Max(0, maxOffset - preservedDistanceFromBottom);
+    }
+
     private void UpdateFollowOutputState()
     {
+        if (_terminalBuffer.IsAlternateScreenActive)
+        {
+            _followTerminalOutput = true;
+            UpdateTerminalChrome();
+            return;
+        }
+
         _followTerminalOutput = GetDistanceFromBottom() <= AutoFollowThreshold;
         UpdateTerminalChrome();
+    }
+
+    private void ApplyAlternateScreenViewportMode(bool isAlternateScreenActive)
+    {
+        if (_alternateScreenViewportMode == isAlternateScreenActive)
+        {
+            return;
+        }
+
+        _alternateScreenViewportMode = isAlternateScreenActive;
+        ScrollBarVisibility visibility = isAlternateScreenActive
+            ? ScrollBarVisibility.Disabled
+            : ScrollBarVisibility.Auto;
+        TerminalScrollHost.VerticalScrollBarVisibility = visibility;
+        TerminalScrollHost.HorizontalScrollBarVisibility = visibility;
+        if (isAlternateScreenActive)
+        {
+            TerminalScrollHost.ScrollToVerticalOffset(0);
+            TerminalScrollHost.ScrollToHorizontalOffset(0);
+        }
     }
 
     private void ReplaceTerminalBuffer(AnsiTerminalBuffer nextBuffer)

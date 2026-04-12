@@ -325,13 +325,18 @@
 
         <Border Grid.Row="2"
                 Style="{StaticResource PanelBorderStyle}"
+                Background="#0E0C0A"
                 Padding="0"
                 CornerRadius="0"
                 BorderThickness="0">
-            <Grid x:Name="TerminalViewportHost">
+            <Grid x:Name="TerminalViewportHost"
+                  Background="#0E0C0A"
+                  ClipToBounds="True">
                 <ScrollViewer x:Name="TerminalScrollHost"
                               Margin="0"
                               Padding="0"
+                              Background="#0E0C0A"
+                              ClipToBounds="True"
                               Focusable="False"
                               CanContentScroll="True"
                               VerticalScrollBarVisibility="Auto"
@@ -345,6 +350,7 @@
                                                   IsTabStop="True"
                                                   FontFamily="Cascadia Mono"
                                                   FontSize="14"
+                                                  ClipToBounds="True"
                                                   Background="#0E0C0A"
                                                   Foreground="#E8E0D2"
                                                   PreviewKeyDown="TerminalOutput_PreviewKeyDown"

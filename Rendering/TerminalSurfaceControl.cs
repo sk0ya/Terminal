@@ -31,6 +31,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private double _extentHeight;
     private double _viewportWidth;
     private double _viewportHeight;
+    private double _viewportFloorWidth;
+    private double _viewportFloorHeight;
     private double _horizontalOffset;
     private double _verticalOffset;
 
@@ -94,6 +96,23 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
         CoerceSelection();
         UpdateScrollMetrics();
+        InvalidateVisual();
+    }
+
+    internal void SetViewportFloor(Size size)
+    {
+        double nextWidth = NormalizeViewportFloorExtent(size.Width);
+        double nextHeight = NormalizeViewportFloorExtent(size.Height);
+        if (DoubleUtil.AreClose(_viewportFloorWidth, nextWidth) &&
+            DoubleUtil.AreClose(_viewportFloorHeight, nextHeight))
+        {
+            return;
+        }
+
+        _viewportFloorWidth = nextWidth;
+        _viewportFloorHeight = nextHeight;
+        UpdateScrollMetrics();
+        InvalidateMeasure();
         InvalidateVisual();
     }
 
@@ -373,10 +392,11 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     protected override Size MeasureOverride(Size constraint)
     {
         EnsureMetrics();
-        UpdateViewport(constraint);
+        Size viewportSize = ResolveViewportSize(constraint);
+        UpdateViewport(viewportSize);
         return new Size(
-            double.IsInfinity(constraint.Width) ? ExtentWidth : constraint.Width,
-            double.IsInfinity(constraint.Height) ? ExtentHeight : constraint.Height);
+            double.IsInfinity(constraint.Width) ? ExtentWidth : Math.Max(constraint.Width, _viewportFloorWidth),
+            double.IsInfinity(constraint.Height) ? ExtentHeight : Math.Max(constraint.Height, _viewportFloorHeight));
     }
 
     protected override Size ArrangeOverride(Size arrangeBounds)
@@ -663,10 +683,26 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     {
         EnsureMetrics();
         Thickness padding = Padding;
-        _extentWidth = padding.Left + padding.Right + (_maxCellLength * _cellSize.Width);
-        _extentHeight = padding.Top + padding.Bottom + (_lines.Count * _cellSize.Height);
+        _extentWidth = Math.Max(
+            _viewportFloorWidth,
+            padding.Left + padding.Right + (_maxCellLength * _cellSize.Width));
+        _extentHeight = Math.Max(
+            _viewportFloorHeight,
+            padding.Top + padding.Bottom + (_lines.Count * _cellSize.Height));
         CoerceOffsets();
         ScrollOwner?.InvalidateScrollInfo();
+    }
+
+    private Size ResolveViewportSize(Size constraint)
+    {
+        return new Size(
+            double.IsInfinity(constraint.Width) ? _viewportFloorWidth : Math.Max(constraint.Width, _viewportFloorWidth),
+            double.IsInfinity(constraint.Height) ? _viewportFloorHeight : Math.Max(constraint.Height, _viewportFloorHeight));
+    }
+
+    private static double NormalizeViewportFloorExtent(double value)
+    {
+        return double.IsFinite(value) && value > 0 ? value : 0;
     }
 
     private void CoerceOffsets()
