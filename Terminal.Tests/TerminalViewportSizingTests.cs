@@ -32,6 +32,42 @@ public sealed class TerminalViewportSizingTests
     }
 
     [Fact]
+    public void ResolveScrollViewerViewportSizePrefersViewportOverActualSize()
+    {
+        Size viewport = TerminalViewportSizing.ResolveScrollViewerViewportSize(
+            new Size(783, 542),
+            new Size(800, 560),
+            new Thickness(0));
+
+        Assert.Equal(783, viewport.Width);
+        Assert.Equal(542, viewport.Height);
+    }
+
+    [Fact]
+    public void ResolveScrollViewerViewportSizeSubtractsContentPadding()
+    {
+        Size viewport = TerminalViewportSizing.ResolveScrollViewerViewportSize(
+            new Size(783, 542),
+            new Size(800, 560),
+            new Thickness(10, 4, 12, 6));
+
+        Assert.Equal(761, viewport.Width);
+        Assert.Equal(532, viewport.Height);
+    }
+
+    [Fact]
+    public void ResolveScrollViewerViewportSizeFallsBackToActualSizeWhenViewportIsInvalid()
+    {
+        Size viewport = TerminalViewportSizing.ResolveScrollViewerViewportSize(
+            new Size(0, double.NaN),
+            new Size(800, 560),
+            new Thickness(10, 4, 12, 6));
+
+        Assert.Equal(778, viewport.Width);
+        Assert.Equal(550, viewport.Height);
+    }
+
+    [Fact]
     public void CalculateCellCountUsesViewportExtentAndFallsBackForInvalidValues()
     {
         Assert.Equal<short>(36, TerminalViewportSizing.CalculateCellCount(576, 16, fallback: 30, min: 10, max: 300));

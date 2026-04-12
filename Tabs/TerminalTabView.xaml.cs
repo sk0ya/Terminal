@@ -589,9 +589,7 @@ public partial class TerminalTabView : UserControl
 
     private void UpdateTerminalSurfaceViewportFloor()
     {
-        TerminalOutput.SetViewportFloor(new Size(
-            Math.Max(0, TerminalScrollHost.ActualWidth),
-            Math.Max(0, TerminalScrollHost.ActualHeight)));
+        TerminalOutput.SetViewportFloor(ResolveTerminalScrollViewportSize(new Thickness(0)));
     }
 
     private void QueueTerminalViewportSizeUpdate()
@@ -2105,17 +2103,12 @@ public partial class TerminalTabView : UserControl
         Point viewportOrigin = TerminalScrollHost.TranslatePoint(
             new Point(TerminalOutput.Padding.Left, TerminalOutput.Padding.Top),
             TerminalViewportHost);
+        Size scrollViewerViewportSize = ResolveTerminalScrollViewportSize(TerminalOutput.Padding);
         Size viewportSize = TerminalViewportSizing.ResolveViewportSize(
             TerminalOutput.RenderSize,
             TerminalOutput.BorderThickness,
             TerminalOutput.Padding,
-            new Size(
-                Math.Max(
-                    0,
-                    TerminalScrollHost.ActualWidth - TerminalOutput.Padding.Left - TerminalOutput.Padding.Right),
-                Math.Max(
-                    0,
-                    TerminalScrollHost.ActualHeight - TerminalOutput.Padding.Top - TerminalOutput.Padding.Bottom)));
+            scrollViewerViewportSize);
         double horizontalOffset = TerminalScrollHost.HorizontalOffset;
         double verticalOffset = TerminalScrollHost.VerticalOffset;
         double viewportWidth = viewportSize.Width;
@@ -2134,6 +2127,14 @@ public partial class TerminalTabView : UserControl
             viewportTop - verticalOffset,
             horizontalOffset,
             verticalOffset);
+    }
+
+    private Size ResolveTerminalScrollViewportSize(Thickness contentPadding)
+    {
+        return TerminalViewportSizing.ResolveScrollViewerViewportSize(
+            new Size(TerminalScrollHost.ViewportWidth, TerminalScrollHost.ViewportHeight),
+            new Size(TerminalScrollHost.ActualWidth, TerminalScrollHost.ActualHeight),
+            contentPadding);
     }
 
     private Size MeasureTerminalText(string text)

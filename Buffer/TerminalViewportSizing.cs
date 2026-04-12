@@ -28,6 +28,24 @@ internal static class TerminalViewportSizing
         return new Size(width, height);
     }
 
+    public static Size ResolveScrollViewerViewportSize(
+        Size viewportSize,
+        Size actualSize,
+        Thickness contentPadding)
+    {
+        return new Size(
+            ResolveScrollViewerViewportExtent(
+                viewportSize.Width,
+                actualSize.Width,
+                contentPadding.Left,
+                contentPadding.Right),
+            ResolveScrollViewerViewportExtent(
+                viewportSize.Height,
+                actualSize.Height,
+                contentPadding.Top,
+                contentPadding.Bottom));
+    }
+
     public static short CalculateCellCount(double viewportExtent, double cellExtent, short fallback, short min, short max)
     {
         if (!IsFinitePositive(viewportExtent) || !IsFinitePositive(cellExtent))
@@ -52,6 +70,20 @@ internal static class TerminalViewportSizing
         }
 
         return Math.Max(0, actualExtent - borderStart - borderEnd - paddingStart - paddingEnd);
+    }
+
+    private static double ResolveScrollViewerViewportExtent(
+        double viewportExtent,
+        double actualExtent,
+        double paddingStart,
+        double paddingEnd)
+    {
+        if (IsFinitePositive(viewportExtent))
+        {
+            return Math.Max(0, viewportExtent - paddingStart - paddingEnd);
+        }
+
+        return Math.Max(0, actualExtent - paddingStart - paddingEnd);
     }
 
     private static bool IsFinitePositive(double? value)
