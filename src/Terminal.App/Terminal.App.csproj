@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -6,12 +6,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="Terminal.Tests\**\*.cs" />
-    <EmbeddedResource Remove="Terminal.Tests\**\*" />
-    <None Remove="Terminal.Tests\**\*" />
+    <ProjectReference Include="..\Terminal.Core\Terminal.Core.csproj" />
+    <ProjectReference Include="..\Terminal.Controls\Terminal.Controls.csproj" />
   </ItemGroup>
 
 </Project>
