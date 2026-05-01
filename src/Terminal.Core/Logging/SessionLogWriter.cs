@@ -32,7 +32,8 @@ internal sealed partial class SessionLogWriter : ISessionLogger
     private static partial Regex MultiSpacePattern();
 
     // Progress/status lines to skip: ellipsis-terminated progress, Claude Code status bar, bare prompt.
-    [GeneratedRegex(@"…$|·/effort|\(shift\+tab to cycle\)|esc to interrupt|^\s*>\s*$")]
+    // Use [ \t] instead of \s so NBSP-padded lines are not mistaken for bare prompts.
+    [GeneratedRegex(@"…$|·/effort|\(shift\+tab to cycle\)|esc to interrupt|^[ \t]*>[ \t]*$")]
     private static partial Regex ProgressLinePattern();
 
     private SessionLogWriter(StreamWriter writer, string sid)
@@ -176,11 +177,12 @@ internal sealed partial class SessionLogWriter : ISessionLogger
     {
         // Replace cursor-right/column sequences with space so adjacent text isn't concatenated.
         string prepped = CursorRightPattern().Replace(text, " ");
-        // Normalize CRLF, strip remaining ANSI, strip terminal UI chars, normalize NBSP.
+        // Normalize CRLF, strip remaining ANSI, strip terminal UI chars.
+        // NBSP normalization is deferred to per-line processing so NBSP-padded lines
+        // are not incorrectly matched by the bare-prompt filter.
         string stripped = AnsiPattern().Replace(prepped, string.Empty).Replace("\r\n", "\n");
         stripped = UiCharsPattern().Replace(stripped, string.Empty);
-        stripped = stripped.Replace(' ', ' ');
-        // Collapse runs of spaces left by cursor replacements or terminal width padding.
+        // Collapse runs of regular spaces left by cursor replacements or terminal width padding.
         stripped = MultiSpacePattern().Replace(stripped, " ");
 
         // Apply \b and \r as terminal control characters.
@@ -208,19 +210,24 @@ internal sealed partial class SessionLogWriter : ISessionLogger
         }
 
         // Collapse blank lines; trim trailing whitespace per line.
+        // Trim only ASCII space/tab for the progress-line check so that NBSP-padded lines
+        // (e.g., ">  ") are NOT matched by the bare-prompt pattern.
         string[] lines = buf.ToString().Split('\n');
         var result = new System.Text.StringBuilder(buf.Length);
         int blankRun = 0;
         foreach (string line in lines)
         {
-            string trimmed = line.Trim();
-            if (trimmed.Length == 0 || ProgressLinePattern().IsMatch(trimmed))
+            string lineForCheck = line.Trim(' ', '\t');
+            if (lineForCheck.Length == 0 || ProgressLinePattern().IsMatch(lineForCheck))
             {
                 blankRun++;
                 if (blankRun <= 1) result.Append('\n');
             }
             else
             {
+                // Normalize NBSP to regular space, then collapse and trim.
+                string normalized = line.Replace(' ', ' ');
+                string trimmed = MultiSpacePattern().Replace(normalized, " ").Trim();
                 blankRun = 0;
                 result.Append(trimmed);
                 result.Append('\n');
