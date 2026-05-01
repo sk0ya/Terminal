@@ -164,7 +164,145 @@ ConPTY セッションの起動・終了・復旧をより堅牢にする。
 - `fzf`
 - `git log --decorate --graph`
 
+### Phase 7: セッションロギングを実装する
+
+**目的**: プロンプト（ユーザー入力）と LLM の応答を後から解析できるよう記録する。ログは人間と LLM の両方が読む。
+
+ターミナル側で ConPTY パイプを流れる全データを取るため、Codex / Claude Code / Copilot CLI など CLI が変わっても対応できる。
+
+#### 保存するもの
+
+| 項目 | 内容 |
+|---|---|
+| input | ユーザーが入力したテキスト（プロンプト） |
+| output | アプリが出力したテキスト（LLM 応答）。**ANSI エスケープ除去済み** |
+| メタデータ | セッションID、実行コマンド、cwd、開始/終了時刻、終了コード |
+
+raw bytes（ANSI シーケンス込み）は保存しない。解析の邪魔になるため。
+
+#### 保存形式: JSONL（1イベント1行）
+
+1セッション = 1ファイル。人間が `cat` で読め、LLM にそのまま渡せる。
+
+```jsonc
+{"ts":"2026-04-21T14:03:01.123+09:00","sid":"abc123","event":"session_start","tool":"claude-code","command":"claude","cwd":"C:\\Projects\\Terminal","pid":1234,"cols":220,"rows":50}
+{"ts":"2026-04-21T14:03:02.001+09:00","sid":"abc123","event":"input","text":"explain this function\n"}
+{"ts":"2026-04-21T14:03:03.412+09:00","sid":"abc123","event":"output","text":"This function takes a list and returns...\n"}
+{"ts":"2026-04-21T14:03:10.008+09:00","sid":"abc123","event":"session_end","exit_code":0,"duration_ms":8887}
+```
+
+#### 秘密情報マスク
+
+保存前に以下をマスクする。会話の流れは残り、キー自体は残らない。
+
+- `sk-` で始まるトークン（OpenAI 系）
+- `ghp_`, `github_pat_`（GitHub PAT）
+- `Bearer ` に続くトークン
+- `Authorization:` ヘッダー値
+- `-----BEGIN PRIVATE KEY-----` ブロック
+
+#### ログ保存先
+
+`%APPDATA%\ConPtyTerminal\logs\sessions\<project>\YYYY-MM-DD\<session_id>.jsonl`
+
+- `<project>` は cwd の末尾フォルダ名（例: `C:\Projects\Terminal` → `Terminal`）
+- 同名プロジェクトが複数ある場合でも、cwd のフルパスは JSONL 内の `session_start` に残るので区別できる
+- ツールはフォルダではなく JSONL 内の `tool` フィールドで識別する（同一プロジェクトで複数ツールを使い分けるケースに対応）
+
+#### 圧縮
+
+当日のフォルダは JSONL のまま保持する。アプリ起動時に前日以前のフォルダを zip に圧縮する。記録は削除しない。
+
+```
+logs/sessions/Terminal/
+  2026-04-19.zip     ← 圧縮済み
+  2026-04-20.zip     ← 圧縮済み
+  2026-04-21/        ← 当日はフォルダのまま
+    <session_id>.jsonl
+```
+
+#### アーキテクチャ
+
+`LoggingTerminalSession : ITerminalSession` が `ConPtySession` をラップするデコレータ。`ITerminalSession` を変更しないため既存コードへの影響なし。
+
+```
+ConPtySession
+    ↑ wraps
+LoggingTerminalSession  →  ISessionLogger  →  SessionLogWriter (JSONL file)
+                                          ↗  SecretRedactor (input/output をマスク)
+```
+
+#### ファイル構成
+
+```
+Logging/
+  ISessionLogger.cs         ← ロガー抽象
+  SessionLogWriter.cs       ← JSONL ファイル書き込み
+  SessionLogEvent.cs        ← イベント型 (record)
+  SecretRedactor.cs         ← 秘密情報マスク
+  LoggingTerminalSession.cs ← ITerminalSession デコレータ
+```
+
+#### TerminalAppSettings 拡張
+
+```csharp
+bool EnableSessionLogging { get; set; }   // 既定: true
+string? SessionLogDirectory { get; set; } // null = デフォルトパス
+```
+
+#### 実装ステップ
+
+進捗:
+
+- [x] **Step 1**: `SessionLogEvent` / `ISessionLogger` / `SessionLogWriter` を作る
+  - JSONL 書き込み（UTF-8 BOM なし、改行 LF）
+  - 日付フォルダ＋セッション単位ファイルで保存
+- [x] **Step 2**: `SecretRedactor` を作る
+  - 正規表現ベースのパターンマスク
+  - input / output 双方に適用
+  - 単体テストを書く
+- [x] **Step 3**: `LoggingTerminalSession` デコレータを作る
+  - `Write(string)` / `Write(byte[])` への入力は Enter（`\r` or `\n`）で確定するまでバッファリングし、1プロンプト = 1 input イベントとして記録する
+  - `OutputReceived` イベントで output（ANSI 除去済み）を記録。output の先頭に input の echo が含まれる場合は除去する
+  - `Exited` イベントで session_end を記録
+  - セッション開始時に session_start を書く（tool, command, cwd, pid, cols, rows）
+  - ログ書き込みエラーはターミナルのエラーとして出力する（ターミナル本体の動作は止めない）
+- [x] **Step 4**: `TerminalAppSettings` に `EnableSessionLogging` を追加し、`MainWindow` でデコレータを組み込む
+- [x] **Step 5**: アプリ起動時に前日以前のフォルダを zip 圧縮する処理を実装する
+- [x] **Step 6**: テストを書く（SecretRedactor の網羅、JSONL 形式の正確さ、デコレータの透過性）
+
+完了条件:
+
+- Claude Code / Codex のセッションが自動的に JSONL として残る
+- input / output の両方が ANSI 除去済みテキストで記録される
+- APIキー等の秘密情報が保存前にマスクされる
+- ロギングを無効化できる
+- `LoggingTerminalSession` を外しても既存の動作が変わらない（デコレータの透過性）
+
+## 直近でやる順番
+1. Phase 1 の IME 実機検証と TUI 操作確認を詰める
+2. Phase 2 の高頻度更新 / 大量ログで実測してボトルネックを潰す
+3. Phase 3 の ambiguous width と hit testing 整合を改善する
+4. Phase 4 の残り VT / xterm 互換性を `vim` / `less` / `fzf` 基準で詰める
+5. Phase 5 / 6 の recover / dispose 周辺の回帰ケースを増やす
+6. **Phase 7 のセッションロギングを実装する**
+
+## 検証対象アプリ
+最低限、以下で継続確認する。
+
+- `cmd.exe`
+- `powershell`
+- `pwsh`
+- `vim`
+- `less`
+- `fzf`
+- `git log --decorate --graph`
+- `claude` (Claude Code)
+- `codex` (OpenAI Codex CLI)
+- `gh copilot` (GitHub Copilot CLI)
+
 ## メモ
 - 現在は ConPTY 前提の実装に寄せている。起動失敗時の診断と recover 導線は継続改善対象。
 - terminal 表示面からは `RichTextBox` / `FlowDocument` 依存を外した。残るのは高頻度更新時の実測チューニングと旧描画資産の整理。
 - 互換性は「仕様追加」だけでなく「既存挙動の検証」を伴うため、今後はテスト追加を優先する。
+- Phase 7 のロギングは `ITerminalSession` デコレータとして実装するため、既存コードに影響を与えない。目的はプロンプトと LLM 応答の解析。ANSI 除去済みテキストのみ保存し、raw bytes は残さない。

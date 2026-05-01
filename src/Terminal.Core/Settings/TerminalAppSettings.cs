@@ -13,11 +13,13 @@ public sealed class TerminalAppSettings
     public string SelectedProfileId { get; set; } = "cmd";
     public string CommandLine { get; set; } = string.Empty;
     public string WorkingDirectory { get; set; } = string.Empty;
-    public string FontFamilyName { get; set; } = TerminalFontCatalog.DefaultFontFamilyName;
+    public string FontFamilyName { get; set; } = "Cascadia Mono";
     public double FontSize { get; set; } = 14;
     public string TabStripPlacement { get; set; } = TerminalTabStripPlacementCatalog.Top;
     public double WindowWidth { get; set; } = 1000;
     public double WindowHeight { get; set; } = 720;
+    public bool EnableSessionLogging { get; set; } = true;
+    public string? SessionLogDirectory { get; set; }
 
     public static TerminalAppSettings Load()
     {
@@ -33,7 +35,7 @@ public sealed class TerminalAppSettings
             TerminalAppSettings settings = JsonSerializer.Deserialize<TerminalAppSettings>(json, SerializerOptions) ?? new TerminalAppSettings();
             if (string.IsNullOrWhiteSpace(settings.FontFamilyName))
             {
-                settings.FontFamilyName = TerminalFontCatalog.DefaultFontFamilyName;
+                settings.FontFamilyName = "Cascadia Mono";
             }
 
             settings.TabStripPlacement = TerminalTabStripPlacementCatalog.Normalize(settings.TabStripPlacement);

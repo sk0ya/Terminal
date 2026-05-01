@@ -1,6 +1,6 @@
 namespace Terminal.Settings;
 
-internal sealed record TerminalProfileDefinition(
+public sealed record TerminalProfileDefinition(
     string Id,
     string DisplayName,
     string CommandLine,

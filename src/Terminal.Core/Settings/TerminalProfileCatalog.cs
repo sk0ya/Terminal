@@ -4,7 +4,7 @@ using Terminal.Sessions;
 
 namespace Terminal.Settings;
 
-internal static class TerminalProfileCatalog
+public static class TerminalProfileCatalog
 {
     public static IReadOnlyList<TerminalProfileDefinition> CreateProfiles()
     {

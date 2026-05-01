@@ -2,7 +2,7 @@ using System.Windows.Media;
 
 namespace Terminal.Settings;
 
-internal static class TerminalFontCatalog
+public static class TerminalFontCatalog
 {
     public const string DefaultFontFamilyName = "Cascadia Mono";
 

@@ -11,6 +11,7 @@ using System.Windows.Threading;
 
 using Terminal.Buffer;
 using Terminal.Input;
+using Terminal.Logging;
 using Terminal.Rendering;
 using Terminal.Sessions;
 using Terminal.Settings;
@@ -803,7 +804,25 @@ public partial class TerminalTabView : UserControl
 
     private async Task<ITerminalSession> CreateSessionAsync(string commandLine, short columns, short rows, string workingDirectory)
     {
-        return await Task.Run(() => (ITerminalSession)new ConPtySession(columns, rows, commandLine, workingDirectory));
+        return await Task.Run(() =>
+        {
+            ITerminalSession inner = new ConPtySession(columns, rows, commandLine, workingDirectory);
+            TerminalAppSettings settings = TerminalAppSettings.Load();
+            if (!settings.EnableSessionLogging)
+            {
+                return inner;
+            }
+
+            try
+            {
+                ISessionLogger logger = SessionLogWriter.Create(commandLine, workingDirectory, settings.SessionLogDirectory);
+                return (ITerminalSession)new LoggingTerminalSession(inner, logger, commandLine, workingDirectory, columns, rows);
+            }
+            catch
+            {
+                return inner;
+            }
+        });
     }
 
     private static async Task<Exception?> DisposeSessionAsync(ITerminalSession? session)
