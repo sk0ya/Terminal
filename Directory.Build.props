@@ -2,9 +2,9 @@
 
   <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Terminal.Core' or '$(MSBuildProjectName)' == 'Terminal.Controls'">
     <Version Condition="'$(Version)' == ''">0.1.0</Version>
-    <Authors>shigekazukoya</Authors>
-    <Company>shigekazukoya</Company>
-    <RepositoryUrl>https://github.com/shigekazukoya/Terminal</RepositoryUrl>
+    <Authors>sk0ya</Authors>
+    <Company>sk0ya</Company>
+    <RepositoryUrl>https://github.com/sk0ya/Terminal</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>$(RepositoryUrl)</PackageProjectUrl>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>

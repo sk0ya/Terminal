@@ -3,7 +3,7 @@
   <packageSources>
     <clear />
     <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
-    <add key="github" value="https://nuget.pkg.github.com/shigekazukoya/index.json" />
+    <add key="github" value="https://nuget.pkg.github.com/sk0ya/index.json" />
   </packageSources>
 
   <packageSourceCredentials>
