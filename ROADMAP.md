@@ -83,8 +83,8 @@
 - [x] variation selector
 - [x] 国旗ペア / combining mark の基本処理
 - [x] East Asian ambiguous width
-- [ ] combining mark の境界条件
-- [ ] 文字幅とマウス座標計算の厳密な整合
+- [x] combining mark の境界条件
+- [x] 文字幅とマウス座標計算の厳密な整合
 
 完了条件:
 

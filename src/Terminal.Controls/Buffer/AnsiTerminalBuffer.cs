@@ -1898,21 +1898,33 @@ internal sealed class AnsiTerminalBuffer
 
     private void AppendCombiningRune(Rune rune)
     {
-        int targetColumn = _cursorColumn > 0 ? _cursorColumn - 1 : FindPreviousOccupiedColumn();
+        TerminalLine targetLine = _screen[_cursorRow];
+        int targetColumn = _cursorColumn > 0 ? _cursorColumn - 1 : FindLastOccupiedColumn(targetLine);
+
         if (targetColumn < 0)
         {
-            return;
+            // Cursor is at column 0 with no previous character on this line.
+            // After an autowrap the base character sits at the end of the previous row.
+            if (_cursorRow > 0)
+            {
+                targetLine = _screen[_cursorRow - 1];
+                targetColumn = FindLastOccupiedColumn(targetLine);
+            }
+
+            if (targetColumn < 0)
+            {
+                return;
+            }
         }
 
-        TerminalLine line = _screen[_cursorRow];
-        while (targetColumn > 0 && line.Cells[targetColumn].IsContinuation)
+        while (targetColumn > 0 && targetLine.Cells[targetColumn].IsContinuation)
         {
             targetColumn--;
         }
 
-        TerminalCell cell = line.Cells[targetColumn];
-        line.Cells[targetColumn] = cell with { Text = cell.Text + rune.ToString() };
-        _lastPrintedClusterText = line.Cells[targetColumn].Text;
+        TerminalCell cell = targetLine.Cells[targetColumn];
+        targetLine.Cells[targetColumn] = cell with { Text = cell.Text + rune.ToString() };
+        _lastPrintedClusterText = targetLine.Cells[targetColumn].Text;
         _lastPrintedClusterWidth = Math.Max(1, cell.Width);
     }
 
@@ -2091,10 +2103,11 @@ internal sealed class AnsiTerminalBuffer
         return false;
     }
 
-    private int FindPreviousOccupiedColumn()
+    private int FindPreviousOccupiedColumn() => FindLastOccupiedColumn(_screen[_cursorRow]);
+
+    private static int FindLastOccupiedColumn(TerminalLine line)
     {
-        TerminalLine line = _screen[_cursorRow];
-        for (int column = _columns - 1; column >= 0; column--)
+        for (int column = line.Cells.Length - 1; column >= 0; column--)
         {
             if (!string.IsNullOrEmpty(line.Cells[column].Text) && line.Cells[column].Text != " ")
             {

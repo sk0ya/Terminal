@@ -906,16 +906,45 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private static LineLayout CreateLineLayout(AnsiTerminalBuffer.TerminalRenderLineSnapshot line, bool ambiguousAsWide)
     {
         string text = string.Concat(line.Segments.Select(static segment => segment.Text));
-        TextElementMapEntry[] map = BuildTextMap(text, line.CellLength, ambiguousAsWide);
         var segments = new SegmentLayout[line.Segments.Length];
-        int startCell = 0;
+        var allEntries = new List<TextElementMapEntry>(text.Length);
+        int charOffset = 0;
+        int cellOffset = 0;
+
         for (int index = 0; index < line.Segments.Length; index++)
         {
-            segments[index] = new SegmentLayout(startCell, line.Segments[index]);
-            startCell += line.Segments[index].CellLength;
+            AnsiTerminalBuffer.TerminalRenderSegmentSnapshot seg = line.Segments[index];
+            segments[index] = new SegmentLayout(cellOffset, seg);
+
+            TextElementMapEntry[] segEntries = BuildTextMap(seg.Text, seg.CellLength, ambiguousAsWide);
+            foreach (TextElementMapEntry entry in segEntries)
+            {
+                allEntries.Add(new TextElementMapEntry(
+                    entry.TextIndex + charOffset,
+                    entry.TextLength,
+                    entry.StartCell + cellOffset,
+                    entry.CellLength));
+            }
+
+            charOffset += seg.Text.Length;
+            cellOffset += seg.CellLength;
         }
 
-        return new LineLayout(text, line.CellLength, segments, map);
+        // Re-clamp the last entry so the grand total exactly matches line.CellLength.
+        // Per-segment corrections can each floor to 1 via Math.Max(1, …), causing cumulative
+        // overshoot that the old single-pass correction would have absorbed in one step.
+        if (allEntries.Count > 0)
+        {
+            int totalMapped = allEntries.Sum(static e => e.CellLength);
+            if (totalMapped != line.CellLength)
+            {
+                TextElementMapEntry last = allEntries[^1];
+                int adjusted = Math.Max(1, last.CellLength + (line.CellLength - totalMapped));
+                allEntries[^1] = last with { CellLength = adjusted };
+            }
+        }
+
+        return new LineLayout(text, line.CellLength, segments, allEntries.ToArray());
     }
 
     private static TextElementMapEntry[] BuildTextMap(string text, int targetCellLength, bool ambiguousAsWide)
