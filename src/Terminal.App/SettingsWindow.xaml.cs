@@ -383,7 +383,10 @@ public partial class SettingsWindow : Window
             FontSize = settings.FontSize,
             TabStripPlacement = TerminalTabStripPlacementCatalog.Normalize(settings.TabStripPlacement),
             WindowWidth = settings.WindowWidth,
-            WindowHeight = settings.WindowHeight
+            WindowHeight = settings.WindowHeight,
+            EnableSessionLogging = settings.EnableSessionLogging,
+            SessionLogDirectory = settings.SessionLogDirectory,
+            CjkAmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide
         };
     }
 

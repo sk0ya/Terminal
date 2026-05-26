@@ -64,6 +64,7 @@ public partial class TerminalTabView
         ApplyTerminalFontFamily(settings.FontFamilyName, persist: false);
         ApplyTerminalFontSize(settings.FontSize <= 0 ? DefaultTerminalFontSize : settings.FontSize, persist: false);
         SetSelectedProfile(settings.SelectedProfileId, commandLine);
+        _terminalBuffer.AmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide;
     }
 
     public TerminalAppSettings CreateSettingsSnapshot()
@@ -78,7 +79,8 @@ public partial class TerminalTabView
                 ? Environment.CurrentDirectory
                 : WorkingDirectoryTextBox.Text.Trim(),
             FontFamilyName = TerminalOutput.FontFamily.Source,
-            FontSize = TerminalOutput.FontSize
+            FontSize = TerminalOutput.FontSize,
+            CjkAmbiguousWidthIsWide = _terminalBuffer.AmbiguousWidthIsWide
         };
     }
 
@@ -419,6 +421,7 @@ public partial class TerminalTabView
         ApplyTerminalFontFamily(settings.FontFamilyName, persist: false);
         ApplyTerminalFontSize(settings.FontSize <= 0 ? DefaultTerminalFontSize : settings.FontSize, persist: false);
         SetSelectedProfile(settings.SelectedProfileId, commandLine);
+        _terminalBuffer.AmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide;
         UpdateWindowTitle();
     }
 

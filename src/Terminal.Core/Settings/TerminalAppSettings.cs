@@ -20,6 +20,7 @@ public sealed class TerminalAppSettings
     public double WindowHeight { get; set; } = 720;
     public bool EnableSessionLogging { get; set; } = true;
     public string? SessionLogDirectory { get; set; }
+    public bool CjkAmbiguousWidthIsWide { get; set; } = false;
 
     public static TerminalAppSettings Load()
     {

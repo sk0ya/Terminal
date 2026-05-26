@@ -713,7 +713,10 @@ public partial class MainWindow : Window
             FontSize = tabSettings.FontSize,
             TabStripPlacement = _settings.TabStripPlacement,
             WindowWidth = _settings.WindowWidth,
-            WindowHeight = _settings.WindowHeight
+            WindowHeight = _settings.WindowHeight,
+            EnableSessionLogging = _settings.EnableSessionLogging,
+            SessionLogDirectory = _settings.SessionLogDirectory,
+            CjkAmbiguousWidthIsWide = tabSettings.CjkAmbiguousWidthIsWide
         };
     }
 

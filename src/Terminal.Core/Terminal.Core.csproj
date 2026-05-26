@@ -6,6 +6,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <IsPackable>true</IsPackable>
+    <PackageId>sk0ya.Terminal.Core</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>shigekazukoya</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/sk0ya/Terminal</RepositoryUrl>
     <Description>Core terminal engine — ConPty sessions, ANSI buffer, input encoding, and logging for the Terminal project.</Description>
     <PackageTags>terminal;conpty;wpf;core</PackageTags>
   </PropertyGroup>

@@ -6,6 +6,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <IsPackable>true</IsPackable>
+    <PackageId>sk0ya.Terminal.Controls</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>shigekazukoya</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/sk0ya/Terminal</RepositoryUrl>
     <Description>Reusable WPF terminal control — surface rendering, tab view, and font catalog for the Terminal project.</Description>
     <PackageTags>terminal;wpf;conpty;control</PackageTags>
   </PropertyGroup>

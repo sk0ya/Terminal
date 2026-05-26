@@ -5,6 +5,8 @@ using System.Windows.Documents;
 using System.Windows.Media;
 using System.Globalization;
 
+using Terminal.Unicode;
+
 namespace Terminal.Buffer;
 
 internal enum TerminalMouseTrackingMode
@@ -152,6 +154,17 @@ internal sealed class AnsiTerminalBuffer
     public bool ApplicationKeypadEnabled => _applicationKeypad;
     public bool AlternateScrollEnabled => _alternateScrollEnabled;
     public bool BracketedPasteEnabled => _bracketedPasteEnabled;
+    private bool _ambiguousWidthIsWide;
+    public bool AmbiguousWidthIsWide
+    {
+        get => _ambiguousWidthIsWide;
+        set
+        {
+            if (_ambiguousWidthIsWide == value) return;
+            _ambiguousWidthIsWide = value;
+            InvalidateScreenRenderCache();
+        }
+    }
     public int CursorRow => _cursorRow;
     public int CursorColumn => Math.Clamp(_cursorColumn, 0, _columns - 1);
     public bool CursorBlinkEnabled => _cursorBlinkEnabled;
@@ -358,7 +371,7 @@ internal sealed class AnsiTerminalBuffer
             _renderCacheDirty = false;
         }
 
-        return new TerminalRenderSnapshot(_combinedRenderCache);
+        return new TerminalRenderSnapshot(_combinedRenderCache, _ambiguousWidthIsWide);
     }
 
     public TerminalDocumentSnapshot CreateDocument(FontFamily fontFamily, double fontSize, bool showCursor)
@@ -2622,55 +2635,8 @@ internal sealed class AnsiTerminalBuffer
         return rune.Value < 0x20 || rune.Value == 0x7F || rune.Value is >= 0x80 and <= 0x9F;
     }
 
-    private static int GetDisplayWidth(Rune rune)
-    {
-        UnicodeCategory category = Rune.GetUnicodeCategory(rune);
-        if (category is UnicodeCategory.NonSpacingMark or UnicodeCategory.EnclosingMark or UnicodeCategory.Format)
-        {
-            return 0;
-        }
-
-        if (IsZeroWidthExtension(rune))
-        {
-            return 0;
-        }
-
-        if (rune.IsAscii)
-        {
-            return 1;
-        }
-
-        int value = rune.Value;
-        if (value is
-            >= 0x1100 and <= 0x115F or
-            >= 0x2329 and <= 0x232A or
-            >= 0x2E80 and <= 0xA4CF or
-            >= 0xAC00 and <= 0xD7A3 or
-            >= 0xF900 and <= 0xFAFF or
-            >= 0xFE10 and <= 0xFE19 or
-            >= 0xFE30 and <= 0xFE6F or
-            >= 0xFF00 and <= 0xFF60 or
-            >= 0xFFE0 and <= 0xFFE6 or
-            >= 0x1F1E6 and <= 0x1F1FF or
-            >= 0x1F300 and <= 0x1FAFF or
-            >= 0x20000 and <= 0x3FFFD)
-        {
-            return 2;
-        }
-
-        return 1;
-    }
-
-    private static bool IsZeroWidthExtension(Rune rune)
-    {
-        int value = rune.Value;
-        return value is
-            0x200D or
-            0xFE0E or
-            0xFE0F or
-            >= 0x1F3FB and <= 0x1F3FF or
-            >= 0xE0100 and <= 0xE01EF;
-    }
+    private int GetDisplayWidth(Rune rune) =>
+        UnicodeWidth.GetWidth(rune, _ambiguousWidthIsWide);
 
     private static bool IsZeroWidthJoiner(Rune rune)
     {
@@ -2778,7 +2744,8 @@ internal sealed class AnsiTerminalBuffer
         string? Hyperlink);
 
     internal readonly record struct TerminalRenderSnapshot(
-        TerminalRenderLineSnapshot[] Lines);
+        TerminalRenderLineSnapshot[] Lines,
+        bool AmbiguousWidthIsWide = false);
 
     internal readonly record struct TerminalRenderLineSnapshot(
         int AnchorSegmentIndex,

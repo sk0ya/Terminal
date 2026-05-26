@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 
 using Terminal.Buffer;
+using Terminal.Unicode;
 
 namespace Terminal.Rendering;
 
@@ -87,10 +88,11 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         EnsureMetrics();
         _lines.Clear();
         _maxCellLength = 0;
+        bool ambiguousAsWide = snapshot.AmbiguousWidthIsWide;
 
         foreach (AnsiTerminalBuffer.TerminalRenderLineSnapshot line in snapshot.Lines)
         {
-            _lines.Add(CreateLineLayout(line));
+            _lines.Add(CreateLineLayout(line, ambiguousAsWide));
             _maxCellLength = Math.Max(_maxCellLength, line.CellLength);
         }
 
@@ -901,10 +903,10 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         return new TerminalTextRange(range.End, range.Start);
     }
 
-    private static LineLayout CreateLineLayout(AnsiTerminalBuffer.TerminalRenderLineSnapshot line)
+    private static LineLayout CreateLineLayout(AnsiTerminalBuffer.TerminalRenderLineSnapshot line, bool ambiguousAsWide)
     {
         string text = string.Concat(line.Segments.Select(static segment => segment.Text));
-        TextElementMapEntry[] map = BuildTextMap(text, line.CellLength);
+        TextElementMapEntry[] map = BuildTextMap(text, line.CellLength, ambiguousAsWide);
         var segments = new SegmentLayout[line.Segments.Length];
         int startCell = 0;
         for (int index = 0; index < line.Segments.Length; index++)
@@ -916,7 +918,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         return new LineLayout(text, line.CellLength, segments, map);
     }
 
-    private static TextElementMapEntry[] BuildTextMap(string text, int targetCellLength)
+    private static TextElementMapEntry[] BuildTextMap(string text, int targetCellLength, bool ambiguousAsWide)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -931,7 +933,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             int start = starts[index];
             int end = index + 1 < starts.Length ? starts[index + 1] : text.Length;
             string element = text[start..end];
-            int cellLength = EstimateTextElementCellWidth(element);
+            int cellLength = EstimateTextElementCellWidth(element, ambiguousAsWide);
             entries[index] = new TextElementMapEntry(start, end - start, totalCells, cellLength);
             totalCells += cellLength;
         }
@@ -946,13 +948,13 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         return entries;
     }
 
-    private static int EstimateTextElementCellWidth(string element)
+    private static int EstimateTextElementCellWidth(string element, bool ambiguousAsWide)
     {
         bool hasVisibleRune = false;
         int maxWidth = 1;
         foreach (Rune rune in element.EnumerateRunes())
         {
-            int width = GetDisplayWidth(rune);
+            int width = GetDisplayWidth(rune, ambiguousAsWide);
             if (width <= 0)
             {
                 continue;
@@ -1055,49 +1057,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         return brush;
     }
 
-    private static int GetDisplayWidth(Rune rune)
-    {
-        UnicodeCategory category = Rune.GetUnicodeCategory(rune);
-        if (category is UnicodeCategory.NonSpacingMark or UnicodeCategory.EnclosingMark or UnicodeCategory.Format)
-        {
-            return 0;
-        }
-
-        int value = rune.Value;
-        if (value is
-            0x200D or
-            0xFE0E or
-            0xFE0F or
-            >= 0x1F3FB and <= 0x1F3FF or
-            >= 0xE0100 and <= 0xE01EF)
-        {
-            return 0;
-        }
-
-        if (rune.IsAscii)
-        {
-            return 1;
-        }
-
-        if (value is
-            >= 0x1100 and <= 0x115F or
-            >= 0x2329 and <= 0x232A or
-            >= 0x2E80 and <= 0xA4CF or
-            >= 0xAC00 and <= 0xD7A3 or
-            >= 0xF900 and <= 0xFAFF or
-            >= 0xFE10 and <= 0xFE19 or
-            >= 0xFE30 and <= 0xFE6F or
-            >= 0xFF00 and <= 0xFF60 or
-            >= 0xFFE0 and <= 0xFFE6 or
-            >= 0x1F1E6 and <= 0x1F1FF or
-            >= 0x1F300 and <= 0x1FAFF or
-            >= 0x20000 and <= 0x3FFFD)
-        {
-            return 2;
-        }
-
-        return 1;
-    }
+    private static int GetDisplayWidth(Rune rune, bool ambiguousAsWide) =>
+        UnicodeWidth.GetWidth(rune, ambiguousAsWide);
 
     private readonly record struct LineLayout(
         string Text,

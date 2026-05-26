@@ -82,7 +82,7 @@
 - [x] ZWJ emoji
 - [x] variation selector
 - [x] 国旗ペア / combining mark の基本処理
-- [ ] East Asian ambiguous width
+- [x] East Asian ambiguous width
 - [ ] combining mark の境界条件
 - [ ] 文字幅とマウス座標計算の厳密な整合
 

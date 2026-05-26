@@ -1786,6 +1786,7 @@ public partial class TerminalTabView : UserControl
 
     private void ReplaceTerminalBuffer(AnsiTerminalBuffer nextBuffer)
     {
+        nextBuffer.AmbiguousWidthIsWide = _terminalBuffer.AmbiguousWidthIsWide;
         _terminalBuffer.InputSequenceGenerated -= TerminalBuffer_InputSequenceGenerated;
         _terminalBuffer.ClipboardSetRequested -= TerminalBuffer_ClipboardSetRequested;
         _terminalBuffer.ClipboardQueryRequested -= TerminalBuffer_ClipboardQueryRequested;
