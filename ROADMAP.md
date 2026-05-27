@@ -103,8 +103,11 @@ TUI の相性改善フェーズ。
 - [x] `1005`, `1015`
 - [x] `1048`, `1049` を含む save / restore の基本
 - [x] SGR dim (2/22), italic (3/23), blink (5/6/25), invisible (8/28), strikethrough (9/29)
-- [ ] save / restore 周辺の細かい互換
-- [ ] 追加の DEC private mode
+- [x] DECRQM (`CSI ? Pm $ p`) — DEC private mode 状態クエリへの応答
+- [x] XTWINOPS (`CSI 18/20/21 t`) — ターミナルサイズ・タイトル問い合わせ応答
+- [x] `CSI ? s` / `CSI ? r` の誤ディスパッチ修正
+- [ ] save / restore 周辺のさらなる互換 (XTSAVE/XTRESTORE など)
+- [ ] 追加の DEC private mode (`?5` DECSCNM など)
 - [ ] 追加 mouse mode の検証
 
 完了条件:

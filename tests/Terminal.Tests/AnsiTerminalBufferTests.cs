@@ -632,4 +632,111 @@ public sealed class AnsiTerminalBufferTests
         AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
         Assert.NotEmpty(snapshot.Lines[0].Segments);
     }
+    [Fact]
+    public void DecrqmReportsSetAndResetStatesForKnownModes()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => responses.Add(text);
+
+        buffer.Process("[?25$p");
+        Assert.Equal("[?25;1$y", responses[^1]);
+
+        buffer.Process("[?25l");
+        buffer.Process("[?25$p");
+        Assert.Equal("[?25;2$y", responses[^1]);
+
+        buffer.Process("[?1049h");
+        buffer.Process("[?1049$p");
+        Assert.Equal("[?1049;1$y", responses[^1]);
+
+        buffer.Process("[?1049l");
+        buffer.Process("[?1049$p");
+        Assert.Equal("[?1049;2$y", responses[^1]);
+    }
+
+    [Fact]
+    public void DecrqmReturnsZeroForUnrecognizedMode()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("[?9999$p");
+
+        Assert.Equal("[?9999;0$y", emitted);
+    }
+
+    [Fact]
+    public void DecrqmReports2026SynchronizedUpdateState()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => responses.Add(text);
+
+        buffer.Process("[?2026$p");
+        Assert.Equal("[?2026;2$y", responses[^1]);
+
+        buffer.Process("[?2026h");
+        buffer.Process("[?2026$p");
+        Assert.Equal("[?2026;1$y", responses[^1]);
+    }
+
+    [Fact]
+    public void XtwinopsReportsTerminalDimensions()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 24);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("[18t");
+
+        Assert.Equal("[8;24;80t", emitted);
+    }
+
+    [Fact]
+    public void XtwinopsReportsWindowTitle()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("]2;MyTitle");
+        buffer.Process("[21t");
+
+        Assert.Contains("MyTitle", emitted);
+    }
+
+    [Fact]
+    public void CsiPrivateSDoesNotSaveCursorState()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("[5;10H");
+        buffer.Process("[s");
+        buffer.Process("[1;1H");
+        buffer.Process("[?1s");
+        buffer.Process("[2;2H");
+        buffer.Process("[u");
+        buffer.Process("[6n");
+
+        Assert.Equal("[5;10R", emitted);
+    }
+    [Fact]
+    public void CsiPrivateUDoesNotRestoreCursorState()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("[5;10H");
+        buffer.Process("[s");
+        buffer.Process("[1;1H");
+        buffer.Process("[?1u");
+        buffer.Process("[6n");
+
+        Assert.Equal("[1;1R", emitted);
+    }
 }

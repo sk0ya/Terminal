@@ -1010,6 +1010,10 @@ internal sealed class AnsiTerminalBuffer
                 {
                     SoftResetTerminal();
                 }
+                else if (intermediate == "$" && isPrivate)
+                {
+                    ReportPrivateModeState(GetParameter(parameters, 0, 0));
+                }
 
                 break;
             case 'q':
@@ -1020,13 +1024,28 @@ internal sealed class AnsiTerminalBuffer
 
                 break;
             case 'r':
-                SetScrollRegion(parameters);
+                if (!isPrivate)
+                {
+                    SetScrollRegion(parameters);
+                }
+
                 break;
             case 's':
-                SaveCursorState();
+                if (!isPrivate)
+                {
+                    SaveCursorState();
+                }
+
+                break;
+            case 't':
+                DispatchWindowOperation(GetParameter(parameters, 0, 0));
                 break;
             case 'u':
-                RestoreCursorState();
+                if (!isPrivate)
+                {
+                    RestoreCursorState();
+                }
+
                 break;
         }
     }
@@ -1284,6 +1303,49 @@ internal sealed class AnsiTerminalBuffer
             case 6:
                 _cursorShape = TerminalCursorShape.Bar;
                 _cursorBlinkEnabled = false;
+                break;
+        }
+    }
+
+    private void ReportPrivateModeState(int mode)
+    {
+        int state = mode switch
+        {
+            1 => _applicationCursorKeys ? 1 : 2,
+            6 => _originMode ? 1 : 2,
+            7 => _autoWrapEnabled ? 1 : 2,
+            12 => _cursorBlinkEnabled ? 1 : 2,
+            25 => _cursorVisible ? 1 : 2,
+            47 or 1047 => _primaryScreenBackup is not null && !_syntheticAlternateScreenActive ? 1 : 2,
+            66 => _applicationKeypad ? 1 : 2,
+            1000 => _mouseTrackingMode == TerminalMouseTrackingMode.X10 ? 1 : 2,
+            1002 => _mouseTrackingMode == TerminalMouseTrackingMode.ButtonEvent ? 1 : 2,
+            1003 => _mouseTrackingMode == TerminalMouseTrackingMode.AnyEvent ? 1 : 2,
+            1004 => _focusReportingEnabled ? 1 : 2,
+            1005 => _useUtf8MouseEncoding ? 1 : 2,
+            1006 => _useSgrMouseEncoding ? 1 : 2,
+            1007 => _alternateScrollEnabled ? 1 : 2,
+            1015 => _useUrxvtMouseEncoding ? 1 : 2,
+            1049 => _primaryScreenBackup is not null && !_syntheticAlternateScreenActive ? 1 : 2,
+            2004 => _bracketedPasteEnabled ? 1 : 2,
+            2026 => _synchronizedUpdateActive ? 1 : 2,
+            _ => 0
+        };
+        EmitInputSequence($"[?{mode};{state}$y");
+    }
+
+    private void DispatchWindowOperation(int operation)
+    {
+        switch (operation)
+        {
+            case 18:
+                EmitInputSequence($"[8;{_rows};{_columns}t");
+                break;
+            case 20:
+                EmitInputSequence($"]L{_windowTitle}\\");
+                break;
+            case 21:
+                EmitInputSequence($"]l{_windowTitle}\\");
                 break;
         }
     }
