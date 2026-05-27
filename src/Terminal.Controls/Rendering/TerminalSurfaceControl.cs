@@ -20,6 +20,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private readonly Dictionary<Color, SolidColorBrush> _brushCache = [];
     private readonly List<LineLayout> _lines = [];
     private Typeface? _typeface;
+    private Typeface? _italicTypeface;
     private Size _cellSize = new(8, 16);
     private double _pixelsPerDip = 1.0;
     private bool _metricsDirty = true;
@@ -608,19 +609,33 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             }
 
             double left = contentLeft + (segment.StartCell * _cellSize.Width);
+            Typeface typeface = segment.Snapshot.Italic ? _italicTypeface! : _typeface!;
             var text = new FormattedText(
                 segment.Snapshot.Text,
                 CultureInfo.CurrentCulture,
                 FlowDirection.LeftToRight,
-                _typeface!,
+                typeface,
                 FontSize,
                 GetBrush(segment.Snapshot.Foreground),
                 _pixelsPerDip);
 
             text.SetFontWeight(segment.Snapshot.Bold ? FontWeights.SemiBold : FontWeights.Regular);
-            if (segment.Snapshot.Underline)
+            if (segment.Snapshot.Underline || segment.Snapshot.Strikethrough)
             {
-                text.SetTextDecorations(TextDecorations.Underline);
+                if (segment.Snapshot.Underline && segment.Snapshot.Strikethrough)
+                {
+                    var combined = new TextDecorationCollection(TextDecorations.Underline);
+                    foreach (TextDecoration d in TextDecorations.Strikethrough) combined.Add(d);
+                    text.SetTextDecorations(combined);
+                }
+                else if (segment.Snapshot.Underline)
+                {
+                    text.SetTextDecorations(TextDecorations.Underline);
+                }
+                else
+                {
+                    text.SetTextDecorations(TextDecorations.Strikethrough);
+                }
             }
 
             drawingContext.DrawText(text, new Point(left, top));
@@ -640,6 +655,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
         _pixelsPerDip = pixelsPerDip;
         _typeface = new Typeface(FontFamily, FontStyle, FontWeight, FontStretch);
+        _italicTypeface = new Typeface(FontFamily, FontStyles.Italic, FontWeight, FontStretch);
         var text = new FormattedText(
             "W",
             CultureInfo.CurrentCulture,

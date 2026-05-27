@@ -75,7 +75,9 @@ public sealed class TerminalDocumentRendererTests
                     Colors.White,
                     Colors.Black,
                     Bold: false,
+                    Italic: false,
                     Underline: false,
+                    Strikethrough: false,
                     Hyperlink: null)
             ]);
     }

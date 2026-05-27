@@ -545,4 +545,91 @@ public sealed class AnsiTerminalBufferTests
         Assert.Equal(TerminalCursorShape.Block, buffer.CursorShape);
         Assert.Equal("text", buffer.GetScreenLineText(0).TrimEnd());
     }
+
+    [Fact]
+    public void Sgr3And23ToggleItalicInRenderSnapshot()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[3mtext");
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.True(snapshot.Lines[0].Segments[0].Italic);
+
+        buffer.Process("\r[23mnormal");
+        snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.False(snapshot.Lines[0].Segments[0].Italic);
+    }
+
+    [Fact]
+    public void Sgr9And29ToggleStrikethroughInRenderSnapshot()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[9mtext");
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.True(snapshot.Lines[0].Segments[0].Strikethrough);
+
+        buffer.Process("\r[29mnormal");
+        snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.False(snapshot.Lines[0].Segments[0].Strikethrough);
+    }
+
+    [Fact]
+    public void Sgr2DimDarkensForegroundColorInRenderSnapshot()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[37mfull");
+        AnsiTerminalBuffer.TerminalRenderSnapshot fullSnapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        System.Windows.Media.Color fullFg = fullSnapshot.Lines[0].Segments[0].Foreground;
+
+        buffer.Process("\r[2mdim");
+        AnsiTerminalBuffer.TerminalRenderSnapshot dimSnapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        System.Windows.Media.Color dimFg = dimSnapshot.Lines[0].Segments[0].Foreground;
+
+        Assert.True(dimFg.R < fullFg.R || dimFg.G < fullFg.G || dimFg.B < fullFg.B,
+            "dim foreground should be darker than normal foreground");
+    }
+
+    [Fact]
+    public void Sgr8InvisibleMakesForegroundMatchBackground()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[8mhidden");
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        AnsiTerminalBuffer.TerminalRenderSegmentSnapshot seg = snapshot.Lines[0].Segments[0];
+
+        Assert.Equal(seg.Background, seg.Foreground);
+    }
+
+    [Fact]
+    public void Sgr22TurnsOffBothBoldAndDim()
+    {
+        var dimBuffer = new AnsiTerminalBuffer(32, 10);
+        dimBuffer.Process("[37m[1;2mtext");
+        System.Windows.Media.Color dimFg = dimBuffer.CreateRenderSnapshot(showCursor: false).Lines[0].Segments[0].Foreground;
+
+        var normalBuffer = new AnsiTerminalBuffer(32, 10);
+        normalBuffer.Process("[37m[1;2m[22mtext");
+        AnsiTerminalBuffer.TerminalRenderSnapshot normalSnapshot = normalBuffer.CreateRenderSnapshot(showCursor: false);
+
+        Assert.False(normalSnapshot.Lines[0].Segments[0].Bold);
+        System.Windows.Media.Color normalFg = normalSnapshot.Lines[0].Segments[0].Foreground;
+        Assert.True(normalFg.R > dimFg.R || normalFg.G > dimFg.G || normalFg.B > dimFg.B,
+            "foreground after SGR 22 should be brighter than when dim was active");
+    }
+
+    [Fact]
+    public void Sgr5And25ToggleBlinkWithoutCrash()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[5mfast");
+        buffer.Process("\r[6mslow");
+        buffer.Process("\r[25moff");
+
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.NotEmpty(snapshot.Lines[0].Segments);
+    }
 }

@@ -102,6 +102,7 @@ TUI の相性改善フェーズ。
 - [x] `OSC 8`
 - [x] `1005`, `1015`
 - [x] `1048`, `1049` を含む save / restore の基本
+- [x] SGR dim (2/22), italic (3/23), blink (5/6/25), invisible (8/28), strikethrough (9/29)
 - [ ] save / restore 周辺の細かい互換
 - [ ] 追加の DEC private mode
 - [ ] 追加 mouse mode の検証
