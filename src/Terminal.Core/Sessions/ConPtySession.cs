@@ -251,7 +251,7 @@ public sealed class ConPtySession : ITerminalSession
             _jobHandle = IntPtr.Zero;
         }
 
-        TryWriteExit(inputWriter);
+        TryWriteExit(inputStream, inputWriter);
 
         readCancellation?.Cancel();
         exitMonitorCancellation?.Cancel();
@@ -622,15 +622,18 @@ public sealed class ConPtySession : ITerminalSession
         }
     }
 
-    private static void TryWriteExit(TextWriter? writer)
+    private static void TryWriteExit(Stream? inputStream, TextWriter? writer)
     {
-        if (writer is null)
+        if (inputStream is null || writer is null)
         {
             return;
         }
 
         try
         {
+            // Ctrl+C to interrupt any running command before requesting shell exit
+            inputStream.WriteByte(0x03);
+            inputStream.Flush();
             writer.Write("exit\r\n");
             writer.Flush();
         }

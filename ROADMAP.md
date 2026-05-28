@@ -123,9 +123,9 @@ ConPTY セッションの起動・終了・復旧をより堅牢にする。
 - [x] raw byte write を含む text / binary 入力経路を ConPTY session に持たせる
 - [x] startup stall 検知と recover
 - [x] 終了処理と dispose / force unlock の見直し
-- [ ] 起動失敗時の診断導線
-- [ ] signal 戦略の深掘り
-- [ ] 復旧時の状態引き継ぎ
+- [x] 起動失敗時の診断導線
+- [x] signal 戦略の深掘り
+- [x] 復旧時の状態引き継ぎ
 
 完了条件:
 

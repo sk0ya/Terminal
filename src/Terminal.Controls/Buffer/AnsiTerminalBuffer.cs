@@ -1241,15 +1241,15 @@ internal sealed class AnsiTerminalBuffer
                     break;
                 case 1000:
                     if (enabled) _mouseTrackingMode = TerminalMouseTrackingMode.X10;
-                    else if (_mouseTrackingMode == TerminalMouseTrackingMode.X10) _mouseTrackingMode = TerminalMouseTrackingMode.Off;
+                    else if (_mouseTrackingMode != TerminalMouseTrackingMode.AnyEvent) _mouseTrackingMode = TerminalMouseTrackingMode.Off;
                     break;
                 case 1002:
                     if (enabled) _mouseTrackingMode = TerminalMouseTrackingMode.ButtonEvent;
-                    else if (_mouseTrackingMode == TerminalMouseTrackingMode.ButtonEvent) _mouseTrackingMode = TerminalMouseTrackingMode.Off;
+                    else if (_mouseTrackingMode != TerminalMouseTrackingMode.AnyEvent) _mouseTrackingMode = TerminalMouseTrackingMode.Off;
                     break;
                 case 1003:
                     if (enabled) _mouseTrackingMode = TerminalMouseTrackingMode.AnyEvent;
-                    else if (_mouseTrackingMode == TerminalMouseTrackingMode.AnyEvent) _mouseTrackingMode = TerminalMouseTrackingMode.Off;
+                    else _mouseTrackingMode = TerminalMouseTrackingMode.Off;
                     break;
                 case 1004:
                     _focusReportingEnabled = enabled;
@@ -1431,6 +1431,9 @@ internal sealed class AnsiTerminalBuffer
     {
         foreach (int? parameter in parameters)
         {
+            // Modes 47/1047/1048/1049 involve alternate-screen transitions that carry buffer
+            // contents and cursor state — they cannot be round-tripped through a simple bool,
+            // so they are intentionally excluded from generic save/restore.
             if (parameter.HasValue && parameter.Value is not (47 or 1047 or 1048 or 1049))
             {
                 _savedPrivateModes[parameter.Value] = GetPrivateModeEnabled(parameter.Value);

@@ -721,7 +721,14 @@ public partial class TerminalTabView : UserControl
             ClearActiveLaunchState();
             UpdateUiState(isRunning: false);
             UpdateWindowTitle();
-            SetStatus($"Failed to start terminal: {FormatExceptionMessage(ex)}");
+            string hint = ConPtyStartupDiagnostics.BuildDiagnosticHint(ex, commandLine);
+            string message = $"Failed to start terminal: {FormatExceptionMessage(ex)}";
+            if (!string.IsNullOrEmpty(hint))
+            {
+                message = $"{message} — {hint}";
+            }
+
+            SetStatus(message);
         }
         finally
         {
@@ -2283,7 +2290,23 @@ public partial class TerminalTabView : UserControl
                 return;
             }
 
+            // Capture the active session's launch parameters before stopping
+            string recoveredCommandLine = _activeCommandLine;
+            string recoveredWorkingDirectory = _activeWorkingDirectory;
+
             _ = await Task.Run(() => session.TryForceUnlock());
+
+            // Restore the UI to the captured session state so the recovered session
+            // starts with the same command line and working directory
+            if (!string.IsNullOrEmpty(recoveredCommandLine))
+            {
+                CommandTextBox.Text = recoveredCommandLine;
+            }
+
+            if (!string.IsNullOrEmpty(recoveredWorkingDirectory))
+            {
+                WorkingDirectoryTextBox.Text = recoveredWorkingDirectory;
+            }
 
             SetStatus(isAutomatic
                 ? "Initial output stalled. Unlocking and restarting session..."
