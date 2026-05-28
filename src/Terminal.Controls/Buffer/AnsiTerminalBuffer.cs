@@ -1240,13 +1240,16 @@ internal sealed class AnsiTerminalBuffer
 
                     break;
                 case 1000:
-                    _mouseTrackingMode = enabled ? TerminalMouseTrackingMode.X10 : TerminalMouseTrackingMode.Off;
+                    if (enabled) _mouseTrackingMode = TerminalMouseTrackingMode.X10;
+                    else if (_mouseTrackingMode == TerminalMouseTrackingMode.X10) _mouseTrackingMode = TerminalMouseTrackingMode.Off;
                     break;
                 case 1002:
-                    _mouseTrackingMode = enabled ? TerminalMouseTrackingMode.ButtonEvent : TerminalMouseTrackingMode.Off;
+                    if (enabled) _mouseTrackingMode = TerminalMouseTrackingMode.ButtonEvent;
+                    else if (_mouseTrackingMode == TerminalMouseTrackingMode.ButtonEvent) _mouseTrackingMode = TerminalMouseTrackingMode.Off;
                     break;
                 case 1003:
-                    _mouseTrackingMode = enabled ? TerminalMouseTrackingMode.AnyEvent : TerminalMouseTrackingMode.Off;
+                    if (enabled) _mouseTrackingMode = TerminalMouseTrackingMode.AnyEvent;
+                    else if (_mouseTrackingMode == TerminalMouseTrackingMode.AnyEvent) _mouseTrackingMode = TerminalMouseTrackingMode.Off;
                     break;
                 case 1004:
                     _focusReportingEnabled = enabled;
@@ -1392,6 +1395,7 @@ internal sealed class AnsiTerminalBuffer
         _g0CharacterSet = TerminalCharacterSet.Ascii;
         _g1CharacterSet = TerminalCharacterSet.Ascii;
         _currentHyperlink = null;
+        _savedPrivateModes.Clear();
         ResetMargins();
         InvalidateScreenRenderCache();
     }
@@ -1427,7 +1431,7 @@ internal sealed class AnsiTerminalBuffer
     {
         foreach (int? parameter in parameters)
         {
-            if (parameter.HasValue)
+            if (parameter.HasValue && parameter.Value is not (47 or 1047 or 1048 or 1049))
             {
                 _savedPrivateModes[parameter.Value] = GetPrivateModeEnabled(parameter.Value);
             }
@@ -1438,7 +1442,8 @@ internal sealed class AnsiTerminalBuffer
     {
         foreach (int? parameter in parameters)
         {
-            if (parameter.HasValue && _savedPrivateModes.TryGetValue(parameter.Value, out bool saved))
+            if (parameter.HasValue && parameter.Value is not (47 or 1047 or 1048 or 1049) &&
+                _savedPrivateModes.TryGetValue(parameter.Value, out bool saved))
             {
                 SetPrivateMode([parameter.Value], saved);
             }
@@ -2734,11 +2739,6 @@ internal sealed class AnsiTerminalBuffer
         Color foreground = style.Foreground ?? DefaultForeground;
         Color background = style.Background ?? DefaultBackground;
 
-        if (screenReverse)
-        {
-            (foreground, background) = (background, foreground);
-        }
-
         if (style.Inverse)
         {
             (foreground, background) = (background, foreground);
@@ -2762,6 +2762,12 @@ internal sealed class AnsiTerminalBuffer
                 background = CursorAccent;
                 foreground = DefaultBackground;
             }
+        }
+
+        // DECSCNM is a screen-level transform applied after all per-cell attribute resolution.
+        if (screenReverse)
+        {
+            (foreground, background) = (background, foreground);
         }
 
         return new ResolvedStyle(foreground, background, style.Bold, style.Italic, style.Underline, style.Strikethrough, hyperlink);
