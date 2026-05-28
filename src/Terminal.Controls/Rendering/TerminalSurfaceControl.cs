@@ -19,6 +19,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     private readonly Dictionary<Color, SolidColorBrush> _brushCache = [];
     private readonly List<LineLayout> _lines = [];
+    private AnsiTerminalBuffer.TerminalRenderLineSnapshot[]? _prevSnapshotLines;
+    private bool _prevAmbiguousAsWide;
     private Typeface? _typeface;
     private Typeface? _italicTypeface;
     private Size _cellSize = new(8, 16);
@@ -31,6 +33,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private bool _selectionDragStarted;
     private double _extentWidth;
     private double _extentHeight;
+    private double _lastReportedExtentWidth;
+    private double _lastReportedExtentHeight;
     private double _viewportWidth;
     private double _viewportHeight;
     private double _viewportFloorWidth;
@@ -87,15 +91,37 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     internal void UpdateSnapshot(AnsiTerminalBuffer.TerminalRenderSnapshot snapshot)
     {
         EnsureMetrics();
-        _lines.Clear();
-        _maxCellLength = 0;
         bool ambiguousAsWide = snapshot.AmbiguousWidthIsWide;
+        AnsiTerminalBuffer.TerminalRenderLineSnapshot[] newLines = snapshot.Lines;
+        int newCount = newLines.Length;
+        int prevCount = _prevSnapshotLines?.Length ?? 0;
+        bool canDiff = _prevSnapshotLines is not null && _prevAmbiguousAsWide == ambiguousAsWide;
 
-        foreach (AnsiTerminalBuffer.TerminalRenderLineSnapshot line in snapshot.Lines)
+        while (_lines.Count > newCount)
+            _lines.RemoveAt(_lines.Count - 1);
+
+        int inPlaceCount = _lines.Count;
+        _maxCellLength = 0;
+
+        for (int i = 0; i < newCount; i++)
         {
-            _lines.Add(CreateLineLayout(line, ambiguousAsWide));
-            _maxCellLength = Math.Max(_maxCellLength, line.CellLength);
+            if (canDiff && i < prevCount && newLines[i].ContentEquals(_prevSnapshotLines![i]))
+            {
+                _maxCellLength = Math.Max(_maxCellLength, _lines[i].CellLength);
+            }
+            else
+            {
+                LineLayout layout = CreateLineLayout(newLines[i], ambiguousAsWide);
+                if (i < inPlaceCount)
+                    _lines[i] = layout;
+                else
+                    _lines.Add(layout);
+                _maxCellLength = Math.Max(_maxCellLength, layout.CellLength);
+            }
         }
+
+        _prevSnapshotLines = newLines;
+        _prevAmbiguousAsWide = ambiguousAsWide;
 
         CoerceSelection();
         UpdateScrollMetrics();
@@ -708,7 +734,16 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             _viewportFloorHeight,
             padding.Top + padding.Bottom + (_lines.Count * _cellSize.Height));
         CoerceOffsets();
-        ScrollOwner?.InvalidateScrollInfo();
+        if (!DoubleUtil.AreClose(_extentWidth, _lastReportedExtentWidth) ||
+            !DoubleUtil.AreClose(_extentHeight, _lastReportedExtentHeight))
+        {
+            if (ScrollOwner is not null)
+            {
+                _lastReportedExtentWidth = _extentWidth;
+                _lastReportedExtentHeight = _extentHeight;
+                ScrollOwner.InvalidateScrollInfo();
+            }
+        }
     }
 
     private Size ResolveViewportSize(Size constraint)
