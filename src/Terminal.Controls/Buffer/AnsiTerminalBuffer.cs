@@ -75,6 +75,7 @@ internal sealed class AnsiTerminalBuffer
     private readonly StringBuilder _csiBuffer = new();
     private readonly StringBuilder _oscBuffer = new();
     private readonly StringBuilder _pendingClusterText = new();
+    private readonly Dictionary<int, bool> _savedPrivateModes = [];
 
     private List<TerminalLine> _screen;
     private TerminalRenderLineSnapshot[] _screenRenderCache;
@@ -114,6 +115,7 @@ internal sealed class AnsiTerminalBuffer
     private bool _useUtf8MouseEncoding;
     private bool _useSgrMouseEncoding;
     private bool _useUrxvtMouseEncoding;
+    private bool _screenReverse;
     private TerminalMouseTrackingMode _mouseTrackingMode;
     private TerminalCursorShape _cursorShape = TerminalCursorShape.Block;
     private TerminalCharacterSet _g0CharacterSet = TerminalCharacterSet.Ascii;
@@ -568,9 +570,11 @@ internal sealed class AnsiTerminalBuffer
         _useUtf8MouseEncoding = false;
         _useSgrMouseEncoding = false;
         _useUrxvtMouseEncoding = false;
+        _screenReverse = false;
         _mouseTrackingMode = TerminalMouseTrackingMode.Off;
         _synchronizedUpdateActive = false;
         _syntheticAlternateScreenActive = false;
+        _savedPrivateModes.Clear();
         _g0CharacterSet = TerminalCharacterSet.Ascii;
         _g1CharacterSet = TerminalCharacterSet.Ascii;
         _savedG0CharacterSet = TerminalCharacterSet.Ascii;
@@ -1028,12 +1032,20 @@ internal sealed class AnsiTerminalBuffer
                 {
                     SetScrollRegion(parameters);
                 }
+                else
+                {
+                    RestorePrivateModes(parameters);
+                }
 
                 break;
             case 's':
                 if (!isPrivate)
                 {
                     SaveCursorState();
+                }
+                else
+                {
+                    SavePrivateModes(parameters);
                 }
 
                 break;
@@ -1165,6 +1177,10 @@ internal sealed class AnsiTerminalBuffer
             {
                 case 1:
                     _applicationCursorKeys = enabled;
+                    break;
+                case 5:
+                    _screenReverse = enabled;
+                    InvalidateScreenRenderCache();
                     break;
                 case 6:
                     _originMode = enabled;
@@ -1312,6 +1328,7 @@ internal sealed class AnsiTerminalBuffer
         int state = mode switch
         {
             1 => _applicationCursorKeys ? 1 : 2,
+            5 => _screenReverse ? 1 : 2,
             6 => _originMode ? 1 : 2,
             7 => _autoWrapEnabled ? 1 : 2,
             12 => _cursorBlinkEnabled ? 1 : 2,
@@ -1368,6 +1385,7 @@ internal sealed class AnsiTerminalBuffer
         _useUtf8MouseEncoding = false;
         _useSgrMouseEncoding = false;
         _useUrxvtMouseEncoding = false;
+        _screenReverse = false;
         _mouseTrackingMode = TerminalMouseTrackingMode.Off;
         _synchronizedUpdateActive = false;
         _pendingSyntheticAlternateScreenBackup = null;
@@ -1375,6 +1393,56 @@ internal sealed class AnsiTerminalBuffer
         _g1CharacterSet = TerminalCharacterSet.Ascii;
         _currentHyperlink = null;
         ResetMargins();
+        InvalidateScreenRenderCache();
+    }
+
+    private bool GetPrivateModeEnabled(int mode)
+    {
+        return mode switch
+        {
+            1 => _applicationCursorKeys,
+            5 => _screenReverse,
+            6 => _originMode,
+            7 => _autoWrapEnabled,
+            12 => _cursorBlinkEnabled,
+            25 => _cursorVisible,
+            47 or 1047 => _primaryScreenBackup is not null && !_syntheticAlternateScreenActive,
+            66 => _applicationKeypad,
+            1000 => _mouseTrackingMode == TerminalMouseTrackingMode.X10,
+            1002 => _mouseTrackingMode == TerminalMouseTrackingMode.ButtonEvent,
+            1003 => _mouseTrackingMode == TerminalMouseTrackingMode.AnyEvent,
+            1004 => _focusReportingEnabled,
+            1005 => _useUtf8MouseEncoding,
+            1006 => _useSgrMouseEncoding,
+            1007 => _alternateScrollEnabled,
+            1015 => _useUrxvtMouseEncoding,
+            1048 or 1049 => _primaryScreenBackup is not null && !_syntheticAlternateScreenActive,
+            2004 => _bracketedPasteEnabled,
+            2026 => _synchronizedUpdateActive,
+            _ => false
+        };
+    }
+
+    private void SavePrivateModes(int?[] parameters)
+    {
+        foreach (int? parameter in parameters)
+        {
+            if (parameter.HasValue)
+            {
+                _savedPrivateModes[parameter.Value] = GetPrivateModeEnabled(parameter.Value);
+            }
+        }
+    }
+
+    private void RestorePrivateModes(int?[] parameters)
+    {
+        foreach (int? parameter in parameters)
+        {
+            if (parameter.HasValue && _savedPrivateModes.TryGetValue(parameter.Value, out bool saved))
+            {
+                SetPrivateMode([parameter.Value], saved);
+            }
+        }
     }
 
     private void EnterAlternateScreen()
@@ -2405,7 +2473,7 @@ internal sealed class AnsiTerminalBuffer
             }
 
             bool isCursor = showCursor && cursorColumn == column;
-            ResolvedStyle style = ResolveStyle(cell.Style, cell.Hyperlink, isCursor);
+            ResolvedStyle style = ResolveStyle(cell.Style, cell.Hyperlink, isCursor, _screenReverse);
             if (currentStyle is null || currentStyle.Value != style)
             {
                 FlushSegment(segments, text, currentStyle, ref currentSegmentCellLength);
@@ -2495,7 +2563,7 @@ internal sealed class AnsiTerminalBuffer
             }
 
             bool isCursor = showCursor && cursorColumn == column;
-            ResolvedStyle style = ResolveStyle(cell.Style, cell.Hyperlink, isCursor);
+            ResolvedStyle style = ResolveStyle(cell.Style, cell.Hyperlink, isCursor, _screenReverse);
             if (currentStyle is null || currentStyle.Value != style)
             {
                 FlushRun(inlines, text, currentStyle);
@@ -2661,10 +2729,15 @@ internal sealed class AnsiTerminalBuffer
         cursorAnchor = anchor;
     }
 
-    private static ResolvedStyle ResolveStyle(TerminalStyle style, string? hyperlink, bool isCursor)
+    private static ResolvedStyle ResolveStyle(TerminalStyle style, string? hyperlink, bool isCursor, bool screenReverse = false)
     {
         Color foreground = style.Foreground ?? DefaultForeground;
         Color background = style.Background ?? DefaultBackground;
+
+        if (screenReverse)
+        {
+            (foreground, background) = (background, foreground);
+        }
 
         if (style.Inverse)
         {

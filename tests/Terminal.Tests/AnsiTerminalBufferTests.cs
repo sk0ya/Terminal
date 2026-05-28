@@ -739,4 +739,90 @@ public sealed class AnsiTerminalBufferTests
 
         Assert.Equal("[1;1R", emitted);
     }
+
+    [Fact]
+    public void DecscnmReversesScreenColorsInRenderSnapshot()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("A");
+        AnsiTerminalBuffer.TerminalRenderSnapshot normal = buffer.CreateRenderSnapshot(showCursor: false);
+        System.Windows.Media.Color normalFg = normal.Lines[0].Segments[0].Foreground;
+        System.Windows.Media.Color normalBg = normal.Lines[0].Segments[0].Background;
+
+        buffer.Process("[?5h");
+        buffer.Process("A");
+        AnsiTerminalBuffer.TerminalRenderSnapshot reversed = buffer.CreateRenderSnapshot(showCursor: false);
+        System.Windows.Media.Color reversedFg = reversed.Lines[0].Segments[0].Foreground;
+        System.Windows.Media.Color reversedBg = reversed.Lines[0].Segments[0].Background;
+
+        Assert.Equal(normalFg, reversedBg);
+        Assert.Equal(normalBg, reversedFg);
+    }
+
+    [Fact]
+    public void DecscnmCancelledByResetRestoresNormalColors()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("A");
+        AnsiTerminalBuffer.TerminalRenderSnapshot normal = buffer.CreateRenderSnapshot(showCursor: false);
+        System.Windows.Media.Color normalFg = normal.Lines[0].Segments[0].Foreground;
+
+        buffer.Process("[?5h[?5l");
+        buffer.Process("A");
+        AnsiTerminalBuffer.TerminalRenderSnapshot restored = buffer.CreateRenderSnapshot(showCursor: false);
+        System.Windows.Media.Color restoredFg = restored.Lines[0].Segments[0].Foreground;
+
+        Assert.Equal(normalFg, restoredFg);
+    }
+
+    [Fact]
+    public void DecscnmReportedByDecrqm()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => responses.Add(text);
+
+        buffer.Process("[?5$p");
+        Assert.Equal("[?5;2$y", responses[^1]);
+
+        buffer.Process("[?5h");
+        buffer.Process("[?5$p");
+        Assert.Equal("[?5;1$y", responses[^1]);
+    }
+
+    [Fact]
+    public void XtsaveAndXtrestoreRoundTripsPrivateModes()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[?1h[?7l[?2004h");
+        Assert.True(buffer.ApplicationCursorKeysEnabled);
+        Assert.True(buffer.BracketedPasteEnabled);
+
+        buffer.Process("[?1;7;2004s");
+
+        buffer.Process("[?1l[?2004l");
+        Assert.False(buffer.ApplicationCursorKeysEnabled);
+        Assert.False(buffer.BracketedPasteEnabled);
+
+        buffer.Process("[?1;7;2004r");
+
+        Assert.True(buffer.ApplicationCursorKeysEnabled);
+        Assert.True(buffer.BracketedPasteEnabled);
+    }
+
+    [Fact]
+    public void XtrestoreIgnoresModesThatWereNeverSaved()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[?1h");
+
+        buffer.Process("[?7r");
+
+        Assert.True(buffer.ApplicationCursorKeysEnabled);
+        Assert.False(buffer.FocusReportingEnabled);
+    }
 }
