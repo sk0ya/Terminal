@@ -106,8 +106,8 @@ TUI の相性改善フェーズ。
 - [x] DECRQM (`CSI ? Pm $ p`) — DEC private mode 状態クエリへの応答
 - [x] XTWINOPS (`CSI 18/20/21 t`) — ターミナルサイズ・タイトル問い合わせ応答
 - [x] `CSI ? s` / `CSI ? r` の誤ディスパッチ修正
-- [ ] save / restore 周辺のさらなる互換 (XTSAVE/XTRESTORE など)
-- [ ] 追加の DEC private mode (`?5` DECSCNM など)
+- [x] XTSAVE (`CSI ? Pm s`) / XTRESTORE (`CSI ? Pm r`) — 複数 DEC private mode の一括保存/復元
+- [x] DECSCNM (`?5`) — スクリーン全体の反転モード
 - [ ] 追加 mouse mode の検証
 
 完了条件:
