@@ -1183,8 +1183,11 @@ internal sealed class AnsiTerminalBuffer
                     InvalidateScreenRenderCache();
                     break;
                 case 6:
-                    _originMode = enabled;
-                    MoveCursorHome();
+                    if (_originMode != enabled)
+                    {
+                        _originMode = enabled;
+                        MoveCursorHome();
+                    }
                     break;
                 case 7:
                     _autoWrapEnabled = enabled;
@@ -1241,11 +1244,11 @@ internal sealed class AnsiTerminalBuffer
                     break;
                 case 1000:
                     if (enabled) _mouseTrackingMode = TerminalMouseTrackingMode.X10;
-                    else if (_mouseTrackingMode != TerminalMouseTrackingMode.AnyEvent) _mouseTrackingMode = TerminalMouseTrackingMode.Off;
+                    else if (_mouseTrackingMode == TerminalMouseTrackingMode.X10) _mouseTrackingMode = TerminalMouseTrackingMode.Off;
                     break;
                 case 1002:
                     if (enabled) _mouseTrackingMode = TerminalMouseTrackingMode.ButtonEvent;
-                    else if (_mouseTrackingMode != TerminalMouseTrackingMode.AnyEvent) _mouseTrackingMode = TerminalMouseTrackingMode.Off;
+                    else if (_mouseTrackingMode == TerminalMouseTrackingMode.ButtonEvent) _mouseTrackingMode = TerminalMouseTrackingMode.Off;
                     break;
                 case 1003:
                     if (enabled) _mouseTrackingMode = TerminalMouseTrackingMode.AnyEvent;

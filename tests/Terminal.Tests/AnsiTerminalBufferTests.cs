@@ -825,4 +825,472 @@ public sealed class AnsiTerminalBufferTests
         Assert.True(buffer.ApplicationCursorKeysEnabled);
         Assert.False(buffer.FocusReportingEnabled);
     }
+
+    // Phase 4: additional mouse mode verification via DECRQM
+
+    [Fact]
+    public void DecrqmReportsX10MouseTrackingMode()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => responses.Add(text);
+
+        buffer.Process("[?1000$p");
+        Assert.Equal("[?1000;2$y", responses[^1]);
+
+        buffer.Process("[?1000h");
+        buffer.Process("[?1000$p");
+        Assert.Equal("[?1000;1$y", responses[^1]);
+
+        buffer.Process("[?1000l");
+        buffer.Process("[?1000$p");
+        Assert.Equal("[?1000;2$y", responses[^1]);
+    }
+
+    [Fact]
+    public void DecrqmReportsButtonEventMouseTrackingMode()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => responses.Add(text);
+
+        buffer.Process("[?1002h");
+        buffer.Process("[?1002$p");
+        Assert.Equal("[?1002;1$y", responses[^1]);
+
+        buffer.Process("[?1002l");
+        buffer.Process("[?1002$p");
+        Assert.Equal("[?1002;2$y", responses[^1]);
+    }
+
+    [Fact]
+    public void DecrqmReportsAnyEventMouseTrackingMode()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => responses.Add(text);
+
+        buffer.Process("[?1003h");
+        buffer.Process("[?1003$p");
+        Assert.Equal("[?1003;1$y", responses[^1]);
+
+        buffer.Process("[?1003l");
+        buffer.Process("[?1003$p");
+        Assert.Equal("[?1003;2$y", responses[^1]);
+    }
+
+    [Fact]
+    public void DecrqmReportsSgrMouseEncodingMode()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => responses.Add(text);
+
+        buffer.Process("[?1006h");
+        buffer.Process("[?1006$p");
+        Assert.Equal("[?1006;1$y", responses[^1]);
+
+        buffer.Process("[?1006l");
+        buffer.Process("[?1006$p");
+        Assert.Equal("[?1006;2$y", responses[^1]);
+    }
+
+    [Fact]
+    public void AnyEventMouseTrackingDisableResetsToOff()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[?1000h");
+        Assert.Equal(TerminalMouseTrackingMode.X10, buffer.MouseTrackingMode);
+
+        buffer.Process("[?1003h");
+        Assert.Equal(TerminalMouseTrackingMode.AnyEvent, buffer.MouseTrackingMode);
+
+        buffer.Process("[?1003l");
+        Assert.Equal(TerminalMouseTrackingMode.Off, buffer.MouseTrackingMode);
+    }
+
+    [Fact]
+    public void FocusReportingToggledByDecPrivate1004()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[?1004h");
+        Assert.True(buffer.FocusReportingEnabled);
+
+        buffer.Process("[?1004l");
+        Assert.False(buffer.FocusReportingEnabled);
+    }
+
+    [Fact]
+    public void DisablingX10MouseDoesNotKillButtonEventMode()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[?1002h");
+        Assert.Equal(TerminalMouseTrackingMode.ButtonEvent, buffer.MouseTrackingMode);
+
+        buffer.Process("[?1000l");
+        Assert.Equal(TerminalMouseTrackingMode.ButtonEvent, buffer.MouseTrackingMode);
+    }
+
+    [Fact]
+    public void DisablingButtonEventMouseDoesNotKillX10Mode()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[?1000h");
+        Assert.Equal(TerminalMouseTrackingMode.X10, buffer.MouseTrackingMode);
+
+        buffer.Process("[?1002l");
+        Assert.Equal(TerminalMouseTrackingMode.X10, buffer.MouseTrackingMode);
+    }
+
+    [Fact]
+    public void XtsaveRestoreDeccomDoesNotMoveCursorWhenModeUnchanged()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("[5;5H");
+        buffer.Process("[?6s");
+        buffer.Process("[?6r");
+
+        Assert.Equal(4, buffer.CursorRow);
+        Assert.Equal(4, buffer.CursorColumn);
+    }
+
+    // Phase 6: scroll region and VT compatibility regression tests (vim / less / htop)
+
+    [Fact]
+    public void ScrollRegionRestrictsScrollingToDefinedRange()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 6);
+
+        buffer.Process("line1\r\nline2\r\nline3\r\n");
+        buffer.Process("[2;4r");
+        buffer.Process("[4;1H");
+        buffer.Process("line4\n");
+
+        Assert.Equal("line1", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("line3", buffer.GetScreenLineText(1).TrimEnd());
+        Assert.Equal("line4", buffer.GetScreenLineText(2).TrimEnd());
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(3).TrimEnd());
+    }
+
+    [Fact]
+    public void InsertLinesShiftsContentDownWithinScrollRegion()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 6);
+
+        buffer.Process("A\r\nB\r\nC\r\nD");
+        buffer.Process("[1;4r");
+        buffer.Process("[2;1H");
+        buffer.Process("[2L");
+
+        Assert.Equal("A", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(1).TrimEnd());
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(2).TrimEnd());
+        Assert.Equal("B", buffer.GetScreenLineText(3).TrimEnd());
+    }
+
+    [Fact]
+    public void DeleteLinesShiftsContentUpWithinScrollRegion()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 6);
+
+        buffer.Process("A\r\nB\r\nC\r\nD");
+        buffer.Process("[1;4r");
+        buffer.Process("[1;1H");
+        buffer.Process("[2M");
+
+        Assert.Equal("C", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("D", buffer.GetScreenLineText(1).TrimEnd());
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(2).TrimEnd());
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(3).TrimEnd());
+    }
+
+    [Fact]
+    public void ReverseIndexScrollsDownAtScrollRegionTop()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 6);
+
+        buffer.Process("A\r\nB\r\nC");
+        buffer.Process("[1;3r");
+        buffer.Process("[1;1H");
+        buffer.Process("M");
+
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("A", buffer.GetScreenLineText(1).TrimEnd());
+        Assert.Equal("B", buffer.GetScreenLineText(2).TrimEnd());
+    }
+
+    [Fact]
+    public void ReverseIndexMovesUpWhenNotAtScrollRegionTop()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 6);
+
+        buffer.Process("A\r\nB\r\nC");
+        buffer.Process("[1;4r");
+        buffer.Process("[3;1H");
+        buffer.Process("M");
+
+        Assert.Equal(1, buffer.CursorRow);
+        Assert.Equal("A", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void OriginModeConstrainsCursorPositionToScrollRegion()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("[3;7r");
+        buffer.Process("[?6h");
+        buffer.Process("[1;1H");
+
+        Assert.Equal(2, buffer.CursorRow);
+        Assert.Equal(0, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void OriginModeClampsCursorToRegionBoundary()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("[3;5r");
+        buffer.Process("[?6h");
+        buffer.Process("[99;99H");
+
+        Assert.Equal(4, buffer.CursorRow);
+        Assert.Equal(19, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void EraseCharactersBlanksCellsWithoutMovingCursor()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 5);
+
+        buffer.Process("ABCDE");
+        buffer.Process("[1;3H");
+        buffer.Process("[2X");
+
+        Assert.Equal("AB  E", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal(2, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void DeleteCharactersShiftsCellsLeft()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 5);
+
+        buffer.Process("ABCDE");
+        buffer.Process("[1;2H");
+        buffer.Process("[2P");
+
+        Assert.Equal("ADE", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal(1, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void InsertCharactersShiftsCellsRight()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 5);
+
+        buffer.Process("ABCDE");
+        buffer.Process("[1;2H");
+        buffer.Process("[2@");
+
+        Assert.Equal("A  BCDE", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal(1, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void AutoWrapDisabledKeepsCursorAtLastColumn()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 5);
+
+        buffer.Process("[?7l");
+        buffer.Process("ABCDEFGHIJKLMNOPQRSTU");
+
+        Assert.Equal("ABCDEFGHIJKLMNOPQRSU", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal(19, buffer.CursorColumn);
+        Assert.Equal(0, buffer.CursorRow);
+    }
+
+    [Fact]
+    public void DecSpecialGraphicsRendersBoxDrawingCharacters()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 5);
+
+        buffer.Process("(0lqk(B");
+
+        string line = buffer.GetScreenLineText(0).TrimEnd();
+        Assert.Equal("┌─┐", line);
+    }
+
+    [Fact]
+    public void G1CharsetSwitchActivatesDecSpecialGraphics()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 5);
+
+        buffer.Process(")0mqj");
+
+        string line = buffer.GetScreenLineText(0).TrimEnd();
+        Assert.Equal("└─┘", line);
+    }
+
+    [Fact]
+    public void ClearDisplayMode1ClearsFromTopToCursor()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 5);
+
+        buffer.Process("AAA\r\nBBB\r\nCCC");
+        buffer.Process("[2;2H");
+        buffer.Process("[1J");
+
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("  B", buffer.GetScreenLineText(1).TrimEnd());
+        Assert.Equal("CCC", buffer.GetScreenLineText(2).TrimEnd());
+    }
+
+    [Fact]
+    public void ClearLineMode1ClearsFromStartToCursor()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 5);
+
+        buffer.Process("ABCDE");
+        buffer.Process("[1;3H");
+        buffer.Process("[1K");
+
+        Assert.Equal("   DE", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void SetCursorRowPositionedByAbsoluteRow()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("[5d");
+
+        Assert.Equal(4, buffer.CursorRow);
+        Assert.Equal(0, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void CursorUpDownLeftRightRespectBoundaries()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("[1;1H");
+        buffer.Process("[A");
+        Assert.Equal(0, buffer.CursorRow);
+
+        buffer.Process("[10;20H");
+        buffer.Process("[B");
+        Assert.Equal(9, buffer.CursorRow);
+
+        buffer.Process("[10;20H");
+        buffer.Process("[C");
+        Assert.Equal(19, buffer.CursorColumn);
+
+        buffer.Process("[1;1H");
+        buffer.Process("[D");
+        Assert.Equal(0, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void ApplicationKeypadToggledByEscapeSequences()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("=");
+        Assert.True(buffer.ApplicationKeypadEnabled);
+
+        buffer.Process(">");
+        Assert.False(buffer.ApplicationKeypadEnabled);
+    }
+
+    [Fact]
+    public void OscTerminatedByStringTerminatorIsProcessed()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("]2;TestTitle\\");
+
+        Assert.Equal("TestTitle", buffer.WindowTitle);
+    }
+
+    [Fact]
+    public void DecrqmReportsOriginModeState()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => responses.Add(text);
+
+        buffer.Process("[?6$p");
+        Assert.Equal("[?6;2$y", responses[^1]);
+
+        buffer.Process("[?6h");
+        buffer.Process("[?6$p");
+        Assert.Equal("[?6;1$y", responses[^1]);
+    }
+
+    [Fact]
+    public void DecrqmReportsAutoWrapModeState()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => responses.Add(text);
+
+        buffer.Process("[?7$p");
+        Assert.Equal("[?7;1$y", responses[^1]);
+
+        buffer.Process("[?7l");
+        buffer.Process("[?7$p");
+        Assert.Equal("[?7;2$y", responses[^1]);
+    }
+
+    [Fact]
+    public void DecrqmReportsApplicationCursorKeysState()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => responses.Add(text);
+
+        buffer.Process("[?1$p");
+        Assert.Equal("[?1;2$y", responses[^1]);
+
+        buffer.Process("[?1h");
+        buffer.Process("[?1$p");
+        Assert.Equal("[?1;1$y", responses[^1]);
+    }
+
+    [Fact]
+    public void ScrollUpCsiSShiftsRegionContent()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 6);
+
+        buffer.Process("A\r\nB\r\nC\r\nD");
+        buffer.Process("[1;4r");
+        buffer.Process("[2S");
+
+        Assert.Equal("C", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("D", buffer.GetScreenLineText(1).TrimEnd());
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(2).TrimEnd());
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(3).TrimEnd());
+    }
+
+    [Fact]
+    public void ScrollDownCsiTShiftsRegionContent()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 6);
+
+        buffer.Process("A\r\nB\r\nC\r\nD");
+        buffer.Process("[1;4r");
+        buffer.Process("[2T");
+
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(1).TrimEnd());
+        Assert.Equal("A", buffer.GetScreenLineText(2).TrimEnd());
+        Assert.Equal("B", buffer.GetScreenLineText(3).TrimEnd());
+    }
 }

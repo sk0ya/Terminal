@@ -108,7 +108,7 @@ TUI の相性改善フェーズ。
 - [x] `CSI ? s` / `CSI ? r` の誤ディスパッチ修正
 - [x] XTSAVE (`CSI ? Pm s`) / XTRESTORE (`CSI ? Pm r`) — 複数 DEC private mode の一括保存/復元
 - [x] DECSCNM (`?5`) — スクリーン全体の反転モード
-- [ ] 追加 mouse mode の検証
+- [x] 追加 mouse mode の検証（DECRQM で ?1000/?1002/?1003/?1006/?1004 を確認）
 
 完了条件:
 
@@ -142,8 +142,8 @@ ConPTY セッションの起動・終了・復旧をより堅牢にする。
 - [x] OSC / CSI 応答テスト
 - [x] ConPTY smoke test
 - [x] surface / viewport / overlay 回帰テスト
+- [x] 実アプリ互換の回帰ケース拡充（スクロール領域、IL/DL/RI、DECOM、ECH/DCH/ICH、auto-wrap、DEC Special Graphics、CSI S/T、DECRQM 各種）
 - [ ] IME 実機検証の継続
-- [ ] 実アプリ互換の回帰ケース拡充
 
 完了条件:
 
