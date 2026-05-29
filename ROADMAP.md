@@ -109,6 +109,8 @@ TUI の相性改善フェーズ。
 - [x] XTSAVE (`CSI ? Pm s`) / XTRESTORE (`CSI ? Pm r`) — 複数 DEC private mode の一括保存/復元
 - [x] DECSCNM (`?5`) — スクリーン全体の反転モード
 - [x] 追加 mouse mode の検証（DECRQM で ?1000/?1002/?1003/?1006/?1004 を確認）
+- [x] OSC 10/11/12 — 前景色・背景色・カーソル色クエリへの応答（vim の `background` 自動検出に必要）
+- [x] XTVERSION (`CSI > 0 q`) — ターミナル名・バージョンの DCS 応答
 
 完了条件:
 

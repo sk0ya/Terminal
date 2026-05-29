@@ -708,6 +708,60 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void OscQueryForegroundColorRespondsWithRgbSpec()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("]10;?");
+
+        Assert.NotNull(emitted);
+        Assert.StartsWith("]10;rgb:", emitted);
+    }
+
+    [Fact]
+    public void OscQueryBackgroundColorRespondsWithRgbSpec()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("]11;?");
+
+        Assert.NotNull(emitted);
+        Assert.StartsWith("]11;rgb:", emitted);
+    }
+
+    [Fact]
+    public void OscQueryFgAndBgColorsAreDifferent()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => responses.Add(text);
+
+        buffer.Process("]10;?");
+        buffer.Process("]11;?");
+
+        Assert.Equal(2, responses.Count);
+        Assert.NotEqual(responses[0], responses[1]);
+    }
+
+    [Fact]
+    public void XtversionRespondsWithDcsTerminalIdentification()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("[>0q");
+
+        Assert.NotNull(emitted);
+        Assert.StartsWith("P>|", emitted);
+        Assert.EndsWith("\\", emitted);
+    }
+
+    [Fact]
     public void CsiPrivateSDoesNotSaveCursorState()
     {
         var buffer = new AnsiTerminalBuffer(32, 10);

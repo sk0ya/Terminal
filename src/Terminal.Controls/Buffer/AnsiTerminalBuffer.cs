@@ -855,10 +855,27 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
+        if (command is "10" or "11" or "12" && value == "?")
+        {
+            Color queryColor = command switch
+            {
+                "10" => DefaultForeground,
+                "11" => DefaultBackground,
+                _ => CursorAccent
+            };
+            EmitInputSequence($"]{command};{FormatRgbColor(queryColor)}");
+            return;
+        }
+
         if (command == "52")
         {
             DispatchOscClipboard(value);
         }
+    }
+
+    private static string FormatRgbColor(Color color)
+    {
+        return $"rgb:{color.R:x2}{color.R:x2}/{color.G:x2}{color.G:x2}/{color.B:x2}{color.B:x2}";
     }
 
     private void DispatchOscHyperlink(string value)
@@ -1024,6 +1041,10 @@ internal sealed class AnsiTerminalBuffer
                 if (intermediate == " ")
                 {
                     SetCursorStyle(GetParameter(parameters, 0, 0));
+                }
+                else if (isSecondary && GetParameter(parameters, 0, 0) == 0)
+                {
+                    EmitInputSequence("\u001bP>|ConPtyTerminal 1.0\u001b\\");
                 }
 
                 break;
