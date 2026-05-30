@@ -31,6 +31,9 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private TerminalTextPosition? _selectionAnchor;
     private Point? _selectionAnchorPoint;
     private bool _selectionDragStarted;
+    private bool _blockSelectionMode;
+    private double _blockAnchorCellColumn;
+    private double _blockCurrentCellColumn;
     private TerminalTextPosition _keyboardCursor;
     private TerminalTextPosition? _keyboardAnchor;
     private double _extentWidth;
@@ -157,6 +160,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
         _selection = null;
         _keyboardAnchor = null;
+        _blockSelectionMode = false;
         InvalidateVisual();
     }
 
@@ -251,6 +255,12 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         }
 
         TerminalTextRange range = selection.Value;
+
+        if (_blockSelectionMode)
+        {
+            return GetBlockSelectedText(range);
+        }
+
         var builder = new StringBuilder();
         for (int lineIndex = range.Start.LineIndex; lineIndex <= range.End.LineIndex; lineIndex++)
         {
@@ -260,6 +270,33 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             start = Math.Clamp(start, 0, line.Text.Length);
             end = Math.Clamp(end, start, line.Text.Length);
             builder.Append(line.Text.AsSpan(start, end - start));
+            if (lineIndex < range.End.LineIndex)
+            {
+                builder.AppendLine();
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private string GetBlockSelectedText(TerminalTextRange range)
+    {
+        int leftColumn = (int)Math.Min(_blockAnchorCellColumn, _blockCurrentCellColumn);
+        int rightColumn = (int)Math.Ceiling(Math.Max(_blockAnchorCellColumn, _blockCurrentCellColumn));
+        if (rightColumn <= leftColumn)
+        {
+            rightColumn = leftColumn + 1;
+        }
+
+        var builder = new StringBuilder();
+        for (int lineIndex = range.Start.LineIndex; lineIndex <= range.End.LineIndex; lineIndex++)
+        {
+            LineLayout line = _lines[lineIndex];
+            int startTextIndex = GetTextIndexForColumnHit(line, leftColumn);
+            int endTextIndex = GetTextIndexForColumnHit(line, rightColumn);
+            startTextIndex = Math.Clamp(startTextIndex, 0, line.Text.Length);
+            endTextIndex = Math.Clamp(endTextIndex, startTextIndex, line.Text.Length);
+            builder.Append(line.Text.AsSpan(startTextIndex, endTextIndex - startTextIndex));
             if (lineIndex < range.End.LineIndex)
             {
                 builder.AppendLine();
@@ -355,6 +392,13 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             padding.Top + (Math.Max(0, lineIndex) * _cellSize.Height),
             _cellSize.Width,
             _cellSize.Height);
+    }
+
+    private double GetCellColumnFromPoint(Point point)
+    {
+        Thickness padding = Padding;
+        double x = Math.Max(0, point.X - padding.Left + _horizontalOffset);
+        return x / _cellSize.Width;
     }
 
     public bool TryGetTextPositionFromPoint(Point point, out int lineIndex, out int textIndex)
@@ -546,7 +590,15 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             LineLayout line = _lines[lineIndex];
             double top = contentTop + (lineIndex * _cellSize.Height);
             DrawLineBackgrounds(drawingContext, line, top, contentLeft);
-            DrawSelection(drawingContext, selection, lineIndex, line, top, contentLeft);
+            if (_blockSelectionMode && selection.HasValue)
+            {
+                DrawBlockSelection(drawingContext, selection.Value, lineIndex, line, top, contentLeft);
+            }
+            else
+            {
+                DrawSelection(drawingContext, selection, lineIndex, line, top, contentLeft);
+            }
+
             DrawLineText(drawingContext, line, top, contentLeft);
         }
     }
@@ -563,6 +615,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
         if (e.ClickCount >= 3)
         {
+            _blockSelectionMode = false;
             SelectLine(position.LineIndex);
             _selectionAnchor = position;
             _selectionAnchorPoint = e.GetPosition(this);
@@ -574,6 +627,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
         if (e.ClickCount == 2)
         {
+            _blockSelectionMode = false;
             SelectWord(position.LineIndex, position.TextIndex);
             _selectionAnchor = position;
             _selectionAnchorPoint = e.GetPosition(this);
@@ -581,6 +635,14 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             CaptureMouse();
             e.Handled = true;
             return;
+        }
+
+        bool altDown = (Keyboard.Modifiers & ModifierKeys.Alt) != 0;
+        _blockSelectionMode = altDown;
+        if (altDown)
+        {
+            _blockAnchorCellColumn = GetCellColumnFromPoint(e.GetPosition(this));
+            _blockCurrentCellColumn = _blockAnchorCellColumn;
         }
 
         _selectionAnchor = position;
@@ -672,6 +734,11 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             return;
         }
 
+        if (_blockSelectionMode)
+        {
+            _blockCurrentCellColumn = GetCellColumnFromPoint(currentPoint);
+        }
+
         _selection = new TerminalTextRange(_selectionAnchor.Value, currentPosition);
         InvalidateVisual();
     }
@@ -706,6 +773,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         _selectionAnchor = null;
         _selectionAnchorPoint = null;
         _selectionDragStarted = false;
+        // _blockSelectionMode is intentionally retained so drawing and copy continue to use block mode
         e.Handled = true;
     }
 
@@ -787,6 +855,34 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             contentLeft + (startColumn * _cellSize.Width),
             top,
             (endColumn - startColumn) * _cellSize.Width,
+            _cellSize.Height);
+        drawingContext.DrawRectangle(SelectionBrush, null, rect);
+    }
+
+    private void DrawBlockSelection(
+        DrawingContext drawingContext,
+        TerminalTextRange selection,
+        int lineIndex,
+        LineLayout line,
+        double top,
+        double contentLeft)
+    {
+        if (lineIndex < selection.Start.LineIndex || lineIndex > selection.End.LineIndex)
+        {
+            return;
+        }
+
+        int leftColumn = (int)Math.Min(_blockAnchorCellColumn, _blockCurrentCellColumn);
+        int rightColumn = (int)Math.Ceiling(Math.Max(_blockAnchorCellColumn, _blockCurrentCellColumn));
+        if (rightColumn <= leftColumn)
+        {
+            rightColumn = leftColumn + 1;
+        }
+
+        Rect rect = new(
+            contentLeft + (leftColumn * _cellSize.Width),
+            top,
+            (rightColumn - leftColumn) * _cellSize.Width,
             _cellSize.Height);
         drawingContext.DrawRectangle(SelectionBrush, null, rect);
     }

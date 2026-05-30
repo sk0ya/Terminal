@@ -147,6 +147,93 @@ public sealed class TerminalSurfaceControlTests
         });
     }
 
+    [Fact]
+    public void BlockSelection_GetSelectedText_ExtractsCorrectColumns()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                CreateLine("abcdef"),
+                CreateLine("ABCDEF"),
+                CreateLine("012345")
+            ]));
+
+            // Simulate a block selection of columns 1–3 across all three lines
+            // by using internal helpers via TrySelectNextMatch as a workaround.
+            // Instead, we call the public API: use reflection to set private state
+            // that would result from an Alt+drag from column 1 to column 4.
+            var type = surface.GetType();
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+
+            // Set _blockSelectionMode = true
+            type.GetField("_blockSelectionMode", flags)!.SetValue(surface, true);
+            // Set _blockAnchorCellColumn = 1.0
+            type.GetField("_blockAnchorCellColumn", flags)!.SetValue(surface, 1.0);
+            // Set _blockCurrentCellColumn = 4.0
+            type.GetField("_blockCurrentCellColumn", flags)!.SetValue(surface, 4.0);
+            // Set _selection to span all three lines
+            var posType = type.GetNestedType("TerminalTextPosition", flags)!;
+            var rangeType = type.GetNestedType("TerminalTextRange", flags)!;
+            var start = System.Activator.CreateInstance(posType, 0, 0)!;
+            var end = System.Activator.CreateInstance(posType, 2, 6)!;
+            var range = System.Activator.CreateInstance(rangeType, start, end)!;
+            type.GetField("_selection", flags)!.SetValue(surface, range);
+
+            string selected = surface.GetSelectedText();
+            string[] lines = selected.Split(["\r\n", "\n"], StringSplitOptions.None);
+
+            // columns 1–4 (leftColumn=1, rightColumn=4) → "bcd", "BCD", "123"
+            Assert.Equal(3, lines.Length);
+            Assert.Equal("bcd", lines[0]);
+            Assert.Equal("BCD", lines[1]);
+            Assert.Equal("123", lines[2]);
+        });
+    }
+
+    [Fact]
+    public void BlockSelection_ClearSelection_ResetsBlockMode()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                CreateLine("abcdef"),
+                CreateLine("ABCDEF")
+            ]));
+
+            var type = surface.GetType();
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+
+            // Simulate block selection state
+            type.GetField("_blockSelectionMode", flags)!.SetValue(surface, true);
+            type.GetField("_blockAnchorCellColumn", flags)!.SetValue(surface, 1.0);
+            type.GetField("_blockCurrentCellColumn", flags)!.SetValue(surface, 3.0);
+            var posType = type.GetNestedType("TerminalTextPosition", flags)!;
+            var rangeType = type.GetNestedType("TerminalTextRange", flags)!;
+            var start = System.Activator.CreateInstance(posType, 0, 0)!;
+            var end = System.Activator.CreateInstance(posType, 1, 6)!;
+            var range = System.Activator.CreateInstance(rangeType, start, end)!;
+            type.GetField("_selection", flags)!.SetValue(surface, range);
+
+            // Verify block selected text is non-empty before clear
+            Assert.False(string.IsNullOrEmpty(surface.GetSelectedText()));
+
+            // ClearSelection should reset _blockSelectionMode
+            surface.ClearSelection();
+
+            // After clearing, GetSelectedText should return empty (no selection)
+            Assert.Equal(string.Empty, surface.GetSelectedText());
+            Assert.False(surface.HasSelection);
+
+            // Also verify the private field was reset
+            bool blockMode = (bool)type.GetField("_blockSelectionMode", flags)!.GetValue(surface)!;
+            Assert.False(blockMode);
+        });
+    }
+
     private static TerminalSurfaceControl CreateSurface()
     {
         var surface = new TerminalSurfaceControl
