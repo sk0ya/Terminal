@@ -12,7 +12,7 @@ internal static class TerminalInputEncoder
         return modifiers switch
         {
             ModifierKeys.None or ModifierKeys.Shift => text,
-            ModifierKeys.Alt or (ModifierKeys.Alt | ModifierKeys.Shift) => $"\u001b{text}",
+            ModifierKeys.Alt or (ModifierKeys.Alt | ModifierKeys.Shift) => $"{text}",
             _ => null
         };
     }
@@ -22,9 +22,9 @@ internal static class TerminalInputEncoder
         return modifiers switch
         {
             ModifierKeys.None => "\t",
-            ModifierKeys.Shift => "\u001b[Z",
-            ModifierKeys.Alt => "\u001b\t",
-            ModifierKeys.Alt | ModifierKeys.Shift => $"\u001b[1;{GetCsiModifierParameter(modifiers)}Z",
+            ModifierKeys.Shift => "[Z",
+            ModifierKeys.Alt => "\t",
+            ModifierKeys.Alt | ModifierKeys.Shift => $"[1;{GetCsiModifierParameter(modifiers)}Z",
             _ => null
         };
     }
@@ -33,34 +33,39 @@ internal static class TerminalInputEncoder
     {
         if (modifiers == ModifierKeys.None)
         {
-            return applicationCursorKeys ? $"\u001bO{final}" : $"\u001b[{final}";
+            return applicationCursorKeys ? $"O{final}" : $"[{final}";
         }
 
-        return $"\u001b[1;{GetCsiModifierParameter(modifiers)}{final}";
+        return $"[1;{GetCsiModifierParameter(modifiers)}{final}";
     }
 
     public static string EncodeHomeEndKey(char final, ModifierKeys modifiers, bool applicationCursorKeys)
     {
         if (modifiers == ModifierKeys.None)
         {
-            return applicationCursorKeys ? $"\u001bO{final}" : $"\u001b[{final}";
+            return applicationCursorKeys ? $"O{final}" : $"[{final}";
         }
 
-        return $"\u001b[1;{GetCsiModifierParameter(modifiers)}{final}";
+        return $"[1;{GetCsiModifierParameter(modifiers)}{final}";
     }
 
     public static string EncodeSs3FunctionKey(char final, ModifierKeys modifiers)
     {
         return modifiers == ModifierKeys.None
-            ? $"\u001bO{final}"
-            : $"\u001b[1;{GetCsiModifierParameter(modifiers)}{final}";
+            ? $"O{final}"
+            : $"[1;{GetCsiModifierParameter(modifiers)}{final}";
     }
 
     public static string EncodeTildeKey(int code, ModifierKeys modifiers)
     {
         return modifiers == ModifierKeys.None
-            ? $"\u001b[{code}~"
-            : $"\u001b[{code};{GetCsiModifierParameter(modifiers)}~";
+            ? $"[{code}~"
+            : $"[{code};{GetCsiModifierParameter(modifiers)}~";
+    }
+
+    public static string EncodeModifyOtherKey(int keyCode, ModifierKeys modifiers)
+    {
+        return $"[27;{GetCsiModifierParameter(modifiers)};{keyCode}~";
     }
 
     public static int GetCsiModifierParameter(ModifierKeys modifiers)
@@ -109,8 +114,8 @@ internal static class TerminalInputEncoder
     {
         return encoding switch
         {
-            TerminalMouseEncoding.Sgr => Encoding.ASCII.GetBytes($"\u001b[<{code};{column};{row}{(sgrRelease ? 'm' : 'M')}"),
-            TerminalMouseEncoding.Urxvt => Encoding.ASCII.GetBytes($"\u001b[{code + 32};{column};{row}M"),
+            TerminalMouseEncoding.Sgr => Encoding.ASCII.GetBytes($"[<{code};{column};{row}{(sgrRelease ? 'm' : 'M')}"),
+            TerminalMouseEncoding.Urxvt => Encoding.ASCII.GetBytes($"[{code + 32};{column};{row}M"),
             TerminalMouseEncoding.Utf8 => EncodeUtf8MouseSequenceBytes(code, column, row),
             _ => EncodeLegacyMouseSequenceBytes(code, column, row)
         };

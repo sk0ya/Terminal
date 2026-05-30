@@ -91,4 +91,31 @@ public sealed class TerminalKeyChordTranslatorTests
             applicationCursorKeys: false,
             supportsTerminalInput: false));
     }
+
+    [Fact]
+    public void TranslateCtrlChordUsesModifyOtherKeysForAlphabetAtLevel2()
+    {
+        // Ctrl+A with modifyOtherKeys=2: keyCode=97 ('a'), modifier=5 (Ctrl)
+        string? result = TerminalKeyChordTranslator.TranslateCtrlChord(
+            Key.A, ModifierKeys.Control, modifyOtherKeysLevel: 2);
+        Assert.Equal("\u001b[27;5;97~", result);
+    }
+
+    [Fact]
+    public void TranslateCtrlChordFallsBackToControlCharAtLevel0()
+    {
+        // Ctrl+A with modifyOtherKeys=0: standard 
+        string? result = TerminalKeyChordTranslator.TranslateCtrlChord(
+            Key.A, ModifierKeys.Control, modifyOtherKeysLevel: 0);
+        Assert.Equal("\u0001", result);
+    }
+
+    [Fact]
+    public void TranslateSpecialKeyEncodesEnterWithShiftAtModifyOtherKeysLevel2()
+    {
+        // Shift+Enter with modifyOtherKeys=2: keyCode=13, modifier=2 (Shift)
+        string? result = TerminalKeyChordTranslator.TranslateSpecialKey(
+            Key.Enter, ModifierKeys.Shift, applicationCursorKeys: false, modifyOtherKeysLevel: 2);
+        Assert.Equal("\u001b[27;2;13~", result);
+    }
 }

@@ -27,6 +27,20 @@ internal static class TerminalKeyChordTranslator
             : chord;
     }
 
+    public static string? TranslateCtrlChord(Key key, ModifierKeys modifiers, int modifyOtherKeysLevel)
+    {
+        if ((modifiers & ModifierKeys.Control) == 0)
+            return null;
+
+        if (modifyOtherKeysLevel >= 2 && key >= Key.A && key <= Key.Z)
+        {
+            int keyCode = 'a' + (key - Key.A);
+            return TerminalInputEncoder.EncodeModifyOtherKey(keyCode, modifiers);
+        }
+
+        return TranslateCtrlChord(key, modifiers);
+    }
+
     private static string? TranslateCtrlChordCore(Key key)
     {
         if (key == Key.C)
@@ -116,6 +130,32 @@ internal static class TerminalKeyChordTranslator
         };
     }
 
+    public static string? TranslateSpecialKey(
+        Key key,
+        ModifierKeys modifiers,
+        bool applicationCursorKeys,
+        int modifyOtherKeysLevel)
+    {
+        if (modifyOtherKeysLevel >= 2 && modifiers != ModifierKeys.None)
+        {
+            switch (key)
+            {
+                case Key.Enter:
+                    return TerminalInputEncoder.EncodeModifyOtherKey(13, modifiers);
+                case Key.Tab when (modifiers & ModifierKeys.Control) != 0:
+                    return TerminalInputEncoder.EncodeModifyOtherKey(9, modifiers);
+                case Key.Escape when modifiers != ModifierKeys.None:
+                    return TerminalInputEncoder.EncodeModifyOtherKey(27, modifiers);
+                case Key.Back when (modifiers & ModifierKeys.Control) != 0:
+                    return TerminalInputEncoder.EncodeModifyOtherKey(127, modifiers);
+                case Key.Space when (modifiers & ModifierKeys.Control) != 0:
+                    return TerminalInputEncoder.EncodeModifyOtherKey(32, modifiers);
+            }
+        }
+
+        return TranslateSpecialKey(key, modifiers, applicationCursorKeys);
+    }
+
     public static string? TranslateEnterKey(
         ModifierKeys modifiers,
         bool applicationCursorKeys,
@@ -127,5 +167,19 @@ internal static class TerminalKeyChordTranslator
         }
 
         return TranslateSpecialKey(Key.Enter, modifiers, applicationCursorKeys);
+    }
+
+    public static string? TranslateEnterKey(
+        ModifierKeys modifiers,
+        bool applicationCursorKeys,
+        bool supportsTerminalInput,
+        int modifyOtherKeysLevel)
+    {
+        if (!supportsTerminalInput && modifiers == ModifierKeys.None)
+        {
+            return "\r\n";
+        }
+
+        return TranslateSpecialKey(Key.Enter, modifiers, applicationCursorKeys, modifyOtherKeysLevel);
     }
 }

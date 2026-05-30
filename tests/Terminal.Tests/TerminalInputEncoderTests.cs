@@ -63,4 +63,12 @@ public sealed class TerminalInputEncoderTests
 
         Assert.Equal(expected, text);
     }
+
+    [Fact]
+    public void EncodeModifyOtherKeyProducesCorrectSequence()
+    {
+        // Ctrl modifier: parameter = 1 + 4 = 5
+        string result = TerminalInputEncoder.EncodeModifyOtherKey(97, ModifierKeys.Control);
+        Assert.Equal("\u001b[27;5;97~", result);
+    }
 }

@@ -130,6 +130,7 @@ internal sealed class AnsiTerminalBuffer
     private bool _alternateScrollEnabled;
     private bool _bracketedPasteEnabled;
     private bool _focusReportingEnabled;
+    private int _modifyOtherKeys; // 0 = off, 1 = level1, 2 = level2
     private bool _synchronizedUpdateActive;
     private bool _synchronizedUpdateEndedDuringProcess;
     private bool _syntheticAlternateScreenActive;
@@ -185,6 +186,7 @@ internal sealed class AnsiTerminalBuffer
     public bool ApplicationKeypadEnabled => _applicationKeypad;
     public bool AlternateScrollEnabled => _alternateScrollEnabled;
     public bool BracketedPasteEnabled => _bracketedPasteEnabled;
+    public int ModifyOtherKeysLevel => _modifyOtherKeys;
     private bool _ambiguousWidthIsWide;
     public bool AmbiguousWidthIsWide
     {
@@ -591,6 +593,7 @@ internal sealed class AnsiTerminalBuffer
         _alternateScrollEnabled = false;
         _bracketedPasteEnabled = false;
         _focusReportingEnabled = false;
+        _modifyOtherKeys = 0;
         _useG1CharacterSet = false;
         _savedUseG1CharacterSet = false;
         _savedInsertMode = false;
@@ -1194,7 +1197,15 @@ internal sealed class AnsiTerminalBuffer
 
                 break;
             case 'm':
-                ApplySgr(ParseSgrParameters(paramText));
+                if (isSecondary && GetParameter(parameters, 0, -1) == 4)
+                {
+                    _modifyOtherKeys = GetParameter(parameters, 1, 0);
+                }
+                else if (!isSecondary)
+                {
+                    ApplySgr(ParseSgrParameters(paramText));
+                }
+
                 break;
             case 'n':
                 DispatchDeviceStatusReport(parameters, isPrivate);
@@ -1581,6 +1592,7 @@ internal sealed class AnsiTerminalBuffer
         _alternateScrollEnabled = false;
         _bracketedPasteEnabled = false;
         _focusReportingEnabled = false;
+        _modifyOtherKeys = 0;
         _useG1CharacterSet = false;
         _useUtf8MouseEncoding = false;
         _useSgrMouseEncoding = false;

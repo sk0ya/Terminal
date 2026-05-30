@@ -542,7 +542,7 @@ public partial class TerminalTabView : UserControl
         }
 
         Key key = GetEffectiveKey(e);
-        string? chord = TerminalKeyChordTranslator.TranslateCtrlChord(key, modifiers);
+        string? chord = TerminalKeyChordTranslator.TranslateCtrlChord(key, modifiers, _terminalBuffer.ModifyOtherKeysLevel);
         if (chord is null)
         {
             return false;
@@ -575,7 +575,8 @@ public partial class TerminalTabView : UserControl
         string? sequence = TerminalKeyChordTranslator.TranslateSpecialKey(
             key,
             modifiers,
-            _terminalBuffer.ApplicationCursorKeysEnabled);
+            _terminalBuffer.ApplicationCursorKeysEnabled,
+            _terminalBuffer.ModifyOtherKeysLevel);
 
         return sequence is not null && SendTerminalInput(sequence);
     }
@@ -590,7 +591,8 @@ public partial class TerminalTabView : UserControl
         string? sequence = TerminalKeyChordTranslator.TranslateEnterKey(
             GetTerminalModifiers(),
             _terminalBuffer.ApplicationCursorKeysEnabled,
-            SupportsTerminalInput());
+            SupportsTerminalInput(),
+            _terminalBuffer.ModifyOtherKeysLevel);
 
         return sequence is not null && SendTerminalInput(sequence);
     }
@@ -2176,7 +2178,8 @@ public partial class TerminalTabView : UserControl
         string? sequence = TerminalKeyChordTranslator.TranslateSpecialKey(
             directionKey,
             ModifierKeys.None,
-            _terminalBuffer.ApplicationCursorKeysEnabled);
+            _terminalBuffer.ApplicationCursorKeysEnabled,
+            _terminalBuffer.ModifyOtherKeysLevel);
         if (sequence is null)
         {
             return false;
