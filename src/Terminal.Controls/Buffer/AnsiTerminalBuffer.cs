@@ -100,6 +100,7 @@ internal sealed class AnsiTerminalBuffer
     private readonly List<TerminalRenderLineSnapshot> _scrollbackRenderCache = [];
     private readonly StringBuilder _csiBuffer = new();
     private readonly StringBuilder _oscBuffer = new();
+    private readonly StringBuilder _dcsBuffer = new();
     private readonly StringBuilder _pendingClusterText = new();
     private readonly Dictionary<int, bool> _savedPrivateModes = [];
 
@@ -624,6 +625,7 @@ internal sealed class AnsiTerminalBuffer
         _state = ParserState.Normal;
         _csiBuffer.Clear();
         _oscBuffer.Clear();
+        _dcsBuffer.Clear();
         Array.Copy(DefaultAnsiPalette, _ansiPalette, DefaultAnsiPalette.Length);
         _kittyKeyboardFlags = 0;
         _kittyKeyboardStack.Clear();
@@ -654,6 +656,21 @@ internal sealed class AnsiTerminalBuffer
             case ParserState.Charset:
                 ProcessCharsetDesignation(ch);
                 break;
+            case ParserState.DcsEntry:
+                ProcessDcsEntry(ch);
+                break;
+            case ParserState.DcsParam:
+                ProcessDcsParam(ch);
+                break;
+            case ParserState.DcsIntermediate:
+                ProcessDcsIntermediate(ch);
+                break;
+            case ParserState.DcsPassthrough:
+                ProcessDcsPassthrough(ch);
+                break;
+            case ParserState.DcsPassthroughEscape:
+                ProcessDcsPassthroughEscape(ch);
+                break;
         }
     }
 
@@ -679,6 +696,10 @@ internal sealed class AnsiTerminalBuffer
             case '\u009d':
                 _oscBuffer.Clear();
                 _state = ParserState.Osc;
+                return;
+            case '\u009f':
+                _dcsBuffer.Clear();
+                _state = ParserState.DcsEntry;
                 return;
             case '\u009c':
                 return;
@@ -740,6 +761,10 @@ internal sealed class AnsiTerminalBuffer
     {
         switch (ch)
         {
+            case 'P':
+                _dcsBuffer.Clear();
+                _state = ParserState.DcsEntry;
+                return;
             case '[':
                 _csiBuffer.Clear();
                 _state = ParserState.Csi;
@@ -867,6 +892,162 @@ internal sealed class AnsiTerminalBuffer
         }
 
         _state = ParserState.Normal;
+    }
+
+    private void ProcessDcsEntry(char ch)
+    {
+        if (ch == '')
+        {
+            DispatchDcs(_dcsBuffer.ToString());
+            _state = ParserState.Normal;
+            return;
+        }
+
+        if (ch == '')
+        {
+            _state = ParserState.DcsPassthroughEscape;
+            return;
+        }
+
+        if (ch >= 0x20 && ch <= 0x2F)
+        {
+            _dcsBuffer.Append(ch);
+            _state = ParserState.DcsIntermediate;
+            return;
+        }
+
+        if (ch >= 0x30 && ch <= 0x3F)
+        {
+            _dcsBuffer.Append(ch);
+            _state = ParserState.DcsParam;
+            return;
+        }
+
+        if (ch >= 0x40 && ch <= 0x7E)
+        {
+            _dcsBuffer.Append(ch);
+            _state = ParserState.DcsPassthrough;
+            return;
+        }
+    }
+
+    private void ProcessDcsParam(char ch)
+    {
+        if (ch == '')
+        {
+            DispatchDcs(_dcsBuffer.ToString());
+            _state = ParserState.Normal;
+            return;
+        }
+
+        if (ch == '')
+        {
+            _state = ParserState.DcsPassthroughEscape;
+            return;
+        }
+
+        if (ch >= 0x30 && ch <= 0x3F)
+        {
+            _dcsBuffer.Append(ch);
+            return;
+        }
+
+        if (ch >= 0x20 && ch <= 0x2F)
+        {
+            _dcsBuffer.Append(ch);
+            _state = ParserState.DcsIntermediate;
+            return;
+        }
+
+        if (ch >= 0x40 && ch <= 0x7E)
+        {
+            _dcsBuffer.Append(ch);
+            _state = ParserState.DcsPassthrough;
+            return;
+        }
+    }
+
+    private void ProcessDcsIntermediate(char ch)
+    {
+        if (ch == '')
+        {
+            DispatchDcs(_dcsBuffer.ToString());
+            _state = ParserState.Normal;
+            return;
+        }
+
+        if (ch == '')
+        {
+            _state = ParserState.DcsPassthroughEscape;
+            return;
+        }
+
+        if (ch >= 0x20 && ch <= 0x2F)
+        {
+            _dcsBuffer.Append(ch);
+            return;
+        }
+
+        if (ch >= 0x40 && ch <= 0x7E)
+        {
+            _dcsBuffer.Append(ch);
+            _state = ParserState.DcsPassthrough;
+            return;
+        }
+    }
+
+    private void ProcessDcsPassthrough(char ch)
+    {
+        if (ch == '')
+        {
+            DispatchDcs(_dcsBuffer.ToString());
+            _state = ParserState.Normal;
+            return;
+        }
+
+        if (ch == '')
+        {
+            _state = ParserState.DcsPassthroughEscape;
+            return;
+        }
+
+        _dcsBuffer.Append(ch);
+    }
+
+    private void ProcessDcsPassthroughEscape(char ch)
+    {
+        if (ch == '\\')
+        {
+            DispatchDcs(_dcsBuffer.ToString());
+            _state = ParserState.Normal;
+            return;
+        }
+
+        _dcsBuffer.Append('');
+        _dcsBuffer.Append(ch);
+        _state = ParserState.DcsPassthrough;
+    }
+
+    private void DispatchDcs(string content)
+    {
+        // DECRQSS: ESC P $ q <Pt> ST  (buffer contains "$q<Pt>")
+        if (content.StartsWith("$q", StringComparison.Ordinal))
+        {
+            string pt = content[2..];
+            switch (pt)
+            {
+                case "m":
+                    EmitInputSequence("P1$r0m\\");
+                    break;
+                case "r":
+                    EmitInputSequence($"P1$r1;{_scrollBottom + 1}r\\");
+                    break;
+                default:
+                    EmitInputSequence("P0$r\\");
+                    break;
+            }
+        }
+        // All other DCS sequences (Sixel, DECUDK, etc.) are silently ignored.
     }
 
     private void DispatchOsc(string content)
@@ -3302,7 +3483,12 @@ internal sealed class AnsiTerminalBuffer
         Csi,
         Osc,
         OscEscape,
-        Charset
+        Charset,
+        DcsEntry,
+        DcsParam,
+        DcsIntermediate,
+        DcsPassthrough,
+        DcsPassthroughEscape
     }
 
     private sealed class TerminalLine

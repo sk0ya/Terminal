@@ -1686,4 +1686,95 @@ public sealed class AnsiTerminalBufferTests
         buffer.Process("[<u");
         Assert.Equal(1, buffer.KittyKeyboardFlags);
     }
+
+    [Fact]
+    public void DecrqssSgrQueryRespondsWithCurrentSgr()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 24);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("P$qm\\");
+
+        Assert.Equal("P1$r0m\\", emitted);
+    }
+
+    [Fact]
+    public void DecrqssDecstbmQueryRespondsWithScrollMargins()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 24);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("[5;20r");
+        buffer.Process("P$qr\\");
+
+        Assert.Equal("P1$r1;20r\\", emitted);
+    }
+
+    [Fact]
+    public void DecrqssUnknownAttributeRespondsWithFailure()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 24);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("P$qx\\");
+
+        Assert.Equal("P0$r\\", emitted);
+    }
+
+    [Fact]
+    public void UnknownDcsSequenceIsIgnoredWithoutCrash()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 24);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("P1;2;3!z some data here\\");
+        buffer.Process("A");
+
+        Assert.Null(emitted);
+        Assert.Equal("A", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void SixelDcsSequenceIsIgnoredWithoutCrash()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 24);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("Pq#0;2;0;0;0-!200~\\");
+        buffer.Process("B");
+
+        Assert.Null(emitted);
+        Assert.Equal("B", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void DcsSequenceTerminatedByC1StIsHandledCorrectly()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 24);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        // C1 DCS (U+009F) ... C1 ST (U+009C)
+        buffer.Process("$qm");
+
+        Assert.Equal("P1$r0m\\", emitted);
+    }
+
+    [Fact]
+    public void DcsEscapeInPassthroughThatIsNotStIsResumedAsData()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 24);
+
+        // ESC followed by a non-backslash inside DCS passthrough should not terminate
+        // the sequence; the parser should stay in DcsPassthrough.
+        buffer.Process("PqdataXmore\\");
+        buffer.Process("Z");
+
+        Assert.Equal("Z", buffer.GetScreenLineText(0).TrimEnd());
+    }
 }
