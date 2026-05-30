@@ -91,4 +91,88 @@ public sealed class TerminalKeyChordTranslatorTests
             applicationCursorKeys: false,
             supportsTerminalInput: false));
     }
+
+    [Fact]
+    public void TranslateSpecialKeyWithKittyFlagsEncodesShiftEnterAsCsiU()
+    {
+        string? result = TerminalKeyChordTranslator.TranslateSpecialKey(
+            Key.Enter,
+            ModifierKeys.Shift,
+            applicationCursorKeys: false,
+            kittyKeyboardFlags: 1);
+
+        Assert.Equal("[13;2u", result);
+    }
+
+    [Fact]
+    public void TranslateSpecialKeyWithKittyFlagsEncodesShiftTabAsCsiU()
+    {
+        string? result = TerminalKeyChordTranslator.TranslateSpecialKey(
+            Key.Tab,
+            ModifierKeys.Shift,
+            applicationCursorKeys: false,
+            kittyKeyboardFlags: 1);
+
+        Assert.Equal("[9;2u", result);
+    }
+
+    [Fact]
+    public void TranslateSpecialKeyWithKittyFlagsEncodesCtrlEnterAsCsiU()
+    {
+        string? result = TerminalKeyChordTranslator.TranslateSpecialKey(
+            Key.Enter,
+            ModifierKeys.Control,
+            applicationCursorKeys: false,
+            kittyKeyboardFlags: 1);
+
+        Assert.Equal("[13;5u", result);
+    }
+
+    [Fact]
+    public void TranslateSpecialKeyWithKittyFlagsZeroFallsBackToLegacy()
+    {
+        string? result = TerminalKeyChordTranslator.TranslateSpecialKey(
+            Key.Enter,
+            ModifierKeys.Shift,
+            applicationCursorKeys: false,
+            kittyKeyboardFlags: 0);
+
+        Assert.Equal("\r", result);
+    }
+
+    [Fact]
+    public void TranslateEnterKeyWithKittyFlagsEncodesShiftEnterAsCsiU()
+    {
+        string? result = TerminalKeyChordTranslator.TranslateEnterKey(
+            ModifierKeys.Shift,
+            applicationCursorKeys: false,
+            supportsTerminalInput: true,
+            kittyKeyboardFlags: 1);
+
+        Assert.Equal("[13;2u", result);
+    }
+
+    [Fact]
+    public void TranslateSpecialKeyWithKittyFlagsEncodesUpArrowAsCsiU()
+    {
+        string? result = TerminalKeyChordTranslator.TranslateSpecialKey(
+            Key.Up,
+            ModifierKeys.None,
+            applicationCursorKeys: false,
+            kittyKeyboardFlags: 8);
+
+        Assert.Equal("[57352u", result);
+    }
+
+    [Fact]
+    public void TranslateSpecialKeyWithKittyFlagsEncodesAltSpaceAsCsiU()
+    {
+        string? result = TerminalKeyChordTranslator.TranslateSpecialKey(
+            Key.Space,
+            ModifierKeys.Alt,
+            applicationCursorKeys: false,
+            kittyKeyboardFlags: 1);
+
+        Assert.Equal("[32;3u", result);
+    }
 }

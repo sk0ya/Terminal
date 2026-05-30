@@ -1347,4 +1347,164 @@ public sealed class AnsiTerminalBufferTests
         Assert.Equal("A", buffer.GetScreenLineText(2).TrimEnd());
         Assert.Equal("B", buffer.GetScreenLineText(3).TrimEnd());
     }
+
+    [Fact]
+    public void KittyPushFlagsUpdatesCurrentFlags()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[>1u");
+
+        Assert.Equal(1, buffer.KittyKeyboardFlags);
+    }
+
+    [Fact]
+    public void KittyPushAndPopRestoresPreviousFlags()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[>1u");
+        buffer.Process("[>3u");
+        buffer.Process("[<u");
+
+        Assert.Equal(1, buffer.KittyKeyboardFlags);
+    }
+
+    [Fact]
+    public void KittyPopWithCountPopsMultipleLevels()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[>1u");
+        buffer.Process("[>3u");
+        buffer.Process("[>7u");
+        buffer.Process("[<2u");
+
+        Assert.Equal(1, buffer.KittyKeyboardFlags);
+    }
+
+    [Fact]
+    public void KittyQueryRespondsWithCurrentFlags()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("[>5u");
+        buffer.Process("[?u");
+
+        Assert.Equal("[?5u", emitted);
+    }
+
+    [Fact]
+    public void KittySetFlagsDirectlyWithModeSet()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[>3u");
+        buffer.Process("[=5;1u");
+
+        Assert.Equal(5, buffer.KittyKeyboardFlags);
+    }
+
+    [Fact]
+    public void KittySetFlagsWithOrMode()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[>1u");
+        buffer.Process("[=4;2u");
+
+        Assert.Equal(5, buffer.KittyKeyboardFlags);
+    }
+
+    [Fact]
+    public void KittySetFlagsWithAndNotMode()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[>7u");
+        buffer.Process("[=2;3u");
+
+        Assert.Equal(5, buffer.KittyKeyboardFlags);
+    }
+
+    [Fact]
+    public void KittyFlagsResetOnHardReset()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[>3u");
+        buffer.Process("c");
+
+        Assert.Equal(0, buffer.KittyKeyboardFlags);
+    }
+
+    [Fact]
+    public void KittyFlagsResetOnSoftReset()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[>7u");
+        buffer.Process("[!p");
+
+        Assert.Equal(0, buffer.KittyKeyboardFlags);
+    }
+
+    [Fact]
+    public void KittyFlagsAreSavedAndRestoredWithAlternateScreen()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[>3u");
+        buffer.Process("[?1049h");
+        buffer.Process("[>15u");
+
+        Assert.Equal(15, buffer.KittyKeyboardFlags);
+
+        buffer.Process("[?1049l");
+
+        Assert.Equal(3, buffer.KittyKeyboardFlags);
+    }
+
+    [Fact]
+    public void KittyQueryEmitsEscapePrefixedResponse()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => responses.Add(text);
+
+        buffer.Process("[>0u");
+        buffer.Process("[?u");
+
+        Assert.Single(responses);
+        Assert.Equal("[?0u", responses[0]);
+    }
+
+    [Fact]
+    public void KittyStackIsSavedAndRestoredWithAlternateScreen()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        // primary screen: push 1 then 3
+        buffer.Process("[>1u");
+        buffer.Process("[>3u");
+
+        // enter alt-screen, push 7 and then 15 there
+        buffer.Process("[?1049h");
+        buffer.Process("[>7u");
+        buffer.Process("[>15u");
+
+        // pop one level in alt-screen: should fall back to 7
+        buffer.Process("[<u");
+        Assert.Equal(7, buffer.KittyKeyboardFlags);
+
+        // exit alt-screen: flags and stack from primary screen are restored
+        buffer.Process("[?1049l");
+        Assert.Equal(3, buffer.KittyKeyboardFlags);
+
+        // pop one level: should restore the 1 that was pushed on primary screen
+        buffer.Process("[<u");
+        Assert.Equal(1, buffer.KittyKeyboardFlags);
+    }
 }

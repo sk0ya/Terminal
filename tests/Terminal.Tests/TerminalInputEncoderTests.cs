@@ -63,4 +63,71 @@ public sealed class TerminalInputEncoderTests
 
         Assert.Equal(expected, text);
     }
+
+    [Fact]
+    public void KittyModifierParamHasBaseOfOne()
+    {
+        Assert.Equal(1, TerminalInputEncoder.GetKittyModifierParameter(ModifierKeys.None));
+        Assert.Equal(2, TerminalInputEncoder.GetKittyModifierParameter(ModifierKeys.Shift));
+        Assert.Equal(3, TerminalInputEncoder.GetKittyModifierParameter(ModifierKeys.Alt));
+        Assert.Equal(5, TerminalInputEncoder.GetKittyModifierParameter(ModifierKeys.Control));
+        Assert.Equal(8, TerminalInputEncoder.GetKittyModifierParameter(ModifierKeys.Shift | ModifierKeys.Alt | ModifierKeys.Control));
+    }
+
+    [Fact]
+    public void EncodeKittyKeyNoModifierOmitsModifier()
+    {
+        string result = TerminalInputEncoder.EncodeKittyKey(13, ModifierKeys.None, kittyFlags: 1);
+
+        Assert.Equal("[13u", result);
+    }
+
+    [Fact]
+    public void EncodeKittyKeyWithShiftIncludesModifier()
+    {
+        string result = TerminalInputEncoder.EncodeKittyKey(13, ModifierKeys.Shift, kittyFlags: 1);
+
+        Assert.Equal("[13;2u", result);
+    }
+
+    [Fact]
+    public void EncodeKittyKeyWithEventTypeWhenBit1Set()
+    {
+        string result = TerminalInputEncoder.EncodeKittyKey(13, ModifierKeys.None, kittyFlags: 3, eventType: KittyEventType.Release);
+
+        Assert.Equal("[13;1:3u", result);
+    }
+
+    [Fact]
+    public void EncodeKittyKeyPressEventOmitsEventTypeWhenBit1NotSet()
+    {
+        string result = TerminalInputEncoder.EncodeKittyKey(13, ModifierKeys.Shift, kittyFlags: 1, eventType: KittyEventType.Press);
+
+        Assert.Equal("[13;2u", result);
+    }
+
+    [Fact]
+    public void ShouldUseKittyEncodingReturnsFalseWhenFlagsZero()
+    {
+        Assert.False(TerminalInputEncoder.ShouldUseKittyEncoding(Key.Enter, ModifierKeys.Shift, kittyFlags: 0));
+    }
+
+    [Fact]
+    public void ShouldUseKittyEncodingReturnsTrueForShiftEnterWhenEnabled()
+    {
+        Assert.True(TerminalInputEncoder.ShouldUseKittyEncoding(Key.Enter, ModifierKeys.Shift, kittyFlags: 1));
+    }
+
+    [Fact]
+    public void ShouldUseKittyEncodingReturnsFalseForPlainEnterWithDisambiguateOnly()
+    {
+        Assert.False(TerminalInputEncoder.ShouldUseKittyEncoding(Key.Enter, ModifierKeys.None, kittyFlags: 1));
+    }
+
+    [Fact]
+    public void ShouldUseKittyEncodingReturnsTrueForAllKeysWhenBit3Set()
+    {
+        Assert.True(TerminalInputEncoder.ShouldUseKittyEncoding(Key.A, ModifierKeys.None, kittyFlags: 8));
+        Assert.True(TerminalInputEncoder.ShouldUseKittyEncoding(Key.Enter, ModifierKeys.None, kittyFlags: 8));
+    }
 }

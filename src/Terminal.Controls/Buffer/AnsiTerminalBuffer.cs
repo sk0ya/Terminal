@@ -135,6 +135,8 @@ internal sealed class AnsiTerminalBuffer
     private bool _screenRenderCacheDirty = true;
     private bool _cachedRenderShowCursor;
     private int _cachedVisibleScreenRow = -1;
+    private int _kittyKeyboardFlags;
+    private readonly Stack<int> _kittyKeyboardStack = new();
 
     public event EventHandler<string>? InputSequenceGenerated;
     public event EventHandler<string>? ClipboardSetRequested;
@@ -179,6 +181,7 @@ internal sealed class AnsiTerminalBuffer
     public TerminalMouseTrackingMode MouseTrackingMode => _mouseTrackingMode;
     public int ScrollbackLineCount => _scrollback.Count;
     public int VisibleLineCount => GetLastRenderedScreenRow(showCursor: false) + 1;
+    public int KittyKeyboardFlags => _kittyKeyboardFlags;
 
     public void Resize(short columns, short rows)
     {
@@ -589,6 +592,8 @@ internal sealed class AnsiTerminalBuffer
         _state = ParserState.Normal;
         _csiBuffer.Clear();
         _oscBuffer.Clear();
+        _kittyKeyboardFlags = 0;
+        _kittyKeyboardStack.Clear();
         ResetTabStops();
         ResetMargins();
         ResetScreenRenderCache();
@@ -1074,7 +1079,25 @@ internal sealed class AnsiTerminalBuffer
                 DispatchWindowOperation(GetParameter(parameters, 0, 0));
                 break;
             case 'u':
-                if (!isPrivate)
+                if (isSecondary)
+                {
+                    KittyPushFlags(GetParameter(parameters, 0, 0));
+                }
+                else if (isPrivate)
+                {
+                    KittyQueryFlags();
+                }
+                else if (rawParams.Length > 0 && rawParams[0] == '<')
+                {
+                    KittyPopFlags(GetParameter(ParseParameters(rawParams[1..]), 0, 1));
+                }
+                else if (rawParams.Length > 0 && rawParams[0] == '=')
+                {
+                    string modeParams = rawParams[1..];
+                    int?[] mp = ParseParameters(modeParams);
+                    KittySetFlags(GetParameter(mp, 0, 0), GetParameter(mp, 1, 1));
+                }
+                else
                 {
                     RestoreCursorState();
                 }
@@ -1419,9 +1442,50 @@ internal sealed class AnsiTerminalBuffer
         _g0CharacterSet = TerminalCharacterSet.Ascii;
         _g1CharacterSet = TerminalCharacterSet.Ascii;
         _currentHyperlink = null;
+        _kittyKeyboardFlags = 0;
+        _kittyKeyboardStack.Clear();
         _savedPrivateModes.Clear();
         ResetMargins();
         InvalidateScreenRenderCache();
+    }
+
+    private void KittyPushFlags(int flags)
+    {
+        _kittyKeyboardStack.Push(_kittyKeyboardFlags);
+        _kittyKeyboardFlags = flags & 0x1F;
+    }
+
+    private void KittyPopFlags(int count)
+    {
+        int popCount = Math.Max(1, count);
+        for (int i = 0; i < popCount; i++)
+        {
+            if (_kittyKeyboardStack.Count > 0)
+            {
+                _kittyKeyboardFlags = _kittyKeyboardStack.Pop();
+            }
+            else
+            {
+                _kittyKeyboardFlags = 0;
+            }
+        }
+    }
+
+    private void KittySetFlags(int flags, int mode)
+    {
+        int masked = flags & 0x1F;
+        _kittyKeyboardFlags = mode switch
+        {
+            1 => masked,
+            2 => _kittyKeyboardFlags | masked,
+            3 => _kittyKeyboardFlags & ~masked,
+            _ => masked
+        };
+    }
+
+    private void KittyQueryFlags()
+    {
+        EmitInputSequence($"[?{_kittyKeyboardFlags}u");
     }
 
     private bool GetPrivateModeEnabled(int mode)
@@ -1525,6 +1589,12 @@ internal sealed class AnsiTerminalBuffer
         _savedStyle = backup.SavedStyle;
         _currentHyperlink = backup.CurrentHyperlink;
         _savedHyperlink = backup.SavedHyperlink;
+        _kittyKeyboardFlags = backup.KittyKeyboardFlags;
+        _kittyKeyboardStack.Clear();
+        for (int i = backup.KittyStack.Count - 1; i >= 0; i--)
+        {
+            _kittyKeyboardStack.Push(backup.KittyStack[i]);
+        }
         _primaryScreenBackup = null;
 
         if (_rows != targetRows || _columns != targetColumns)
@@ -1562,7 +1632,9 @@ internal sealed class AnsiTerminalBuffer
             _currentStyle,
             _savedStyle,
             _currentHyperlink,
-            _savedHyperlink);
+            _savedHyperlink,
+            _kittyKeyboardFlags,
+            [.. _kittyKeyboardStack]);
     }
 
     private void UpdateSyntheticAlternateScreenFromTitle(string previousTitle, string nextTitle)
@@ -2948,7 +3020,9 @@ internal sealed class AnsiTerminalBuffer
         TerminalStyle Style,
         TerminalStyle SavedStyle,
         string? CurrentHyperlink,
-        string? SavedHyperlink);
+        string? SavedHyperlink,
+        int KittyKeyboardFlags,
+        List<int> KittyStack);
 
     private readonly record struct TerminalCell(
         string Text,

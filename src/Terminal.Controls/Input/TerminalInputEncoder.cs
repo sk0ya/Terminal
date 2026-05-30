@@ -155,4 +155,62 @@ internal static class TerminalInputEncoder
             bytes.Add(buffer[index]);
         }
     }
+
+    public static int GetKittyModifierParameter(ModifierKeys modifiers)
+    {
+        int bits = 0;
+        if ((modifiers & ModifierKeys.Shift) != 0) bits |= 1;
+        if ((modifiers & ModifierKeys.Alt) != 0) bits |= 2;
+        if ((modifiers & ModifierKeys.Control) != 0) bits |= 4;
+        return bits + 1;
+    }
+
+    public static string EncodeKittyKey(int codePoint, ModifierKeys modifiers, int kittyFlags, KittyEventType eventType = KittyEventType.Press)
+    {
+        int mod = GetKittyModifierParameter(modifiers);
+        bool reportEventType = (kittyFlags & 0x02) != 0;
+
+        if (mod == 1 && (!reportEventType || eventType == KittyEventType.Press))
+        {
+            return $"[{codePoint}u";
+        }
+
+        if (!reportEventType || eventType == KittyEventType.Press)
+        {
+            return $"[{codePoint};{mod}u";
+        }
+
+        return $"[{codePoint};{mod}:{(int)eventType}u";
+    }
+
+    public static bool ShouldUseKittyEncoding(Key key, ModifierKeys modifiers, int kittyFlags)
+    {
+        if (kittyFlags == 0)
+        {
+            return false;
+        }
+
+        bool reportAllKeys = (kittyFlags & 0x08) != 0;
+        if (reportAllKeys)
+        {
+            return true;
+        }
+
+        return key switch
+        {
+            Key.Enter when modifiers != ModifierKeys.None => true,
+            Key.Tab when (modifiers & ModifierKeys.Shift) != 0 => true,
+            Key.Back when modifiers != ModifierKeys.None => true,
+            Key.Escape when modifiers != ModifierKeys.None => true,
+            Key.Space when modifiers != ModifierKeys.None => true,
+            _ => false
+        };
+    }
+}
+
+internal enum KittyEventType
+{
+    Press = 1,
+    Repeat = 2,
+    Release = 3
 }

@@ -530,7 +530,8 @@ public partial class TerminalTabView : UserControl
         string? sequence = TerminalKeyChordTranslator.TranslateSpecialKey(
             key,
             modifiers,
-            _terminalBuffer.ApplicationCursorKeysEnabled);
+            _terminalBuffer.ApplicationCursorKeysEnabled,
+            _terminalBuffer.KittyKeyboardFlags);
 
         return sequence is not null && SendTerminalInput(sequence);
     }
@@ -545,7 +546,8 @@ public partial class TerminalTabView : UserControl
         string? sequence = TerminalKeyChordTranslator.TranslateEnterKey(
             GetTerminalModifiers(),
             _terminalBuffer.ApplicationCursorKeysEnabled,
-            SupportsTerminalInput());
+            SupportsTerminalInput(),
+            _terminalBuffer.KittyKeyboardFlags);
 
         return sequence is not null && SendTerminalInput(sequence);
     }
