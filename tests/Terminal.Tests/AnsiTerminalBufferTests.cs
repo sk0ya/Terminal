@@ -1347,4 +1347,44 @@ public sealed class AnsiTerminalBufferTests
         Assert.Equal("A", buffer.GetScreenLineText(2).TrimEnd());
         Assert.Equal("B", buffer.GetScreenLineText(3).TrimEnd());
     }
+
+    [Fact]
+    public void Sgr53SetsOverlineAnd55ClearsIt()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[53mX[55mY");
+
+        var snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        bool xOverline = snapshot.Lines[0].Segments.FirstOrDefault(s => s.Text.Contains('X')).Overline;
+        bool yOverline = snapshot.Lines[0].Segments.FirstOrDefault(s => s.Text.Contains('Y')).Overline;
+
+        Assert.True(xOverline);
+        Assert.False(yOverline);
+    }
+
+    [Fact]
+    public void Osc7FiresCurrentDirectoryChangedWithLocalPath()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? receivedPath = null;
+        buffer.CurrentDirectoryChanged += (_, path) => receivedPath = path;
+
+        buffer.Process("]7;file:///C:/Users/user/project");
+
+        Assert.NotNull(receivedPath);
+        Assert.Contains("project", receivedPath);
+    }
+
+    [Fact]
+    public void Osc7WithBarePathFiresWithRawValue()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? receivedPath = null;
+        buffer.CurrentDirectoryChanged += (_, path) => receivedPath = path;
+
+        buffer.Process("]7;/home/user/project");
+
+        Assert.Equal("/home/user/project", receivedPath);
+    }
 }

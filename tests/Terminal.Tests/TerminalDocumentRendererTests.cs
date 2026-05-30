@@ -78,6 +78,7 @@ public sealed class TerminalDocumentRendererTests
                     Italic: false,
                     Underline: false,
                     Strikethrough: false,
+                    Overline: false,
                     Hyperlink: null)
             ]);
     }

@@ -30,6 +30,7 @@ public partial class TerminalTabView
     private string _activeWorkingDirectory = Environment.CurrentDirectory;
     private bool _suppressProfileSelectionChanged;
     private bool _suppressCommandTextChanged;
+    private bool _suppressWorkingDirectoryTextChanged;
 
     private void InitializeTerminalWorkbench()
     {
@@ -224,6 +225,11 @@ public partial class TerminalTabView
 
     private void WorkingDirectoryTextBox_TextChanged(object sender, TextChangedEventArgs e)
     {
+        if (_suppressWorkingDirectoryTextChanged)
+        {
+            return;
+        }
+
         UpdateTerminalChrome();
     }
 

@@ -139,6 +139,7 @@ internal sealed class AnsiTerminalBuffer
     public event EventHandler<string>? InputSequenceGenerated;
     public event EventHandler<string>? ClipboardSetRequested;
     public event EventHandler<string>? ClipboardQueryRequested;
+    public event EventHandler<string>? CurrentDirectoryChanged;
 
     public AnsiTerminalBuffer(short columns, short rows, int scrollbackLimit = DefaultScrollbackLimit)
     {
@@ -864,6 +865,27 @@ internal sealed class AnsiTerminalBuffer
                 _ => CursorAccent
             };
             EmitInputSequence($"]{command};{FormatRgbColor(queryColor)}");
+            return;
+        }
+
+        if (command == "7")
+        {
+            if (!string.IsNullOrEmpty(value))
+            {
+                string localPath = value;
+                if (Uri.TryCreate(value, UriKind.Absolute, out Uri? dirUri) && dirUri.IsFile)
+                {
+                    // Uri.LocalPath converts file://localhost/C:/foo to \\localhost\C:\foo (UNC) on Windows.
+                    // Decode AbsolutePath directly and strip the leading slash before a Windows drive letter.
+                    string decoded = Uri.UnescapeDataString(dirUri.AbsolutePath);
+                    localPath = decoded.Length >= 3 && decoded[0] == '/' && char.IsLetter(decoded[1]) && decoded[2] == ':'
+                        ? decoded[1..]
+                        : decoded;
+                }
+
+                CurrentDirectoryChanged?.Invoke(this, localPath);
+            }
+
             return;
         }
 
@@ -1673,6 +1695,12 @@ internal sealed class AnsiTerminalBuffer
                     break;
                 case 29:
                     _currentStyle = _currentStyle with { Strikethrough = false };
+                    break;
+                case 53:
+                    _currentStyle = _currentStyle with { Overline = true };
+                    break;
+                case 55:
+                    _currentStyle = _currentStyle with { Overline = false };
                     break;
                 case >= 30 and <= 37:
                     _currentStyle = _currentStyle with { Foreground = AnsiPalette[code - 30] };
@@ -2650,6 +2678,7 @@ internal sealed class AnsiTerminalBuffer
             style.Value.Italic,
             style.Value.Underline,
             style.Value.Strikethrough,
+            style.Value.Overline,
             style.Value.Hyperlink));
         text.Clear();
         cellLength = 0;
@@ -2670,37 +2699,30 @@ internal sealed class AnsiTerminalBuffer
                 Foreground = GetBrush(segment.Foreground),
                 Background = GetBrush(segment.Background),
             };
-            ApplyTextDecorations(hyperlink, segment.Underline, segment.Strikethrough);
+            ApplyTextDecorations(hyperlink, segment.Underline, segment.Strikethrough, segment.Overline);
             inlines.Add(hyperlink);
             return;
         }
 
-        ApplyTextDecorations(run, segment.Underline, segment.Strikethrough);
+        ApplyTextDecorations(run, segment.Underline, segment.Strikethrough, segment.Overline);
         run.Foreground = GetBrush(segment.Foreground);
         run.Background = GetBrush(segment.Background);
         inlines.Add(run);
     }
 
-    private static void ApplyTextDecorations(Inline element, bool underline, bool strikethrough)
+    private static void ApplyTextDecorations(Inline element, bool underline, bool strikethrough, bool overline)
     {
-        if (underline && strikethrough)
-        {
-            var combined = new TextDecorationCollection(TextDecorations.Underline);
-            foreach (TextDecoration d in TextDecorations.Strikethrough) combined.Add(d);
-            element.TextDecorations = combined;
-        }
-        else if (underline)
-        {
-            element.TextDecorations = TextDecorations.Underline;
-        }
-        else if (strikethrough)
-        {
-            element.TextDecorations = TextDecorations.Strikethrough;
-        }
-        else
+        if (!underline && !strikethrough && !overline)
         {
             element.TextDecorations = null;
+            return;
         }
+
+        var combined = new TextDecorationCollection();
+        if (underline) foreach (TextDecoration d in TextDecorations.Underline) combined.Add(d);
+        if (strikethrough) foreach (TextDecoration d in TextDecorations.Strikethrough) combined.Add(d);
+        if (overline) foreach (TextDecoration d in TextDecorations.OverLine) combined.Add(d);
+        element.TextDecorations = combined;
     }
 
     private static void FlushRun(InlineCollection inlines, StringBuilder text, ResolvedStyle? style)
@@ -2723,13 +2745,13 @@ internal sealed class AnsiTerminalBuffer
                 Foreground = GetBrush(style.Value.Foreground),
                 Background = GetBrush(style.Value.Background),
             };
-            ApplyTextDecorations(hyperlink, style.Value.Underline, style.Value.Strikethrough);
+            ApplyTextDecorations(hyperlink, style.Value.Underline, style.Value.Strikethrough, style.Value.Overline);
             inlines.Add(hyperlink);
             text.Clear();
             return;
         }
 
-        ApplyTextDecorations(run, style.Value.Underline, style.Value.Strikethrough);
+        ApplyTextDecorations(run, style.Value.Underline, style.Value.Strikethrough, style.Value.Overline);
         run.Foreground = GetBrush(style.Value.Foreground);
         run.Background = GetBrush(style.Value.Background);
         inlines.Add(run);
@@ -2797,7 +2819,7 @@ internal sealed class AnsiTerminalBuffer
             (foreground, background) = (background, foreground);
         }
 
-        return new ResolvedStyle(foreground, background, style.Bold, style.Italic, style.Underline, style.Strikethrough, hyperlink);
+        return new ResolvedStyle(foreground, background, style.Bold, style.Italic, style.Underline, style.Strikethrough, style.Overline, hyperlink);
     }
 
     private static Color DimColor(Color color) =>
@@ -2967,9 +2989,10 @@ internal sealed class AnsiTerminalBuffer
         bool Blink,
         bool Inverse,
         bool Invisible,
-        bool Strikethrough)
+        bool Strikethrough,
+        bool Overline)
     {
-        public static readonly TerminalStyle Default = new(null, null, false, false, false, false, false, false, false, false);
+        public static readonly TerminalStyle Default = new(null, null, false, false, false, false, false, false, false, false, false);
     }
 
     private readonly record struct ResolvedStyle(
@@ -2979,6 +3002,7 @@ internal sealed class AnsiTerminalBuffer
         bool Italic,
         bool Underline,
         bool Strikethrough,
+        bool Overline,
         string? Hyperlink);
 
     internal readonly record struct TerminalRenderSnapshot(
@@ -3020,6 +3044,7 @@ internal sealed class AnsiTerminalBuffer
         bool Italic,
         bool Underline,
         bool Strikethrough,
+        bool Overline,
         string? Hyperlink);
 
     internal readonly record struct TerminalDocumentSnapshot(

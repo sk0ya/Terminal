@@ -105,6 +105,11 @@ public partial class TerminalTabView : UserControl
         TerminalInputProxy.AddHandler(TextCompositionManager.PreviewTextInputUpdateEvent, new TextCompositionEventHandler(TerminalInputProxy_PreviewTextInputUpdate), handledEventsToo: true);
         TerminalInputProxy.AddHandler(TextCompositionManager.TextInputEvent, new TextCompositionEventHandler(TerminalInputProxy_TextInput), handledEventsToo: true);
 
+        _terminalBuffer.InputSequenceGenerated += TerminalBuffer_InputSequenceGenerated;
+        _terminalBuffer.ClipboardSetRequested += TerminalBuffer_ClipboardSetRequested;
+        _terminalBuffer.ClipboardQueryRequested += TerminalBuffer_ClipboardQueryRequested;
+        _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
+
         Loaded += OnLoaded;
     }
 
@@ -1797,10 +1802,12 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.InputSequenceGenerated -= TerminalBuffer_InputSequenceGenerated;
         _terminalBuffer.ClipboardSetRequested -= TerminalBuffer_ClipboardSetRequested;
         _terminalBuffer.ClipboardQueryRequested -= TerminalBuffer_ClipboardQueryRequested;
+        _terminalBuffer.CurrentDirectoryChanged -= TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer = nextBuffer;
         _terminalBuffer.InputSequenceGenerated += TerminalBuffer_InputSequenceGenerated;
         _terminalBuffer.ClipboardSetRequested += TerminalBuffer_ClipboardSetRequested;
         _terminalBuffer.ClipboardQueryRequested += TerminalBuffer_ClipboardQueryRequested;
+        _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
     }
 
     private void TerminalBuffer_InputSequenceGenerated(object? sender, string text)
@@ -1831,6 +1838,30 @@ public partial class TerminalTabView : UserControl
         {
             SetStatus($"Clipboard update failed: {ex.Message}");
         }
+    }
+
+    private void TerminalBuffer_CurrentDirectoryChanged(object? sender, string path)
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        string canonicalPath;
+        try
+        {
+            canonicalPath = Path.GetFullPath(path);
+        }
+        catch
+        {
+            return;
+        }
+
+        _activeWorkingDirectory = canonicalPath;
+        _suppressWorkingDirectoryTextChanged = true;
+        WorkingDirectoryTextBox.Text = canonicalPath;
+        _suppressWorkingDirectoryTextChanged = false;
+        UpdateTerminalChrome();
     }
 
     private void TerminalBuffer_ClipboardQueryRequested(object? sender, string selectionTargets)

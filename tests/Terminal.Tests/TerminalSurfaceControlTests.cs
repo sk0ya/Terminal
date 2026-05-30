@@ -178,6 +178,7 @@ public sealed class TerminalSurfaceControlTests
                     Italic: false,
                     Underline: false,
                     Strikethrough: false,
+                    Overline: false,
                     Hyperlink: null)
             ]);
     }

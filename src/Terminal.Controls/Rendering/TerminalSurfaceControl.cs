@@ -475,6 +475,28 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             return;
         }
 
+        if (e.ClickCount >= 3)
+        {
+            SelectLine(position.LineIndex);
+            _selectionAnchor = position;
+            _selectionAnchorPoint = e.GetPosition(this);
+            _selectionDragStarted = false;
+            CaptureMouse();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.ClickCount == 2)
+        {
+            SelectWord(position.LineIndex, position.TextIndex);
+            _selectionAnchor = position;
+            _selectionAnchorPoint = e.GetPosition(this);
+            _selectionDragStarted = false;
+            CaptureMouse();
+            e.Handled = true;
+            return;
+        }
+
         _selectionAnchor = position;
         _selectionAnchorPoint = e.GetPosition(this);
         _selectionDragStarted = false;
@@ -482,6 +504,62 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         CaptureMouse();
         InvalidateVisual();
         e.Handled = true;
+    }
+
+    private void SelectWord(int lineIndex, int textIndex)
+    {
+        if (lineIndex < 0 || lineIndex >= _lines.Count)
+        {
+            return;
+        }
+
+        LineLayout line = _lines[lineIndex];
+        string text = line.Text;
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        textIndex = Math.Clamp(textIndex, 0, text.Length - 1);
+
+        static bool IsWordChar(char ch) => char.IsLetterOrDigit(ch) || ch == '_';
+
+        if (!IsWordChar(text[textIndex]))
+        {
+            SelectRange(new TerminalTextRange(
+                new TerminalTextPosition(lineIndex, textIndex),
+                new TerminalTextPosition(lineIndex, textIndex + 1)));
+            return;
+        }
+
+        int start = textIndex;
+        while (start > 0 && IsWordChar(text[start - 1]))
+        {
+            start--;
+        }
+
+        int end = textIndex;
+        while (end < text.Length && IsWordChar(text[end]))
+        {
+            end++;
+        }
+
+        SelectRange(new TerminalTextRange(
+            new TerminalTextPosition(lineIndex, start),
+            new TerminalTextPosition(lineIndex, end)));
+    }
+
+    private void SelectLine(int lineIndex)
+    {
+        if (lineIndex < 0 || lineIndex >= _lines.Count)
+        {
+            return;
+        }
+
+        LineLayout line = _lines[lineIndex];
+        SelectRange(new TerminalTextRange(
+            new TerminalTextPosition(lineIndex, 0),
+            new TerminalTextPosition(lineIndex, line.Text.Length)));
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
@@ -646,22 +724,13 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 _pixelsPerDip);
 
             text.SetFontWeight(segment.Snapshot.Bold ? FontWeights.SemiBold : FontWeights.Regular);
-            if (segment.Snapshot.Underline || segment.Snapshot.Strikethrough)
+            if (segment.Snapshot.Underline || segment.Snapshot.Strikethrough || segment.Snapshot.Overline)
             {
-                if (segment.Snapshot.Underline && segment.Snapshot.Strikethrough)
-                {
-                    var combined = new TextDecorationCollection(TextDecorations.Underline);
-                    foreach (TextDecoration d in TextDecorations.Strikethrough) combined.Add(d);
-                    text.SetTextDecorations(combined);
-                }
-                else if (segment.Snapshot.Underline)
-                {
-                    text.SetTextDecorations(TextDecorations.Underline);
-                }
-                else
-                {
-                    text.SetTextDecorations(TextDecorations.Strikethrough);
-                }
+                var decorations = new TextDecorationCollection();
+                if (segment.Snapshot.Underline) foreach (TextDecoration d in TextDecorations.Underline) decorations.Add(d);
+                if (segment.Snapshot.Strikethrough) foreach (TextDecoration d in TextDecorations.Strikethrough) decorations.Add(d);
+                if (segment.Snapshot.Overline) foreach (TextDecoration d in TextDecorations.OverLine) decorations.Add(d);
+                text.SetTextDecorations(decorations);
             }
 
             drawingContext.DrawText(text, new Point(left, top));
