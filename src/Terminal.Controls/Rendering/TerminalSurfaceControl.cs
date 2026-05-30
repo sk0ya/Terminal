@@ -279,15 +279,21 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         return builder.ToString();
     }
 
-    private string GetBlockSelectedText(TerminalTextRange range)
+    private (int Left, int Right) GetBlockColumnRange()
     {
-        int leftColumn = (int)Math.Min(_blockAnchorCellColumn, _blockCurrentCellColumn);
-        int rightColumn = (int)Math.Ceiling(Math.Max(_blockAnchorCellColumn, _blockCurrentCellColumn));
-        if (rightColumn <= leftColumn)
+        int left = (int)Math.Min(_blockAnchorCellColumn, _blockCurrentCellColumn);
+        int right = (int)Math.Ceiling(Math.Max(_blockAnchorCellColumn, _blockCurrentCellColumn));
+        if (right <= left)
         {
-            rightColumn = leftColumn + 1;
+            right = left + 1;
         }
 
+        return (left, right);
+    }
+
+    private string GetBlockSelectedText(TerminalTextRange range)
+    {
+        var (leftColumn, rightColumn) = GetBlockColumnRange();
         var builder = new StringBuilder();
         for (int lineIndex = range.Start.LineIndex; lineIndex <= range.End.LineIndex; lineIndex++)
         {
@@ -592,7 +598,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             DrawLineBackgrounds(drawingContext, line, top, contentLeft);
             if (_blockSelectionMode && selection.HasValue)
             {
-                DrawBlockSelection(drawingContext, selection.Value, lineIndex, line, top, contentLeft);
+                DrawBlockSelection(drawingContext, selection.Value, lineIndex, top, contentLeft);
             }
             else
             {
@@ -783,6 +789,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         _selectionAnchor = null;
         _selectionAnchorPoint = null;
         _selectionDragStarted = false;
+        _blockSelectionMode = false;
     }
 
     protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
@@ -863,7 +870,6 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         DrawingContext drawingContext,
         TerminalTextRange selection,
         int lineIndex,
-        LineLayout line,
         double top,
         double contentLeft)
     {
@@ -872,13 +878,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             return;
         }
 
-        int leftColumn = (int)Math.Min(_blockAnchorCellColumn, _blockCurrentCellColumn);
-        int rightColumn = (int)Math.Ceiling(Math.Max(_blockAnchorCellColumn, _blockCurrentCellColumn));
-        if (rightColumn <= leftColumn)
-        {
-            rightColumn = leftColumn + 1;
-        }
-
+        var (leftColumn, rightColumn) = GetBlockColumnRange();
         Rect rect = new(
             contentLeft + (leftColumn * _cellSize.Width),
             top,
@@ -1067,6 +1067,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     private void SelectRange(TerminalTextRange range)
     {
+        _blockSelectionMode = false;
         _selection = NormalizeSelection(range);
         BringSelectionIntoView();
         InvalidateVisual();
