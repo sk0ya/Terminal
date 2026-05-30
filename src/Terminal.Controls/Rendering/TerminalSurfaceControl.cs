@@ -23,6 +23,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private bool _prevAmbiguousAsWide;
     private Typeface? _typeface;
     private Typeface? _italicTypeface;
+    private FontFallbackResolver? _fontFallback;
     private Size _cellSize = new(8, 16);
     private double _pixelsPerDip = 1.0;
     private bool _metricsDirty = true;
@@ -896,33 +897,129 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 continue;
             }
 
-            double left = contentLeft + (segment.StartCell * _cellSize.Width);
-            Typeface typeface = segment.Snapshot.Italic ? _italicTypeface! : _typeface!;
-            var text = new FormattedText(
-                segment.Snapshot.Text,
-                CultureInfo.CurrentCulture,
-                FlowDirection.LeftToRight,
-                typeface,
-                FontSize,
-                GetBrush(segment.Snapshot.Foreground),
-                _pixelsPerDip);
+            string segText = segment.Snapshot.Text;
+            Typeface primaryTypeface = segment.Snapshot.Italic ? _italicTypeface! : _typeface!;
+            FontWeight fontWeight = segment.Snapshot.Bold ? FontWeights.SemiBold : FontWeights.Regular;
+            Brush foreground = GetBrush(segment.Snapshot.Foreground);
+            TextDecorationCollection? decorations = BuildDecorations(segment.Snapshot);
+            FontFallbackResolver? fallback = _fontFallback;
+            bool ambiguousAsWide = _prevAmbiguousAsWide;
 
-            text.SetFontWeight(segment.Snapshot.Bold ? FontWeights.SemiBold : FontWeights.Regular);
-            if (segment.Snapshot.UnderlineStyle != UnderlineStyle.None || segment.Snapshot.Strikethrough || segment.Snapshot.Overline)
+            if (fallback is null)
             {
-                var decorations = new TextDecorationCollection();
-                if (segment.Snapshot.UnderlineStyle != UnderlineStyle.None)
-                {
-                    AnsiTerminalBuffer.AddUnderlineDecorations(decorations, segment.Snapshot.UnderlineStyle, segment.Snapshot.UnderlineColor, segment.Snapshot.Foreground);
-                }
-
-                if (segment.Snapshot.Strikethrough) foreach (TextDecoration d in TextDecorations.Strikethrough) decorations.Add(d);
-                if (segment.Snapshot.Overline) foreach (TextDecoration d in TextDecorations.OverLine) decorations.Add(d);
-                text.SetTextDecorations(decorations);
+                DrawSegmentRun(drawingContext, segText, primaryTypeface, fontWeight, foreground, decorations,
+                    contentLeft + (segment.StartCell * _cellSize.Width), top);
+                continue;
             }
 
-            drawingContext.DrawText(text, new Point(left, top));
+            int[] starts = StringInfo.ParseCombiningCharacters(segText);
+            double cellX = segment.StartCell * _cellSize.Width;
+            int runStart = 0;
+            double runCellX = cellX;
+            GlyphTypeface? runGlyph = null;
+
+            for (int i = 0; i < starts.Length; i++)
+            {
+                int elemStart = starts[i];
+                int elemEnd = i + 1 < starts.Length ? starts[i + 1] : segText.Length;
+                int codepoint = char.ConvertToUtf32(segText, elemStart);
+                GlyphTypeface? resolved = fallback.Resolve(codepoint);
+
+                if (i == 0)
+                {
+                    runGlyph = resolved;
+                }
+                else if (!ReferenceEquals(resolved, runGlyph))
+                {
+                    string runText = segText[runStart..elemStart];
+                    Typeface tf = ResolveTypeface(runGlyph, primaryTypeface, segment.Snapshot.Italic);
+                    DrawSegmentRun(drawingContext, runText, tf, fontWeight, foreground, decorations,
+                        contentLeft + runCellX, top);
+                    runStart = elemStart;
+                    runCellX = cellX;
+                    runGlyph = resolved;
+                }
+
+                string elem = segText[elemStart..elemEnd];
+                cellX += EstimateTextElementCellWidth(elem, ambiguousAsWide) * _cellSize.Width;
+            }
+
+            if (runStart < segText.Length)
+            {
+                string runText = segText[runStart..];
+                Typeface tf = ResolveTypeface(runGlyph, primaryTypeface, segment.Snapshot.Italic);
+                DrawSegmentRun(drawingContext, runText, tf, fontWeight, foreground, decorations,
+                    contentLeft + runCellX, top);
+            }
         }
+    }
+
+    private static Typeface ResolveTypeface(GlyphTypeface? glyphTypeface, Typeface primaryTypeface, bool italic)
+    {
+        if (glyphTypeface is null)
+        {
+            return primaryTypeface;
+        }
+
+        primaryTypeface.TryGetGlyphTypeface(out GlyphTypeface? primaryGtf);
+        if (ReferenceEquals(glyphTypeface, primaryGtf))
+        {
+            return primaryTypeface;
+        }
+
+        string familyName = glyphTypeface.FamilyNames.Values.FirstOrDefault()
+            ?? glyphTypeface.Win32FamilyNames.Values.FirstOrDefault()
+            ?? string.Empty;
+        return new Typeface(
+            new FontFamily(familyName),
+            italic ? FontStyles.Italic : FontStyles.Normal,
+            FontWeights.Regular,
+            FontStretches.Normal);
+    }
+
+    private void DrawSegmentRun(
+        DrawingContext drawingContext,
+        string text,
+        Typeface typeface,
+        FontWeight fontWeight,
+        Brush foreground,
+        TextDecorationCollection? decorations,
+        double left,
+        double top)
+    {
+        var formatted = new FormattedText(
+            text,
+            CultureInfo.CurrentCulture,
+            FlowDirection.LeftToRight,
+            typeface,
+            FontSize,
+            foreground,
+            _pixelsPerDip);
+        formatted.SetFontWeight(fontWeight);
+        if (decorations is not null)
+        {
+            formatted.SetTextDecorations(decorations);
+        }
+
+        drawingContext.DrawText(formatted, new Point(left, top));
+    }
+
+    private static TextDecorationCollection? BuildDecorations(AnsiTerminalBuffer.TerminalRenderSegmentSnapshot snapshot)
+    {
+        if (snapshot.UnderlineStyle == UnderlineStyle.None && !snapshot.Strikethrough && !snapshot.Overline)
+        {
+            return null;
+        }
+
+        var decorations = new TextDecorationCollection();
+        if (snapshot.UnderlineStyle != UnderlineStyle.None)
+        {
+            AnsiTerminalBuffer.AddUnderlineDecorations(decorations, snapshot.UnderlineStyle, snapshot.UnderlineColor, snapshot.Foreground);
+        }
+
+        if (snapshot.Strikethrough) foreach (TextDecoration d in TextDecorations.Strikethrough) decorations.Add(d);
+        if (snapshot.Overline) foreach (TextDecoration d in TextDecorations.OverLine) decorations.Add(d);
+        return decorations;
     }
 
     private void EnsureMetrics()
@@ -939,6 +1036,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         _pixelsPerDip = pixelsPerDip;
         _typeface = new Typeface(FontFamily, FontStyle, FontWeight, FontStretch);
         _italicTypeface = new Typeface(FontFamily, FontStyles.Italic, FontWeight, FontStretch);
+        _fontFallback = new FontFallbackResolver(_typeface);
         var text = new FormattedText(
             "W",
             CultureInfo.CurrentCulture,
