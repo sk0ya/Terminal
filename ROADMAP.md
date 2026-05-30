@@ -30,14 +30,14 @@
 - ~~**OSC 7** — カレントディレクトリ通知。シェルが設定し、ターミナルが「同じ場所で新規タブ」に利用する標準プロトコル~~ **実装済み（Working Directory UI と連動）**
 - ~~**OSC 9** — デスクトップ通知（Windows Toast）。長時間コマンドの完了通知に活用~~ **実装済み（WPF ポップアップバナー）**
 - ~~**OSC 133 / 633** — シェル統合プロトコル（プロンプト・コマンド・出力のゾーンマーキング）。コマンドナビゲーション・意味的選択の前提~~ **実装済み（A/B/C/D マーカーを ShellCommandZoneReceived イベントで通知、Ctrl+Shift+↑/↓ でコマンドナビゲーション）**
-- **DCS パーサ** — `ESC P...ST` の状態機械が未実装。Sixel / DECRQSS / DECUDK などが通らない
+- ~~**DCS パーサ** — `ESC P...ST` の状態機械が未実装。Sixel / DECRQSS / DECUDK などが通らない~~ **実装済み（DECRQSS 応答、不明 DCS 無視、C1 ST 対応）**
 - **Sixel グラフィクス** — `DCS ...q` による画素画像インライン表示。Yazi や gnuplot などが使用
 - **DECCOLM（mode 3）** — 80/132 列切り替え。一部の全画面アプリが発行する
 - **SGR マウスピクセルモード（1016）** — セル単位でなくピクセル座標で報告するマウスモード
 
 ### キーボード入力
 
-- **Kitty キーボードプロトコル** — `DECSET 2048` + CSI u ベースの高精度キーエンコード。Neovim 0.10+、Ghostty、WezTerm が標準採用。Shift/Ctrl+Enter 等の区別が可能になる
+- ~~**Kitty キーボードプロトコル** — `DECSET 2048` + CSI u ベースの高精度キーエンコード。Neovim 0.10+、Ghostty、WezTerm が標準採用。Shift/Ctrl+Enter 等の区別が可能になる~~ **実装済み（CSI u エンコード、フラグスタック push/pop/set/query、alt-screen 保存復元）**
 - ~~**XTerm modifyOtherKeys** — `CSI > 4;2m` モード。Emacs・Vim が利用する拡張修飾キーシーケンス~~ **実装済み**
 - ~~**テンキー（数字パッド）** — `DECKPAM`/`DECKPNM`（mode 66）の切り替えはフラグのみ存在するが、数字パッドキーの SS3 シーケンス出力が未実装~~ **実装済み**
 
