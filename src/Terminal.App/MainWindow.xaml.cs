@@ -34,9 +34,33 @@ public partial class MainWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        ApplyBackdrop(_settings);
         if (_tabs.Count == 0)
         {
             AddNewTabFromSettings();
+        }
+    }
+
+    private void ApplyBackdrop(TerminalAppSettings settings)
+    {
+        bool active = DwmBackdrop.Apply(this, settings.BackdropType);
+        var transparent = new SolidColorBrush(Colors.Transparent);
+        var opaque = new SolidColorBrush(Color.FromRgb(0x0E, 0x0E, 0x0E));
+        Background = active ? transparent : opaque;
+        ActiveTabHost.Background = active ? transparent : opaque;
+
+        var chromeBg = active
+            ? new SolidColorBrush(Color.FromArgb(0xB0, 0x15, 0x15, 0x15))
+            : new SolidColorBrush(Color.FromRgb(0x15, 0x15, 0x15));
+
+        TopChromeBar.Background = chromeBg;
+        LeftTabChrome.Background = chromeBg;
+        RightTabChrome.Background = chromeBg;
+        BottomTabChrome.Background = chromeBg;
+
+        foreach (TerminalTabItem tab in _tabs)
+        {
+            tab.View.SetBackdropActive(active);
         }
     }
 
@@ -689,6 +713,7 @@ public partial class MainWindow : Window
     {
         _settings = settings;
         ApplyTabStripPlacement(_settings.TabStripPlacement);
+        ApplyBackdrop(_settings);
         SaveWindowSettings();
         _settings.Save();
 
@@ -732,7 +757,8 @@ public partial class MainWindow : Window
             WindowHeight = _settings.WindowHeight,
             EnableSessionLogging = _settings.EnableSessionLogging,
             SessionLogDirectory = _settings.SessionLogDirectory,
-            CjkAmbiguousWidthIsWide = tabSettings.CjkAmbiguousWidthIsWide
+            CjkAmbiguousWidthIsWide = tabSettings.CjkAmbiguousWidthIsWide,
+            BackdropType = _settings.BackdropType
         };
     }
 

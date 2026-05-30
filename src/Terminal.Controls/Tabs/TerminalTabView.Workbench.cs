@@ -431,6 +431,17 @@ public partial class TerminalTabView
         UpdateWindowTitle();
     }
 
+    public void SetBackdropActive(bool active)
+    {
+        var transparent = new SolidColorBrush(Colors.Transparent);
+        var opaque = new SolidColorBrush(Color.FromRgb(0x0E, 0x0C, 0x0A));
+        Brush bg = active ? transparent : opaque;
+        TerminalHostBorder.Background = bg;
+        TerminalViewportHost.Background = bg;
+        TerminalScrollHost.Background = bg;
+        TerminalOutput.Background = bg;
+    }
+
     private void ToggleFindPanel()
     {
         if (FindPanel.Visibility == Visibility.Visible)

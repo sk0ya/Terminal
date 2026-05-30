@@ -386,7 +386,8 @@ public partial class SettingsWindow : Window
             WindowHeight = settings.WindowHeight,
             EnableSessionLogging = settings.EnableSessionLogging,
             SessionLogDirectory = settings.SessionLogDirectory,
-            CjkAmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide
+            CjkAmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide,
+            BackdropType = settings.BackdropType
         };
     }
 

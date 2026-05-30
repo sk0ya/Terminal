@@ -21,6 +21,7 @@ public sealed class TerminalAppSettings
     public bool EnableSessionLogging { get; set; } = true;
     public string? SessionLogDirectory { get; set; }
     public bool CjkAmbiguousWidthIsWide { get; set; } = false;
+    public string BackdropType { get; set; } = "none";
 
     public static TerminalAppSettings Load()
     {

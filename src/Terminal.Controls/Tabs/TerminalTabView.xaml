@@ -323,7 +323,8 @@
             </Grid>
         </Border>
 
-        <Border Grid.Row="2"
+        <Border x:Name="TerminalHostBorder"
+                Grid.Row="2"
                 Style="{StaticResource PanelBorderStyle}"
                 Background="#0E0C0A"
                 Padding="0"
