@@ -1661,6 +1661,55 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void Decset1016EnablesPixelMouseModeAndImpliesSgr()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[?1016h");
+
+        Assert.True(buffer.MousePixelMode);
+        Assert.Equal(TerminalMouseEncoding.Sgr, buffer.MouseEncoding);
+    }
+    [Fact]
+    public void Decrst1016DisablesPixelMouseMode()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[?1016h");
+        Assert.True(buffer.MousePixelMode);
+
+        buffer.Process("[?1016l");
+        Assert.False(buffer.MousePixelMode);
+    }
+
+    [Fact]
+    public void Decrst1016DoesNotDisableSgrIfSgrWasIndependentlyEnabled()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[?1006h");
+        buffer.Process("[?1016h");
+        buffer.Process("[?1016l");
+
+        Assert.False(buffer.MousePixelMode);
+        Assert.Equal(TerminalMouseEncoding.Sgr, buffer.MouseEncoding);
+    }
+
+    [Fact]
+    public void DecrqmReportsPixelMouseMode()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => responses.Add(text);
+
+        buffer.Process("[>0u");
+        buffer.Process("[?u");
+
+        Assert.Single(responses);
+        Assert.Equal("[?0u", responses[0]);
+    }
+
+    [Fact]
     public void KittyStackIsSavedAndRestoredWithAlternateScreen()
     {
         var buffer = new AnsiTerminalBuffer(32, 10);
@@ -1900,4 +1949,5 @@ public sealed class AnsiTerminalBufferTests
         string line = buffer.GetScreenLineText(0).TrimEnd();
         Assert.Equal("AB   FGHIJ", line);
     }
+
 }

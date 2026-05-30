@@ -146,6 +146,7 @@ internal sealed class AnsiTerminalBuffer
     private bool _useUtf8MouseEncoding;
     private bool _useSgrMouseEncoding;
     private bool _useUrxvtMouseEncoding;
+    private bool _mousePixelMode;
     private bool _screenReverse;
     private TerminalMouseTrackingMode _mouseTrackingMode;
     private TerminalCursorShape _cursorShape = TerminalCursorShape.Block;
@@ -214,6 +215,7 @@ internal sealed class AnsiTerminalBuffer
     public bool SynchronizedUpdateActive => _synchronizedUpdateActive;
     public TerminalMouseEncoding MouseEncoding => ResolveMouseEncoding();
     public TerminalMouseTrackingMode MouseTrackingMode => _mouseTrackingMode;
+    public bool MousePixelMode => _mousePixelMode;
     public int ScrollbackLineCount => _scrollback.Count;
     public int VisibleLineCount => GetLastRenderedScreenRow(showCursor: false) + 1;
     public int KittyKeyboardFlags => _kittyKeyboardFlags;
@@ -611,6 +613,7 @@ internal sealed class AnsiTerminalBuffer
         _useUtf8MouseEncoding = false;
         _useSgrMouseEncoding = false;
         _useUrxvtMouseEncoding = false;
+        _mousePixelMode = false;
         _screenReverse = false;
         _mouseTrackingMode = TerminalMouseTrackingMode.Off;
         _synchronizedUpdateActive = false;
@@ -1693,6 +1696,13 @@ internal sealed class AnsiTerminalBuffer
                 case 1015:
                     _useUrxvtMouseEncoding = enabled;
                     break;
+                case 1016:
+                    _mousePixelMode = enabled;
+                    if (enabled)
+                    {
+                        _useSgrMouseEncoding = true;
+                    }
+                    break;
                 case 66:
                     _applicationKeypad = enabled;
                     break;
@@ -1789,6 +1799,7 @@ internal sealed class AnsiTerminalBuffer
             1006 => _useSgrMouseEncoding ? 1 : 2,
             1007 => _alternateScrollEnabled ? 1 : 2,
             1015 => _useUrxvtMouseEncoding ? 1 : 2,
+            1016 => _mousePixelMode ? 1 : 2,
             1049 => _primaryScreenBackup is not null && !_syntheticAlternateScreenActive ? 1 : 2,
             2004 => _bracketedPasteEnabled ? 1 : 2,
             2026 => _synchronizedUpdateActive ? 1 : 2,
@@ -1833,6 +1844,7 @@ internal sealed class AnsiTerminalBuffer
         _useUtf8MouseEncoding = false;
         _useSgrMouseEncoding = false;
         _useUrxvtMouseEncoding = false;
+        _mousePixelMode = false;
         _screenReverse = false;
         _mouseTrackingMode = TerminalMouseTrackingMode.Off;
         _synchronizedUpdateActive = false;
@@ -1908,6 +1920,7 @@ internal sealed class AnsiTerminalBuffer
             1006 => _useSgrMouseEncoding,
             1007 => _alternateScrollEnabled,
             1015 => _useUrxvtMouseEncoding,
+            1016 => _mousePixelMode,
             1048 or 1049 => _primaryScreenBackup is not null && !_syntheticAlternateScreenActive,
             2004 => _bracketedPasteEnabled,
             2026 => _synchronizedUpdateActive,

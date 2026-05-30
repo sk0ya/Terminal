@@ -2098,11 +2098,6 @@ public partial class TerminalTabView : UserControl
             return false;
         }
 
-        if (!TryGetMouseCell(e.GetPosition(TerminalScrollHost), out int column, out int row))
-        {
-            return false;
-        }
-
         if (_terminalBuffer.MouseTrackingMode == TerminalMouseTrackingMode.X10 && !pressed)
         {
             return false;
@@ -2110,6 +2105,18 @@ public partial class TerminalTabView : UserControl
 
         int? button = pressed ? MapMouseButton(e.ChangedButton) : 3;
         if (!button.HasValue)
+        {
+            return false;
+        }
+
+        Point position = e.GetPosition(TerminalScrollHost);
+        if (_terminalBuffer.MousePixelMode)
+        {
+            GetMousePixel(position, out int px, out int py);
+            return SendMouseSequence(button.Value, px, py, released: !pressed, motion: false, wheel: false, wheelUp: false);
+        }
+
+        if (!TryGetMouseCell(position, out int column, out int row))
         {
             return false;
         }
@@ -2139,12 +2146,19 @@ public partial class TerminalTabView : UserControl
             return false;
         }
 
-        if (!TryGetMouseCell(e.GetPosition(TerminalScrollHost), out int column, out int row))
+        Point position = e.GetPosition(TerminalScrollHost);
+        int button = ResolveCurrentMouseButton(e);
+        if (_terminalBuffer.MousePixelMode)
+        {
+            GetMousePixel(position, out int px, out int py);
+            return SendMouseSequence(button, px, py, released: false, motion: true, wheel: false, wheelUp: false);
+        }
+
+        if (!TryGetMouseCell(position, out int column, out int row))
         {
             return false;
         }
 
-        int button = ResolveCurrentMouseButton(e);
         return SendMouseSequence(button, column, row, released: false, motion: true, wheel: false, wheelUp: false);
     }
 
@@ -2160,12 +2174,19 @@ public partial class TerminalTabView : UserControl
             return TrySendAlternateScrollEvent(e);
         }
 
-        if (!TryGetMouseCell(e.GetPosition(TerminalScrollHost), out int column, out int row))
+        Point position = e.GetPosition(TerminalScrollHost);
+        bool wheelUp = e.Delta > 0;
+        if (_terminalBuffer.MousePixelMode)
+        {
+            GetMousePixel(position, out int px, out int py);
+            return SendMouseSequence(0, px, py, released: false, motion: false, wheel: true, wheelUp: wheelUp);
+        }
+
+        if (!TryGetMouseCell(position, out int column, out int row))
         {
             return false;
         }
 
-        bool wheelUp = e.Delta > 0;
         return SendMouseSequence(0, column, row, released: false, motion: false, wheel: true, wheelUp: wheelUp);
     }
 
@@ -2342,6 +2363,14 @@ public partial class TerminalTabView : UserControl
         column = Math.Clamp((int)(x / charWidth) + 1, 1, _currentColumns);
         row = Math.Clamp((int)(y / charHeight) + 1, 1, _currentRows);
         return true;
+    }
+
+    private void GetMousePixel(Point position, out int px, out int py)
+    {
+        double x = Math.Max(0, position.X - TerminalOutput.Padding.Left);
+        double y = Math.Max(0, position.Y - TerminalOutput.Padding.Top);
+        px = Math.Max(1, (int)Math.Round(x) + 1);
+        py = Math.Max(1, (int)Math.Round(y) + 1);
     }
 
     private (double Width, double Height) MeasureCharacterCell()
