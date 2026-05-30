@@ -176,7 +176,8 @@ public sealed class TerminalSurfaceControlTests
                     Colors.Black,
                     Bold: false,
                     Italic: false,
-                    Underline: false,
+                    UnderlineStyle: UnderlineStyle.None,
+                    UnderlineColor: null,
                     Strikethrough: false,
                     Overline: false,
                     Hyperlink: null)

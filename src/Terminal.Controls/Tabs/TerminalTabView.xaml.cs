@@ -42,6 +42,8 @@ public partial class TerminalTabView : UserControl
     private readonly DispatcherTimer _cursorBlinkTimer = new(DispatcherPriority.Background);
     private readonly DispatcherTimer _renderThrottleTimer = new(DispatcherPriority.Background);
     private readonly DispatcherTimer _synchronizedUpdateWatchdogTimer = new(DispatcherPriority.Background);
+    private readonly DispatcherTimer _toastDismissTimer = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(4) };
+    private System.Windows.Controls.Primitives.Popup? _toastPopup;
     private readonly SemaphoreSlim _sessionLifecycleGate = new(1, 1);
     private readonly object _pendingOutputLock = new();
     private readonly StringBuilder _pendingOutput = new();
@@ -99,6 +101,7 @@ public partial class TerminalTabView : UserControl
         _renderThrottleTimer.Tick += RenderThrottleTimer_Tick;
         _synchronizedUpdateWatchdogTimer.Interval = SynchronizedUpdateRenderTimeout;
         _synchronizedUpdateWatchdogTimer.Tick += SynchronizedUpdateWatchdogTimer_Tick;
+        _toastDismissTimer.Tick += ToastDismissTimer_Tick;
 
         TerminalOutput.HyperlinkActivated += TerminalOutput_HyperlinkActivated;
         TerminalInputProxy.AddHandler(TextCompositionManager.PreviewTextInputStartEvent, new TextCompositionEventHandler(TerminalInputProxy_PreviewTextInputStart), handledEventsToo: true);
@@ -109,6 +112,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ClipboardSetRequested += TerminalBuffer_ClipboardSetRequested;
         _terminalBuffer.ClipboardQueryRequested += TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
+        _terminalBuffer.NotificationRequested += TerminalBuffer_NotificationRequested;
 
         Loaded += OnLoaded;
     }
@@ -139,6 +143,8 @@ public partial class TerminalTabView : UserControl
         _cursorBlinkTimer.Stop();
         _renderThrottleTimer.Stop();
         _synchronizedUpdateWatchdogTimer.Stop();
+        _toastDismissTimer.Stop();
+        _toastPopup = null;
         ReleaseTerminalMouseCapture(force: true);
         ResetInputProxyText();
         UpdateUiState(_session is not null);
@@ -379,6 +385,12 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
+        if (TryHandleShiftArrowSelection(e))
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (IsImeInputInProgress(e))
         {
             return;
@@ -396,6 +408,22 @@ public partial class TerminalTabView : UserControl
         {
             e.Handled = true;
         }
+    }
+
+    private bool TryHandleShiftArrowSelection(KeyEventArgs e)
+    {
+        if ((Keyboard.Modifiers & ModifierKeys.Shift) == 0 || (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            return false;
+        }
+
+        Key key = GetEffectiveKey(e);
+        if (key is not (Key.Up or Key.Down or Key.Left or Key.Right))
+        {
+            return false;
+        }
+
+        return TerminalOutput.MoveKeyboardCursor(key, extend: true);
     }
 
     private void TerminalInputProxy_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -1803,11 +1831,13 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ClipboardSetRequested -= TerminalBuffer_ClipboardSetRequested;
         _terminalBuffer.ClipboardQueryRequested -= TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer.CurrentDirectoryChanged -= TerminalBuffer_CurrentDirectoryChanged;
+        _terminalBuffer.NotificationRequested -= TerminalBuffer_NotificationRequested;
         _terminalBuffer = nextBuffer;
         _terminalBuffer.InputSequenceGenerated += TerminalBuffer_InputSequenceGenerated;
         _terminalBuffer.ClipboardSetRequested += TerminalBuffer_ClipboardSetRequested;
         _terminalBuffer.ClipboardQueryRequested += TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
+        _terminalBuffer.NotificationRequested += TerminalBuffer_NotificationRequested;
     }
 
     private void TerminalBuffer_InputSequenceGenerated(object? sender, string text)
@@ -1862,6 +1892,67 @@ public partial class TerminalTabView : UserControl
         WorkingDirectoryTextBox.Text = canonicalPath;
         _suppressWorkingDirectoryTextChanged = false;
         UpdateTerminalChrome();
+    }
+
+    private void TerminalBuffer_NotificationRequested(object? sender, string message)
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        ShowToastNotification(message);
+    }
+
+    private void ShowToastNotification(string message)
+    {
+        _toastDismissTimer.Stop();
+
+        if (_toastPopup is null)
+        {
+            _toastPopup = new System.Windows.Controls.Primitives.Popup
+            {
+                Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+                PlacementTarget = this,
+                HorizontalOffset = 0,
+                VerticalOffset = -70,
+                AllowsTransparency = true,
+                StaysOpen = true
+            };
+        }
+
+        _toastPopup.Child = CreateToastBanner(message);
+        _toastPopup.IsOpen = true;
+        _toastDismissTimer.Start();
+    }
+
+    private void ToastDismissTimer_Tick(object? sender, EventArgs e)
+    {
+        _toastDismissTimer.Stop();
+        if (_toastPopup is not null)
+        {
+            _toastPopup.IsOpen = false;
+        }
+    }
+
+    private static System.Windows.UIElement CreateToastBanner(string message)
+    {
+        var border = new System.Windows.Controls.Border
+        {
+            Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(0xE8, 0x1E, 0x1E, 0x1E)),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(14, 10, 14, 10),
+            MinWidth = 240,
+            MaxWidth = 320,
+            Child = new System.Windows.Controls.TextBlock
+            {
+                Text = message,
+                Foreground = System.Windows.Media.Brushes.White,
+                TextWrapping = System.Windows.TextWrapping.Wrap,
+                FontSize = 13
+            }
+        };
+        return border;
     }
 
     private void TerminalBuffer_ClipboardQueryRequested(object? sender, string selectionTargets)

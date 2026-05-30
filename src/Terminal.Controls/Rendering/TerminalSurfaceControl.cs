@@ -31,6 +31,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private TerminalTextPosition? _selectionAnchor;
     private Point? _selectionAnchorPoint;
     private bool _selectionDragStarted;
+    private TerminalTextPosition _keyboardCursor;
+    private TerminalTextPosition? _keyboardAnchor;
     private double _extentWidth;
     private double _extentHeight;
     private double _lastReportedExtentWidth;
@@ -124,6 +126,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         _prevAmbiguousAsWide = ambiguousAsWide;
 
         CoerceSelection();
+        CoerceKeyboardCursor();
         UpdateScrollMetrics();
         InvalidateVisual();
     }
@@ -153,7 +156,90 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         }
 
         _selection = null;
+        _keyboardAnchor = null;
         InvalidateVisual();
+    }
+
+    public bool MoveKeyboardCursor(Key key, bool extend)
+    {
+        if (_lines.Count == 0)
+        {
+            return false;
+        }
+
+        if (!extend)
+        {
+            _keyboardAnchor = null;
+            _selection = null;
+            _keyboardCursor = AdvanceKeyboardCursor(_keyboardCursor, key);
+            InvalidateVisual();
+            return true;
+        }
+
+        if (!_keyboardAnchor.HasValue)
+        {
+            TerminalTextPosition start = _selection.HasValue
+                ? NormalizeSelection(_selection)!.Value.Start
+                : _keyboardCursor;
+            _keyboardAnchor = start;
+            _keyboardCursor = _selection.HasValue ? NormalizeSelection(_selection)!.Value.End : start;
+        }
+
+        _keyboardCursor = AdvanceKeyboardCursor(_keyboardCursor, key);
+        SelectRange(new TerminalTextRange(_keyboardAnchor.Value, _keyboardCursor));
+        return true;
+    }
+
+    private TerminalTextPosition AdvanceKeyboardCursor(TerminalTextPosition pos, Key key)
+    {
+        switch (key)
+        {
+            case Key.Right:
+            {
+                int lineIndex = Math.Clamp(pos.LineIndex, 0, _lines.Count - 1);
+                LineLayout line = _lines[lineIndex];
+                if (pos.TextIndex < line.Text.Length)
+                    return new TerminalTextPosition(lineIndex, pos.TextIndex + 1);
+                if (lineIndex < _lines.Count - 1)
+                    return new TerminalTextPosition(lineIndex + 1, 0);
+                return pos;
+            }
+            case Key.Left:
+            {
+                int lineIndex = Math.Clamp(pos.LineIndex, 0, _lines.Count - 1);
+                int textIndex = Math.Clamp(pos.TextIndex, 0, _lines[lineIndex].Text.Length);
+                if (textIndex > 0)
+                    return new TerminalTextPosition(lineIndex, textIndex - 1);
+                if (lineIndex > 0)
+                {
+                    int prev = lineIndex - 1;
+                    return new TerminalTextPosition(prev, _lines[prev].Text.Length);
+                }
+                return new TerminalTextPosition(lineIndex, textIndex);
+            }
+            case Key.Down:
+            {
+                int lineIndex = Math.Clamp(pos.LineIndex, 0, _lines.Count - 1);
+                if (lineIndex < _lines.Count - 1)
+                {
+                    int next = lineIndex + 1;
+                    return new TerminalTextPosition(next, Math.Min(pos.TextIndex, _lines[next].Text.Length));
+                }
+                return new TerminalTextPosition(lineIndex, Math.Min(pos.TextIndex, _lines[lineIndex].Text.Length));
+            }
+            case Key.Up:
+            {
+                int lineIndex = Math.Clamp(pos.LineIndex, 0, _lines.Count - 1);
+                if (lineIndex > 0)
+                {
+                    int prev = lineIndex - 1;
+                    return new TerminalTextPosition(prev, Math.Min(pos.TextIndex, _lines[prev].Text.Length));
+                }
+                return new TerminalTextPosition(0, Math.Min(pos.TextIndex, _lines[0].Text.Length));
+            }
+            default:
+                return pos;
+        }
     }
 
     public string GetSelectedText()
@@ -508,6 +594,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     private void SelectWord(int lineIndex, int textIndex)
     {
+        _keyboardAnchor = null;
         if (lineIndex < 0 || lineIndex >= _lines.Count)
         {
             return;
@@ -551,6 +638,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     private void SelectLine(int lineIndex)
     {
+        _keyboardAnchor = null;
         if (lineIndex < 0 || lineIndex >= _lines.Count)
         {
             return;
@@ -724,10 +812,14 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 _pixelsPerDip);
 
             text.SetFontWeight(segment.Snapshot.Bold ? FontWeights.SemiBold : FontWeights.Regular);
-            if (segment.Snapshot.Underline || segment.Snapshot.Strikethrough || segment.Snapshot.Overline)
+            if (segment.Snapshot.UnderlineStyle != UnderlineStyle.None || segment.Snapshot.Strikethrough || segment.Snapshot.Overline)
             {
                 var decorations = new TextDecorationCollection();
-                if (segment.Snapshot.Underline) foreach (TextDecoration d in TextDecorations.Underline) decorations.Add(d);
+                if (segment.Snapshot.UnderlineStyle != UnderlineStyle.None)
+                {
+                    AnsiTerminalBuffer.AddUnderlineDecorations(decorations, segment.Snapshot.UnderlineStyle, segment.Snapshot.UnderlineColor, segment.Snapshot.Foreground);
+                }
+
                 if (segment.Snapshot.Strikethrough) foreach (TextDecoration d in TextDecorations.Strikethrough) decorations.Add(d);
                 if (segment.Snapshot.Overline) foreach (TextDecoration d in TextDecorations.OverLine) decorations.Add(d);
                 text.SetTextDecorations(decorations);
@@ -850,6 +942,19 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         _selection = new TerminalTextRange(
             CoerceTextPosition(range.Start),
             CoerceTextPosition(range.End));
+    }
+
+    private void CoerceKeyboardCursor()
+    {
+        _keyboardCursor = _lines.Count == 0
+            ? new TerminalTextPosition(0, 0)
+            : CoerceTextPosition(_keyboardCursor);
+        if (_keyboardAnchor.HasValue)
+        {
+            _keyboardAnchor = _lines.Count == 0
+                ? new TerminalTextPosition(0, 0)
+                : CoerceTextPosition(_keyboardAnchor.Value);
+        }
     }
 
     private TerminalTextPosition CoerceTextPosition(TerminalTextPosition position)

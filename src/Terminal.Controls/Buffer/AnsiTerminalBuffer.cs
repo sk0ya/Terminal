@@ -38,6 +38,16 @@ internal enum TerminalCursorShape
     Bar
 }
 
+internal enum UnderlineStyle
+{
+    None,
+    Single,
+    Double,
+    Curly,
+    Dotted,
+    Dashed
+}
+
 internal sealed class AnsiTerminalBuffer
 {
     private const int MinColumns = 20;
@@ -140,6 +150,7 @@ internal sealed class AnsiTerminalBuffer
     public event EventHandler<string>? ClipboardSetRequested;
     public event EventHandler<string>? ClipboardQueryRequested;
     public event EventHandler<string>? CurrentDirectoryChanged;
+    public event EventHandler<string>? NotificationRequested;
 
     public AnsiTerminalBuffer(short columns, short rows, int scrollbackLimit = DefaultScrollbackLimit)
     {
@@ -868,6 +879,16 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
+        if (command == "9")
+        {
+            if (!string.IsNullOrEmpty(value))
+            {
+                NotificationRequested?.Invoke(this, value);
+            }
+
+            return;
+        }
+
         if (command == "7")
         {
             if (!string.IsNullOrEmpty(value))
@@ -1043,7 +1064,7 @@ internal sealed class AnsiTerminalBuffer
 
                 break;
             case 'm':
-                ApplySgr(parameters);
+                ApplySgr(ParseSgrParameters(paramText));
                 break;
             case 'n':
                 DispatchDeviceStatusReport(parameters, isPrivate);
@@ -1634,17 +1655,17 @@ internal sealed class AnsiTerminalBuffer
         return clone;
     }
 
-    private void ApplySgr(int?[] parameters)
+    private void ApplySgr(SgrParam[] tokens)
     {
-        if (parameters.Length == 0)
+        if (tokens.Length == 0)
         {
             _currentStyle = TerminalStyle.Default;
             return;
         }
 
-        for (int index = 0; index < parameters.Length; index++)
+        for (int index = 0; index < tokens.Length; index++)
         {
-            int code = parameters[index] ?? 0;
+            int code = tokens[index].Code;
             switch (code)
             {
                 case 0:
@@ -1660,7 +1681,7 @@ internal sealed class AnsiTerminalBuffer
                     _currentStyle = _currentStyle with { Italic = true };
                     break;
                 case 4:
-                    _currentStyle = _currentStyle with { Underline = true };
+                    _currentStyle = _currentStyle with { UnderlineStyle = ResolveUnderlineStyle(tokens[index]) };
                     break;
                 case 5:
                 case 6:
@@ -1682,7 +1703,7 @@ internal sealed class AnsiTerminalBuffer
                     _currentStyle = _currentStyle with { Italic = false };
                     break;
                 case 24:
-                    _currentStyle = _currentStyle with { Underline = false };
+                    _currentStyle = _currentStyle with { UnderlineStyle = UnderlineStyle.None };
                     break;
                 case 25:
                     _currentStyle = _currentStyle with { Blink = false };
@@ -1701,6 +1722,9 @@ internal sealed class AnsiTerminalBuffer
                     break;
                 case 55:
                     _currentStyle = _currentStyle with { Overline = false };
+                    break;
+                case 59:
+                    _currentStyle = _currentStyle with { UnderlineColor = null };
                     break;
                 case >= 30 and <= 37:
                     _currentStyle = _currentStyle with { Foreground = AnsiPalette[code - 30] };
@@ -1722,15 +1746,20 @@ internal sealed class AnsiTerminalBuffer
                     break;
                 case 38:
                 case 48:
-                    if (TryReadExtendedColor(parameters, ref index, out Color color))
+                case 58:
+                    if (TryReadExtendedColor(tokens, ref index, out Color color))
                     {
                         if (code == 38)
                         {
                             _currentStyle = _currentStyle with { Foreground = color };
                         }
-                        else
+                        else if (code == 48)
                         {
                             _currentStyle = _currentStyle with { Background = color };
+                        }
+                        else
+                        {
+                            _currentStyle = _currentStyle with { UnderlineColor = color };
                         }
                     }
 
@@ -1739,32 +1768,69 @@ internal sealed class AnsiTerminalBuffer
         }
     }
 
-    private static bool TryReadExtendedColor(int?[] parameters, ref int index, out Color color)
+    private static UnderlineStyle ResolveUnderlineStyle(SgrParam token)
+    {
+        if (token.Sub is null || token.Sub.Length == 0)
+        {
+            return UnderlineStyle.Single;
+        }
+
+        return token.Sub[0] switch
+        {
+            0 => UnderlineStyle.None,
+            2 => UnderlineStyle.Double,
+            3 => UnderlineStyle.Curly,
+            4 => UnderlineStyle.Dotted,
+            5 => UnderlineStyle.Dashed,
+            _ => UnderlineStyle.Single
+        };
+    }
+
+    private static bool TryReadExtendedColor(SgrParam[] tokens, ref int index, out Color color)
     {
         color = default;
-        if (index + 1 >= parameters.Length || !parameters[index + 1].HasValue)
+        SgrParam current = tokens[index];
+
+        if (current.Sub is { Length: >= 1 })
+        {
+            int mode = current.Sub[0];
+            if (mode == 5 && current.Sub.Length >= 2)
+            {
+                color = ResolveXtermColor(current.Sub[1]);
+                return true;
+            }
+
+            if (mode == 2 && current.Sub.Length >= 4)
+            {
+                color = Color.FromRgb(
+                    (byte)Math.Clamp(current.Sub[1], 0, 255),
+                    (byte)Math.Clamp(current.Sub[2], 0, 255),
+                    (byte)Math.Clamp(current.Sub[3], 0, 255));
+                return true;
+            }
+
+            return false;
+        }
+
+        if (index + 1 >= tokens.Length)
         {
             return false;
         }
 
-        int mode = parameters[index + 1]!.Value;
-        if (mode == 5 && index + 2 < parameters.Length && parameters[index + 2].HasValue)
+        int legacyMode = tokens[index + 1].Code;
+        if (legacyMode == 5 && index + 2 < tokens.Length)
         {
-            color = ResolveXtermColor(parameters[index + 2]!.Value);
+            color = ResolveXtermColor(tokens[index + 2].Code);
             index += 2;
             return true;
         }
 
-        if (mode == 2 &&
-            index + 4 < parameters.Length &&
-            parameters[index + 2].HasValue &&
-            parameters[index + 3].HasValue &&
-            parameters[index + 4].HasValue)
+        if (legacyMode == 2 && index + 4 < tokens.Length)
         {
             color = Color.FromRgb(
-                (byte)Math.Clamp(parameters[index + 2]!.Value, 0, 255),
-                (byte)Math.Clamp(parameters[index + 3]!.Value, 0, 255),
-                (byte)Math.Clamp(parameters[index + 4]!.Value, 0, 255));
+                (byte)Math.Clamp(tokens[index + 2].Code, 0, 255),
+                (byte)Math.Clamp(tokens[index + 3].Code, 0, 255),
+                (byte)Math.Clamp(tokens[index + 4].Code, 0, 255));
             index += 4;
             return true;
         }
@@ -2676,7 +2742,8 @@ internal sealed class AnsiTerminalBuffer
             style.Value.Background,
             style.Value.Bold,
             style.Value.Italic,
-            style.Value.Underline,
+            style.Value.UnderlineStyle,
+            style.Value.UnderlineColor,
             style.Value.Strikethrough,
             style.Value.Overline,
             style.Value.Hyperlink));
@@ -2699,30 +2766,66 @@ internal sealed class AnsiTerminalBuffer
                 Foreground = GetBrush(segment.Foreground),
                 Background = GetBrush(segment.Background),
             };
-            ApplyTextDecorations(hyperlink, segment.Underline, segment.Strikethrough, segment.Overline);
+            ApplyTextDecorations(hyperlink, segment.UnderlineStyle, segment.UnderlineColor, segment.Strikethrough, segment.Overline);
             inlines.Add(hyperlink);
             return;
         }
 
-        ApplyTextDecorations(run, segment.Underline, segment.Strikethrough, segment.Overline);
+        ApplyTextDecorations(run, segment.UnderlineStyle, segment.UnderlineColor, segment.Strikethrough, segment.Overline);
         run.Foreground = GetBrush(segment.Foreground);
         run.Background = GetBrush(segment.Background);
         inlines.Add(run);
     }
 
-    private static void ApplyTextDecorations(Inline element, bool underline, bool strikethrough, bool overline)
+    private static void ApplyTextDecorations(Inline element, UnderlineStyle underlineStyle, Color? underlineColor, bool strikethrough, bool overline)
     {
-        if (!underline && !strikethrough && !overline)
+        if (underlineStyle == UnderlineStyle.None && !strikethrough && !overline)
         {
             element.TextDecorations = null;
             return;
         }
 
         var combined = new TextDecorationCollection();
-        if (underline) foreach (TextDecoration d in TextDecorations.Underline) combined.Add(d);
+        if (underlineStyle != UnderlineStyle.None)
+        {
+            AddUnderlineDecorations(combined, underlineStyle, underlineColor, foreground: null);
+        }
+
         if (strikethrough) foreach (TextDecoration d in TextDecorations.Strikethrough) combined.Add(d);
         if (overline) foreach (TextDecoration d in TextDecorations.OverLine) combined.Add(d);
         element.TextDecorations = combined;
+    }
+
+    internal static void AddUnderlineDecorations(TextDecorationCollection decorations, UnderlineStyle style, Color? underlineColor, Color? foreground)
+    {
+        Brush? brush = underlineColor.HasValue
+            ? GetBrush(underlineColor.Value)
+            : foreground.HasValue ? GetBrush(foreground.Value) : null;
+
+        if (style == UnderlineStyle.Double)
+        {
+            Pen? doublePen = brush is null ? null : new Pen(brush, 1);
+            decorations.Add(new TextDecoration(TextDecorationLocation.Underline, doublePen, 0, TextDecorationUnit.FontRecommended, TextDecorationUnit.FontRecommended));
+            decorations.Add(new TextDecoration(TextDecorationLocation.Underline, doublePen, 2, TextDecorationUnit.Pixel, TextDecorationUnit.FontRecommended));
+            return;
+        }
+
+        DashStyle? dashStyle = style switch
+        {
+            UnderlineStyle.Dotted => DashStyles.Dot,
+            UnderlineStyle.Dashed => DashStyles.Dash,
+            _ => null
+        };
+
+        if (brush is null && dashStyle is null)
+        {
+            foreach (TextDecoration d in TextDecorations.Underline) decorations.Add(d);
+            return;
+        }
+
+        var pen = new Pen(brush ?? Brushes.Transparent, 1);
+        if (dashStyle is not null) pen.DashStyle = dashStyle;
+        decorations.Add(new TextDecoration(TextDecorationLocation.Underline, pen, 0, TextDecorationUnit.FontRecommended, TextDecorationUnit.FontRecommended));
     }
 
     private static void FlushRun(InlineCollection inlines, StringBuilder text, ResolvedStyle? style)
@@ -2745,13 +2848,13 @@ internal sealed class AnsiTerminalBuffer
                 Foreground = GetBrush(style.Value.Foreground),
                 Background = GetBrush(style.Value.Background),
             };
-            ApplyTextDecorations(hyperlink, style.Value.Underline, style.Value.Strikethrough, style.Value.Overline);
+            ApplyTextDecorations(hyperlink, style.Value.UnderlineStyle, style.Value.UnderlineColor, style.Value.Strikethrough, style.Value.Overline);
             inlines.Add(hyperlink);
             text.Clear();
             return;
         }
 
-        ApplyTextDecorations(run, style.Value.Underline, style.Value.Strikethrough, style.Value.Overline);
+        ApplyTextDecorations(run, style.Value.UnderlineStyle, style.Value.UnderlineColor, style.Value.Strikethrough, style.Value.Overline);
         run.Foreground = GetBrush(style.Value.Foreground);
         run.Background = GetBrush(style.Value.Background);
         inlines.Add(run);
@@ -2819,7 +2922,7 @@ internal sealed class AnsiTerminalBuffer
             (foreground, background) = (background, foreground);
         }
 
-        return new ResolvedStyle(foreground, background, style.Bold, style.Italic, style.Underline, style.Strikethrough, style.Overline, hyperlink);
+        return new ResolvedStyle(foreground, background, style.Bold, style.Italic, style.UnderlineStyle, style.UnderlineColor, style.Strikethrough, style.Overline, hyperlink);
     }
 
     private static Color DimColor(Color color) =>
@@ -2921,6 +3024,49 @@ internal sealed class AnsiTerminalBuffer
         return result;
     }
 
+    private static SgrParam[] ParseSgrParameters(string paramText)
+    {
+        if (string.IsNullOrEmpty(paramText))
+        {
+            return [];
+        }
+
+        string[] tokens = paramText.Split(';');
+        var result = new SgrParam[tokens.Length];
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            string token = tokens[i];
+            int colon = token.IndexOf(':');
+            if (colon >= 0)
+            {
+                int code = int.TryParse(token.AsSpan(0, colon), out int c) ? c : 0;
+                string[] subParts = token[(colon + 1)..].Split(':');
+                var nonEmpty = new List<int>(subParts.Length);
+                foreach (string part in subParts)
+                {
+                    if (part.Length > 0)
+                    {
+                        nonEmpty.Add(int.TryParse(part, out int s) ? s : 0);
+                    }
+                }
+
+                result[i] = nonEmpty.Count > 0 ? new SgrParam(code, nonEmpty.ToArray()) : new SgrParam(code);
+            }
+            else
+            {
+                result[i] = new SgrParam(int.TryParse(token, out int code) ? code : 0);
+            }
+        }
+
+        return result;
+    }
+
+    private readonly struct SgrParam(int code, int[]? sub = null)
+    {
+        public readonly int Code = code;
+        public readonly int[]? Sub = sub;
+    }
+
     private static int GetParameter(int?[] parameters, int index, int defaultValue)
     {
         if (index >= parameters.Length)
@@ -2985,14 +3131,15 @@ internal sealed class AnsiTerminalBuffer
         bool Bold,
         bool Dim,
         bool Italic,
-        bool Underline,
+        UnderlineStyle UnderlineStyle,
+        Color? UnderlineColor,
         bool Blink,
         bool Inverse,
         bool Invisible,
         bool Strikethrough,
         bool Overline)
     {
-        public static readonly TerminalStyle Default = new(null, null, false, false, false, false, false, false, false, false, false);
+        public static readonly TerminalStyle Default = new(null, null, false, false, false, UnderlineStyle.None, null, false, false, false, false, false);
     }
 
     private readonly record struct ResolvedStyle(
@@ -3000,7 +3147,8 @@ internal sealed class AnsiTerminalBuffer
         Color Background,
         bool Bold,
         bool Italic,
-        bool Underline,
+        UnderlineStyle UnderlineStyle,
+        Color? UnderlineColor,
         bool Strikethrough,
         bool Overline,
         string? Hyperlink);
@@ -3042,7 +3190,8 @@ internal sealed class AnsiTerminalBuffer
         Color Background,
         bool Bold,
         bool Italic,
-        bool Underline,
+        UnderlineStyle UnderlineStyle,
+        Color? UnderlineColor,
         bool Strikethrough,
         bool Overline,
         string? Hyperlink);
