@@ -1777,4 +1777,127 @@ public sealed class AnsiTerminalBufferTests
 
         Assert.Equal("Z", buffer.GetScreenLineText(0).TrimEnd());
     }
+
+    [Fact]
+    public void DeccolmMode3hSwitchesTo132Columns()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 10);
+
+        buffer.Process("ABCDEF");
+        buffer.Process("[?3h");
+
+        Assert.Equal(0, buffer.CursorRow);
+        Assert.Equal(0, buffer.CursorColumn);
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void DeccolmMode3lRestoresTo80Columns()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 10);
+
+        buffer.Process("[?3h");
+        buffer.Process("[?3l");
+
+        Assert.Equal(0, buffer.CursorRow);
+        Assert.Equal(0, buffer.CursorColumn);
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void DeccolmClearsScreenAndResetsCursorOnSwitch()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 10);
+
+        buffer.Process("Hello\r\nWorld");
+        buffer.Process("[?3h");
+
+        Assert.Equal(0, buffer.CursorRow);
+        Assert.Equal(0, buffer.CursorColumn);
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(1).TrimEnd());
+    }
+
+    [Fact]
+    public void DecslrmMode69SetsMarginsAndMovesCursorHome()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 10);
+
+        buffer.Process("[?69h");
+        buffer.Process("[5;20s");
+
+        Assert.Equal(0, buffer.CursorRow);
+        Assert.Equal(0, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void DecslrmCursorForwardClampedToRightMargin()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        buffer.Process("[?69h");
+        buffer.Process("[3;10s");
+        buffer.Process("[1;1H");
+        buffer.Process("[50C");
+
+        Assert.Equal(9, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void DecslrmCursorBackwardClampedToLeftMargin()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        buffer.Process("[?69h");
+        buffer.Process("[3;10s");
+        buffer.Process("[1;8H");
+        buffer.Process("[50D");
+
+        Assert.Equal(2, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void DecslrmDisabledRestoresFullColumnRange()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        buffer.Process("[?69h");
+        buffer.Process("[3;10s");
+        buffer.Process("[?69l");
+        buffer.Process("[1;1H");
+        buffer.Process("[50C");
+
+        Assert.Equal(39, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void DecslrmCsiSActsAsSaveWhenLrmDisabled()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("[5;10H");
+        buffer.Process("[s");
+        buffer.Process("[1;1H");
+        buffer.Process("[u");
+        buffer.Process("[6n");
+
+        Assert.Equal("[5;10R", emitted);
+    }
+
+    [Fact]
+    public void DecslrmEraseInLineRespectsRightMargin()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 5);
+
+        buffer.Process("ABCDEFGHIJ");
+        buffer.Process("[?69h");
+        buffer.Process("[1;5s");
+        buffer.Process("[1;3H");
+        buffer.Process("[0K");
+
+        string line = buffer.GetScreenLineText(0).TrimEnd();
+        Assert.Equal("AB   FGHIJ", line);
+    }
 }
