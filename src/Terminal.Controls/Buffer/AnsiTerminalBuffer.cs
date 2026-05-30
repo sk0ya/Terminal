@@ -1682,6 +1682,7 @@ internal sealed class AnsiTerminalBuffer
         _savedStyle = TerminalStyle.Default;
         _currentHyperlink = null;
         _savedHyperlink = null;
+        _modifyOtherKeys = 0;
         ResetMargins();
     }
 
@@ -1710,6 +1711,7 @@ internal sealed class AnsiTerminalBuffer
         _savedStyle = backup.SavedStyle;
         _currentHyperlink = backup.CurrentHyperlink;
         _savedHyperlink = backup.SavedHyperlink;
+        _modifyOtherKeys = backup.ModifyOtherKeys;
         _primaryScreenBackup = null;
 
         if (_rows != targetRows || _columns != targetColumns)
@@ -1747,7 +1749,8 @@ internal sealed class AnsiTerminalBuffer
             _currentStyle,
             _savedStyle,
             _currentHyperlink,
-            _savedHyperlink);
+            _savedHyperlink,
+            _modifyOtherKeys);
     }
 
     private void UpdateSyntheticAlternateScreenFromTitle(string previousTitle, string nextTitle)
@@ -3258,7 +3261,8 @@ internal sealed class AnsiTerminalBuffer
         TerminalStyle Style,
         TerminalStyle SavedStyle,
         string? CurrentHyperlink,
-        string? SavedHyperlink);
+        string? SavedHyperlink,
+        int ModifyOtherKeys);
 
     private readonly record struct TerminalCell(
         string Text,
