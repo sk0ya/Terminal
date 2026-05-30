@@ -135,8 +135,18 @@ internal static class TerminalKeyChordTranslator
         Key key,
         ModifierKeys modifiers,
         bool applicationCursorKeys,
-        int modifyOtherKeysLevel)
+        int modifyOtherKeysLevel,
+        int kittyKeyboardFlags = 0)
     {
+        if (TerminalInputEncoder.ShouldUseKittyEncoding(key, modifiers, kittyKeyboardFlags))
+        {
+            int? codePoint = GetKittyFunctionalKeyCode(key);
+            if (codePoint.HasValue)
+            {
+                return TerminalInputEncoder.EncodeKittyKey(codePoint.Value, modifiers, kittyKeyboardFlags);
+            }
+        }
+
         if (modifyOtherKeysLevel >= 2 && modifiers != ModifierKeys.None)
         {
             switch (key)
@@ -162,20 +172,56 @@ internal static class TerminalKeyChordTranslator
         bool applicationCursorKeys,
         bool supportsTerminalInput)
     {
-        return TranslateEnterKey(modifiers, applicationCursorKeys, supportsTerminalInput, 0);
+        return TranslateEnterKey(modifiers, applicationCursorKeys, supportsTerminalInput, 0, 0);
     }
 
     public static string? TranslateEnterKey(
         ModifierKeys modifiers,
         bool applicationCursorKeys,
         bool supportsTerminalInput,
-        int modifyOtherKeysLevel)
+        int modifyOtherKeysLevel,
+        int kittyKeyboardFlags = 0)
     {
         if (!supportsTerminalInput && modifiers == ModifierKeys.None)
         {
             return "\r\n";
         }
 
-        return TranslateSpecialKey(Key.Enter, modifiers, applicationCursorKeys, modifyOtherKeysLevel);
+        return TranslateSpecialKey(Key.Enter, modifiers, applicationCursorKeys, modifyOtherKeysLevel, kittyKeyboardFlags);
+    }
+
+    private static int? GetKittyFunctionalKeyCode(Key key)
+    {
+        return key switch
+        {
+            Key.Escape => 27,
+            Key.Enter => 13,
+            Key.Tab => 9,
+            Key.Back => 127,
+            Key.Space => 32,
+            Key.Up => 57352,
+            Key.Down => 57353,
+            Key.Right => 57354,
+            Key.Left => 57355,
+            Key.Insert => 57348,
+            Key.Delete => 57351,
+            Key.PageUp => 57349,
+            Key.PageDown => 57350,
+            Key.Home => 57360,
+            Key.End => 57361,
+            Key.F1 => 57364,
+            Key.F2 => 57365,
+            Key.F3 => 57366,
+            Key.F4 => 57367,
+            Key.F5 => 57368,
+            Key.F6 => 57369,
+            Key.F7 => 57370,
+            Key.F8 => 57371,
+            Key.F9 => 57372,
+            Key.F10 => 57373,
+            Key.F11 => 57374,
+            Key.F12 => 57375,
+            _ => null
+        };
     }
 }

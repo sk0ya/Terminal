@@ -576,7 +576,8 @@ public partial class TerminalTabView : UserControl
             key,
             modifiers,
             _terminalBuffer.ApplicationCursorKeysEnabled,
-            _terminalBuffer.ModifyOtherKeysLevel);
+            _terminalBuffer.ModifyOtherKeysLevel,
+            _terminalBuffer.KittyKeyboardFlags);
 
         return sequence is not null && SendTerminalInput(sequence);
     }
@@ -592,7 +593,8 @@ public partial class TerminalTabView : UserControl
             GetTerminalModifiers(),
             _terminalBuffer.ApplicationCursorKeysEnabled,
             SupportsTerminalInput(),
-            _terminalBuffer.ModifyOtherKeysLevel);
+            _terminalBuffer.ModifyOtherKeysLevel,
+            _terminalBuffer.KittyKeyboardFlags);
 
         return sequence is not null && SendTerminalInput(sequence);
     }
@@ -2179,7 +2181,8 @@ public partial class TerminalTabView : UserControl
             directionKey,
             ModifierKeys.None,
             _terminalBuffer.ApplicationCursorKeysEnabled,
-            _terminalBuffer.ModifyOtherKeysLevel);
+            _terminalBuffer.ModifyOtherKeysLevel,
+            _terminalBuffer.KittyKeyboardFlags);
         if (sequence is null)
         {
             return false;
