@@ -68,6 +68,7 @@ public partial class TerminalTabView : UserControl
     private readonly string _initialCommandLine;
     private readonly string _initialWorkingDirectory;
     private bool _hasStartedInitialSession;
+    private readonly List<int> _shellCommandLines = [];
 
     public event EventHandler<string>? HeaderTitleChanged;
 
@@ -113,6 +114,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ClipboardQueryRequested += TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.NotificationRequested += TerminalBuffer_NotificationRequested;
+        _terminalBuffer.ShellCommandZoneReceived += TerminalBuffer_ShellCommandZoneReceived;
 
         Loaded += OnLoaded;
     }
@@ -496,6 +498,16 @@ public partial class TerminalTabView : UserControl
         {
             PasteFromClipboard();
             return true;
+        }
+
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.Up)
+        {
+            return TryScrollToAdjacentCommandLine(upward: true);
+        }
+
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.Down)
+        {
+            return TryScrollToAdjacentCommandLine(upward: false);
         }
 
         return false;
@@ -1167,6 +1179,21 @@ public partial class TerminalTabView : UserControl
         }
 
         string text = Clipboard.GetText();
+
+        if (!_terminalBuffer.BracketedPasteEnabled && (text.Contains('\n') || text.Contains('\r')))
+        {
+            var result = MessageBox.Show(
+                Window.GetWindow(this),
+                "クリップボードのテキストに改行が含まれています。\n複数行を一度に送信すると意図しないコマンド実行が起きる可能性があります。\n\n貼り付けますか？",
+                "複数行貼り付けの確認",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning);
+            if (result != MessageBoxResult.OK)
+            {
+                return;
+            }
+        }
+
         if (_terminalBuffer.BracketedPasteEnabled)
         {
             text = $"\u001b[200~{text}\u001b[201~";
@@ -1832,12 +1859,15 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ClipboardQueryRequested -= TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer.CurrentDirectoryChanged -= TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.NotificationRequested -= TerminalBuffer_NotificationRequested;
+        _terminalBuffer.ShellCommandZoneReceived -= TerminalBuffer_ShellCommandZoneReceived;
+        _shellCommandLines.Clear();
         _terminalBuffer = nextBuffer;
         _terminalBuffer.InputSequenceGenerated += TerminalBuffer_InputSequenceGenerated;
         _terminalBuffer.ClipboardSetRequested += TerminalBuffer_ClipboardSetRequested;
         _terminalBuffer.ClipboardQueryRequested += TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.NotificationRequested += TerminalBuffer_NotificationRequested;
+        _terminalBuffer.ShellCommandZoneReceived += TerminalBuffer_ShellCommandZoneReceived;
     }
 
     private void TerminalBuffer_InputSequenceGenerated(object? sender, string text)
@@ -1902,6 +1932,79 @@ public partial class TerminalTabView : UserControl
         }
 
         ShowToastNotification(message);
+    }
+
+    private void TerminalBuffer_ShellCommandZoneReceived(object? sender, ShellCommandZoneEventArgs e)
+    {
+        if (e.ZoneType == ShellCommandZoneType.PromptStart)
+        {
+            _shellCommandLines.Add(e.AbsoluteLine);
+        }
+        else if (e.ZoneType == ShellCommandZoneType.CommandDone && e.ExitCode.HasValue && e.ExitCode.Value != 0)
+        {
+            SetStatus($"Command exited with code {e.ExitCode.Value}.");
+        }
+    }
+
+    private bool TryScrollToAdjacentCommandLine(bool upward)
+    {
+        if (_shellCommandLines.Count == 0)
+        {
+            return false;
+        }
+
+        var (_, charHeight) = MeasureCharacterCell();
+        int currentTopLine = (int)(TerminalScrollHost.VerticalOffset / Math.Max(charHeight, 1.0));
+
+        if (upward)
+        {
+            int targetLine = -1;
+            for (int i = _shellCommandLines.Count - 1; i >= 0; i--)
+            {
+                if (_shellCommandLines[i] < currentTopLine)
+                {
+                    targetLine = _shellCommandLines[i];
+                    break;
+                }
+            }
+
+            if (targetLine < 0)
+            {
+                return false;
+            }
+
+            ScrollToAbsoluteLine(targetLine);
+        }
+        else
+        {
+            int targetLine = -1;
+            foreach (int line in _shellCommandLines)
+            {
+                if (line > currentTopLine)
+                {
+                    targetLine = line;
+                    break;
+                }
+            }
+
+            if (targetLine < 0)
+            {
+                return false;
+            }
+
+            ScrollToAbsoluteLine(targetLine);
+        }
+
+        return true;
+    }
+
+    private void ScrollToAbsoluteLine(int absoluteLine)
+    {
+        var (_, charHeight) = MeasureCharacterCell();
+        double offset = absoluteLine * charHeight;
+        TerminalScrollHost.ScrollToVerticalOffset(offset);
+        _followTerminalOutput = false;
+        UpdateFollowOutputState();
     }
 
     private void ShowToastNotification(string message)

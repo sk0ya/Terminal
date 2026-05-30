@@ -1387,4 +1387,143 @@ public sealed class AnsiTerminalBufferTests
 
         Assert.Equal("/home/user/project", receivedPath);
     }
+
+
+    [Fact]
+    public void Osc4SetsAnsiPaletteColorAndAffectsRendering()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("[31mA");
+        var snapshotBefore = buffer.CreateRenderSnapshot(showCursor: false);
+        var colorBefore = snapshotBefore.Lines[0].Segments[0].Foreground;
+
+        buffer.Process("]4;1;rgb:ff/00/00");
+
+        buffer.Process("\r[2K[31mA");
+        var snapshotAfter = buffer.CreateRenderSnapshot(showCursor: false);
+        var colorAfter = snapshotAfter.Lines[0].Segments[0].Foreground;
+
+        Assert.NotEqual(colorBefore, colorAfter);
+        Assert.Equal(255, colorAfter.R);
+        Assert.Equal(0, colorAfter.G);
+        Assert.Equal(0, colorAfter.B);
+    }
+
+    [Fact]
+    public void Osc4QueryEmitsCurrentPaletteColor()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? response = null;
+        buffer.InputSequenceGenerated += (_, seq) => response = seq;
+
+        buffer.Process("]4;1;?");
+
+        Assert.NotNull(response);
+        Assert.StartsWith("]4;1;rgb:", response);
+    }
+
+    [Fact]
+    public void Osc4ResetOnHardReset()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("]4;0;rgb:ff/00/00");
+        buffer.Process("c");
+
+        string? response = null;
+        buffer.InputSequenceGenerated += (_, seq) => response = seq;
+        buffer.Process("]4;0;?");
+
+        Assert.NotNull(response);
+        Assert.DoesNotContain("ff/00/00", response, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Osc4HashColorFormatIsSupported()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("]4;2;#00ff80[32mA");
+        var snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        var color = snapshot.Lines[0].Segments[0].Foreground;
+
+        Assert.Equal(0, color.R);
+        Assert.Equal(255, color.G);
+        Assert.Equal(128, color.B);
+    }
+
+    [Fact]
+    public void Osc133PromptStartFiresShellZoneEvent()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 24);
+        var events = new List<ShellCommandZoneEventArgs>();
+        buffer.ShellCommandZoneReceived += (_, e) => events.Add(e);
+
+        buffer.Process("]133;A");
+
+        Assert.Single(events);
+        Assert.Equal(ShellCommandZoneType.PromptStart, events[0].ZoneType);
+    }
+
+    [Fact]
+    public void Osc133CommandExecutedFiresShellZoneEvent()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 24);
+        var events = new List<ShellCommandZoneEventArgs>();
+        buffer.ShellCommandZoneReceived += (_, e) => events.Add(e);
+
+        buffer.Process("]133;C");
+
+        Assert.Single(events);
+        Assert.Equal(ShellCommandZoneType.CommandExecuted, events[0].ZoneType);
+    }
+
+    [Fact]
+    public void Osc133CommandDoneWithExitCodeFiresShellZoneEvent()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 24);
+        var events = new List<ShellCommandZoneEventArgs>();
+        buffer.ShellCommandZoneReceived += (_, e) => events.Add(e);
+
+        buffer.Process("]133;D;42");
+
+        Assert.Single(events);
+        Assert.Equal(ShellCommandZoneType.CommandDone, events[0].ZoneType);
+        Assert.Equal(42, events[0].ExitCode);
+    }
+
+    [Fact]
+    public void Osc633FiresSameEventsAsOsc133()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 24);
+        var events = new List<ShellCommandZoneEventArgs>();
+        buffer.ShellCommandZoneReceived += (_, e) => events.Add(e);
+
+        buffer.Process("]633;A");
+        buffer.Process("]633;D;0");
+
+        Assert.Equal(2, events.Count);
+        Assert.Equal(ShellCommandZoneType.PromptStart, events[0].ZoneType);
+        Assert.Equal(ShellCommandZoneType.CommandDone, events[1].ZoneType);
+        Assert.Equal(0, events[1].ExitCode);
+    }
+
+    [Fact]
+    public void Osc133AbsoluteLineIncludesScrollback()
+    {
+        var buffer = new AnsiTerminalBuffer(10, 5);
+
+        for (int i = 0; i < 8; i++)
+        {
+            buffer.Process("line\n");
+        }
+
+        int absoluteLine = -1;
+        buffer.ShellCommandZoneReceived += (_, e) => absoluteLine = e.AbsoluteLine;
+        buffer.Process("]133;A");
+
+        Assert.True(absoluteLine > 0);
+        Assert.Equal(buffer.ScrollbackLineCount + buffer.CursorRow, absoluteLine);
+    }
 }

@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -8,6 +8,21 @@ using System.Globalization;
 using Terminal.Unicode;
 
 namespace Terminal.Buffer;
+
+internal enum ShellCommandZoneType
+{
+    PromptStart,
+    CommandStart,
+    CommandExecuted,
+    CommandDone
+}
+
+internal sealed class ShellCommandZoneEventArgs(ShellCommandZoneType zoneType, int absoluteLine, int? exitCode) : EventArgs
+{
+    public ShellCommandZoneType ZoneType { get; } = zoneType;
+    public int AbsoluteLine { get; } = absoluteLine;
+    public int? ExitCode { get; } = exitCode;
+}
 
 internal enum TerminalMouseTrackingMode
 {
@@ -57,7 +72,7 @@ internal sealed class AnsiTerminalBuffer
     private static readonly Color DefaultForeground = Color.FromRgb(0xE3, 0xE3, 0xE3);
     private static readonly Color DefaultBackground = Color.FromRgb(0x11, 0x11, 0x11);
     private static readonly Color CursorAccent = Color.FromRgb(0x5F, 0xAF, 0xFF);
-    private static readonly Color[] AnsiPalette =
+    private static readonly Color[] DefaultAnsiPalette =
     {
         Color.FromRgb(0x1C, 0x1C, 0x1C),
         Color.FromRgb(0xC5, 0x0F, 0x1F),
@@ -79,6 +94,7 @@ internal sealed class AnsiTerminalBuffer
     private static readonly Dictionary<Color, SolidColorBrush> BrushCache = [];
     private static readonly char[] CsiIntermediateCharacters = [' ', '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/'];
 
+    private readonly Color[] _ansiPalette = (Color[])DefaultAnsiPalette.Clone();
     private readonly int _scrollbackLimit;
     private readonly List<TerminalLine> _scrollback = [];
     private readonly List<TerminalRenderLineSnapshot> _scrollbackRenderCache = [];
@@ -151,6 +167,7 @@ internal sealed class AnsiTerminalBuffer
     public event EventHandler<string>? ClipboardQueryRequested;
     public event EventHandler<string>? CurrentDirectoryChanged;
     public event EventHandler<string>? NotificationRequested;
+    public event EventHandler<ShellCommandZoneEventArgs>? ShellCommandZoneReceived;
 
     public AnsiTerminalBuffer(short columns, short rows, int scrollbackLimit = DefaultScrollbackLimit)
     {
@@ -601,6 +618,7 @@ internal sealed class AnsiTerminalBuffer
         _state = ParserState.Normal;
         _csiBuffer.Clear();
         _oscBuffer.Clear();
+        Array.Copy(DefaultAnsiPalette, _ansiPalette, DefaultAnsiPalette.Length);
         ResetTabStops();
         ResetMargins();
         ResetScreenRenderCache();
@@ -910,10 +928,122 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
+        if (command == "4")
+        {
+            DispatchOscPaletteChange(value);
+            return;
+        }
+
+        if (command is "133" or "633")
+        {
+            DispatchOscShellIntegration(value);
+            return;
+        }
+
         if (command == "52")
         {
             DispatchOscClipboard(value);
         }
+    }
+
+    private void DispatchOscPaletteChange(string value)
+    {
+        string[] parts = value.Split(';');
+        for (int i = 0; i + 1 < parts.Length; i += 2)
+        {
+            if (!int.TryParse(parts[i], out int paletteIndex) || paletteIndex < 0 || paletteIndex >= _ansiPalette.Length)
+            {
+                continue;
+            }
+
+            string colorSpec = parts[i + 1];
+            if (colorSpec == "?")
+            {
+                EmitInputSequence($"]4;{paletteIndex};{FormatRgbColor(_ansiPalette[paletteIndex])}");
+            }
+            else if (TryParseOscColorSpec(colorSpec, out Color color))
+            {
+                _ansiPalette[paletteIndex] = color;
+                InvalidateScreenRenderCache();
+            }
+        }
+    }
+
+    private void DispatchOscShellIntegration(string value)
+    {
+        int separatorIndex = value.IndexOf(';');
+        string type = separatorIndex >= 0 ? value[..separatorIndex] : value;
+        string parameters = separatorIndex >= 0 ? value[(separatorIndex + 1)..] : string.Empty;
+
+        ShellCommandZoneType? zoneType = type switch
+        {
+            "A" => ShellCommandZoneType.PromptStart,
+            "B" => ShellCommandZoneType.CommandStart,
+            "C" => ShellCommandZoneType.CommandExecuted,
+            "D" => ShellCommandZoneType.CommandDone,
+            _ => null
+        };
+
+        if (zoneType is null)
+        {
+            return;
+        }
+
+        int? exitCode = null;
+        if (zoneType == ShellCommandZoneType.CommandDone)
+        {
+            int semicolonInParams = parameters.IndexOf(';');
+            string exitCodeStr = semicolonInParams >= 0 ? parameters[..semicolonInParams] : parameters;
+            if (int.TryParse(exitCodeStr, out int code))
+            {
+                exitCode = code;
+            }
+        }
+
+        int absoluteLine = _scrollback.Count + _cursorRow;
+        ShellCommandZoneReceived?.Invoke(this, new ShellCommandZoneEventArgs(zoneType.Value, absoluteLine, exitCode));
+    }
+
+    private static bool TryParseOscColorSpec(string spec, out Color color)
+    {
+        color = default;
+        if (spec.StartsWith("rgb:", StringComparison.OrdinalIgnoreCase))
+        {
+            string[] components = spec[4..].Split('/');
+            if (components.Length != 3)
+            {
+                return false;
+            }
+
+            if (!TryParseHexColorComponent(components[0], out byte r)) return false;
+            if (!TryParseHexColorComponent(components[1], out byte g)) return false;
+            if (!TryParseHexColorComponent(components[2], out byte b)) return false;
+            color = Color.FromRgb(r, g, b);
+            return true;
+        }
+
+        if (spec.StartsWith('#') && spec.Length >= 7)
+        {
+            if (!byte.TryParse(spec.AsSpan(1, 2), System.Globalization.NumberStyles.HexNumber, null, out byte r)) return false;
+            if (!byte.TryParse(spec.AsSpan(3, 2), System.Globalization.NumberStyles.HexNumber, null, out byte g)) return false;
+            if (!byte.TryParse(spec.AsSpan(5, 2), System.Globalization.NumberStyles.HexNumber, null, out byte b)) return false;
+            color = Color.FromRgb(r, g, b);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryParseHexColorComponent(string hex, out byte value)
+    {
+        int len = Math.Min(2, hex.Length);
+        if (len == 0)
+        {
+            value = 0;
+            return false;
+        }
+
+        return byte.TryParse(hex.AsSpan(0, len), System.Globalization.NumberStyles.HexNumber, null, out value);
     }
 
     private static string FormatRgbColor(Color color)
@@ -1727,22 +1857,22 @@ internal sealed class AnsiTerminalBuffer
                     _currentStyle = _currentStyle with { UnderlineColor = null };
                     break;
                 case >= 30 and <= 37:
-                    _currentStyle = _currentStyle with { Foreground = AnsiPalette[code - 30] };
+                    _currentStyle = _currentStyle with { Foreground = _ansiPalette[code - 30] };
                     break;
                 case 39:
                     _currentStyle = _currentStyle with { Foreground = null };
                     break;
                 case >= 40 and <= 47:
-                    _currentStyle = _currentStyle with { Background = AnsiPalette[code - 40] };
+                    _currentStyle = _currentStyle with { Background = _ansiPalette[code - 40] };
                     break;
                 case 49:
                     _currentStyle = _currentStyle with { Background = null };
                     break;
                 case >= 90 and <= 97:
-                    _currentStyle = _currentStyle with { Foreground = AnsiPalette[8 + (code - 90)] };
+                    _currentStyle = _currentStyle with { Foreground = _ansiPalette[8 + (code - 90)] };
                     break;
                 case >= 100 and <= 107:
-                    _currentStyle = _currentStyle with { Background = AnsiPalette[8 + (code - 100)] };
+                    _currentStyle = _currentStyle with { Background = _ansiPalette[8 + (code - 100)] };
                     break;
                 case 38:
                 case 48:
@@ -1786,7 +1916,7 @@ internal sealed class AnsiTerminalBuffer
         };
     }
 
-    private static bool TryReadExtendedColor(SgrParam[] tokens, ref int index, out Color color)
+    private bool TryReadExtendedColor(SgrParam[] tokens, ref int index, out Color color)
     {
         color = default;
         SgrParam current = tokens[index];
@@ -1838,16 +1968,16 @@ internal sealed class AnsiTerminalBuffer
         return false;
     }
 
-    private static Color ResolveXtermColor(int index)
+    private Color ResolveXtermColor(int index)
     {
         if (index < 0)
         {
             return DefaultForeground;
         }
 
-        if (index < AnsiPalette.Length)
+        if (index < _ansiPalette.Length)
         {
-            return AnsiPalette[index];
+            return _ansiPalette[index];
         }
 
         if (index <= 231)
