@@ -113,6 +113,15 @@ public partial class MainWindow : Window
             GetWorkingDirectoryOrDefault());
     }
 
+    private void AddNewTabInSameDirectory()
+    {
+        string commandLine = string.IsNullOrWhiteSpace(_settings.CommandLine)
+            ? TerminalProfileCatalog.BuildDefaultCommandLine()
+            : _settings.CommandLine.Trim();
+        string workingDirectory = GetActiveTab()?.View.WorkingDirectory ?? GetWorkingDirectoryOrDefault();
+        AddNewTab(commandLine, workingDirectory);
+    }
+
     private void AddNewTab(TerminalProfileDefinition profile)
     {
         AddNewTab(profile.CommandLine, GetWorkingDirectoryOrDefault());
@@ -333,6 +342,13 @@ public partial class MainWindow : Window
         if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.T)
         {
             AddNewTabFromSettings();
+            e.Handled = true;
+            return;
+        }
+
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.D)
+        {
+            AddNewTabInSameDirectory();
             e.Handled = true;
             return;
         }
