@@ -67,7 +67,7 @@
 ### 描画 / レンダリング
 
 - **フォントリガチャ** — FiraCode・Cascadia Code のリガチャ（`->`, `=>`, `!=` 等を合字表示）
-- **フォントフォールバック** — 主フォントにないグリフを CJK フォントや絵文字フォントで補完
+- ~~**フォントフォールバック** — 主フォントにないグリフを CJK フォントや絵文字フォントで補完~~ **実装済み（FontFallbackResolver、Segoe UI Emoji/Yu Gothic UI/Meiryo/MS Gothic/SimSun、グリフキャッシュ）**
 - **GPU アクセラレーション** — DirectComposition / Direct2D を使った高フレームレート描画。大量テキスト更新時のドロップフレーム解消
 - **Mica / Acrylic 背景** — Windows 11 ウィンドウ素材 API を使った半透明背景エフェクト
 - **インライン画像（OSC 1337 / iTerm2 プロトコル）** — Sixel と並ぶもう一方の画像表示プロトコル
