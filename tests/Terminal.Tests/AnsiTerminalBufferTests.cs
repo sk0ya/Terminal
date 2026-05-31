@@ -481,6 +481,44 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void GetPlainTextForAbsoluteLineRangeReturnsRequestedLines()
+    {
+        var buffer = new AnsiTerminalBuffer(8, 5);
+
+        buffer.Process("zero\r\none\r\ntwo\r\nthree");
+
+        Assert.Equal("one" + Environment.NewLine + "two", buffer.GetPlainTextForAbsoluteLineRange(1, 3));
+    }
+
+    [Fact]
+    public void GetPlainTextForAbsoluteLineRangeClampsEndToTotalLines()
+    {
+        var buffer = new AnsiTerminalBuffer(8, 5);
+
+        buffer.Process("a\r\nb\r\nc");
+
+        Assert.Equal(
+            "b" + Environment.NewLine + "c",
+            buffer.GetPlainTextForAbsoluteLineRange(1, int.MaxValue));
+    }
+
+    [Fact]
+    public void GetPlainTextForAbsoluteLineRangeSpansScrollbackAndScreen()
+    {
+        var buffer = new AnsiTerminalBuffer(8, 2);
+
+        // With only 2 visible rows, earlier lines roll into the scrollback while their
+        // absolute indices stay stable across the scrollback/screen boundary. The range
+        // method must agree with the absolute-line model exposed by the snapshot.
+        buffer.Process("l0\r\nl1\r\nl2\r\nl3\r\nl4");
+
+        string[] allLines = buffer.CreatePlainTextSnapshot().Split(Environment.NewLine);
+        string expected = string.Join(Environment.NewLine, allLines.Skip(1).Take(3));
+
+        Assert.Equal(expected, buffer.GetPlainTextForAbsoluteLineRange(1, 4));
+    }
+
+    [Fact]
     public void DecPrivate12ControlsCursorBlinking()
     {
         var buffer = new AnsiTerminalBuffer(32, 10);

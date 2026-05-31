@@ -469,6 +469,36 @@ internal sealed class AnsiTerminalBuffer
         return builder.ToString();
     }
 
+    /// <summary>
+    /// Extracts ANSI-free plain text for a half-open range of absolute line indices,
+    /// where index 0..ScrollbackLineCount-1 map to scrollback rows and subsequent
+    /// indices map to the active screen rows. Indices are clamped to the valid range,
+    /// so callers may pass <see cref="int.MaxValue"/> to capture through the last line.
+    /// Absolute line indices are stable as output scrolls into the scrollback, which is
+    /// why they can be recorded earlier (e.g. at an OSC 133 marker) and resolved later.
+    /// </summary>
+    internal string GetPlainTextForAbsoluteLineRange(int startInclusive, int endExclusive)
+    {
+        int scrollbackCount = _scrollback.Count;
+        // Mirror CreatePlainTextSnapshot: ignore the trailing blank screen rows so an
+        // unbounded end (int.MaxValue) does not pad the result with empty lines.
+        int totalLines = scrollbackCount + FindLastVisibleScreenRow(showCursor: false) + 1;
+        int start = Math.Clamp(startInclusive, 0, totalLines);
+        int end = Math.Clamp(endExclusive, start, totalLines);
+
+        var builder = new StringBuilder();
+        bool isFirstLine = true;
+        for (int absolute = start; absolute < end; absolute++)
+        {
+            TerminalLine line = absolute < scrollbackCount
+                ? _scrollback[absolute]
+                : _screen[absolute - scrollbackCount];
+            AppendPlainTextLine(builder, line, ref isFirstLine);
+        }
+
+        return builder.ToString();
+    }
+
     internal string GetScreenLineText(int row)
     {
         if (row < 0 || row >= _screen.Count)

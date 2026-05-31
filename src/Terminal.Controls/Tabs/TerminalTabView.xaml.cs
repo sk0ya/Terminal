@@ -855,6 +855,7 @@ public partial class TerminalTabView : UserControl
         session.OutputReceived -= OnOutputReceived;
         session.Exited -= OnProcessExited;
         _session = null;
+        AbortActiveAgentCommand();
         return session;
     }
 
@@ -1060,6 +1061,7 @@ public partial class TerminalTabView : UserControl
         if (!string.IsNullOrEmpty(nextBatch))
         {
             bool endedSynchronizedUpdate = _terminalBuffer.Process(nextBatch);
+            TryCompleteAgentSentinel();
             bool prioritizeRender = _prioritizeInitialOutputRender;
             _prioritizeInitialOutputRender = false;
             if (!_terminalBuffer.SynchronizedUpdateActive)
@@ -1865,6 +1867,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.NotificationRequested -= TerminalBuffer_NotificationRequested;
         _terminalBuffer.ShellCommandZoneReceived -= TerminalBuffer_ShellCommandZoneReceived;
         _shellCommandLines.Clear();
+        _shellIntegrationObserved = false;
         _terminalBuffer = nextBuffer;
         _terminalBuffer.InputSequenceGenerated += TerminalBuffer_InputSequenceGenerated;
         _terminalBuffer.ClipboardSetRequested += TerminalBuffer_ClipboardSetRequested;
@@ -1940,6 +1943,9 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalBuffer_ShellCommandZoneReceived(object? sender, ShellCommandZoneEventArgs e)
     {
+        _shellIntegrationObserved = true;
+        OnAgentShellCommandZone(e);
+
         if (e.ZoneType == ShellCommandZoneType.PromptStart)
         {
             _shellCommandLines.Add(e.AbsoluteLine);
