@@ -61,6 +61,7 @@ public partial class TerminalTabView : UserControl
     private bool _resettingInputProxyText;
     private bool _pendingProxyFlushAfterImeConfirm;
     private bool _terminalMouseCaptureActive;
+    private bool _localMouseSelectionActive;
     private bool _overlayUpdateQueued;
     private bool _terminalViewportSizeUpdateQueued;
     private bool _imeCompositionActive;
@@ -220,6 +221,19 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalOutput_PreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
+        if (TryHandleLocalMouseCopy(e))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        if (ShouldStartLocalMouseSelection(e))
+        {
+            _localMouseSelectionActive = true;
+            ReleaseTerminalMouseCapture(force: true);
+            return;
+        }
+
         if (TrySendMouseButtonEvent(e, pressed: true))
         {
             TryCaptureTerminalMouse();
@@ -230,6 +244,20 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalOutput_PreviewMouseUp(object sender, MouseButtonEventArgs e)
     {
+        if (TryHandleLocalMouseCopy(e))
+        {
+            _localMouseSelectionActive = false;
+            e.Handled = true;
+            return;
+        }
+
+        if (_localMouseSelectionActive && e.ChangedButton == MouseButton.Left)
+        {
+            _localMouseSelectionActive = false;
+            ReleaseTerminalMouseCapture(force: true);
+            return;
+        }
+
         QueueTerminalInputFocus();
 
         bool handled = TrySendMouseButtonEvent(e, pressed: false);
@@ -242,6 +270,11 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalOutput_PreviewMouseMove(object sender, MouseEventArgs e)
     {
+        if (_localMouseSelectionActive)
+        {
+            return;
+        }
+
         if (TrySendMouseMoveEvent(e))
         {
             if (HasTrackedMouseButtonPressed())
@@ -251,6 +284,24 @@ public partial class TerminalTabView : UserControl
 
             e.Handled = true;
         }
+    }
+
+    private bool TryHandleLocalMouseCopy(MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Right || !TerminalOutput.HasSelection)
+        {
+            return false;
+        }
+
+        CopySelectionToClipboard();
+        QueueTerminalInputFocus();
+        return true;
+    }
+
+    private static bool ShouldStartLocalMouseSelection(MouseButtonEventArgs e)
+    {
+        return e.ChangedButton == MouseButton.Left &&
+            (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
     }
 
     private void TerminalOutput_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
