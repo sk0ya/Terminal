@@ -863,7 +863,12 @@ public partial class TerminalTabView : UserControl
     {
         return await Task.Run(() =>
         {
-            ITerminalSession inner = new ConPtySession(columns, rows, commandLine, workingDirectory);
+            ITerminalSession inner = new ConPtySession(
+                columns,
+                rows,
+                commandLine,
+                workingDirectory,
+                CreateTerminalEnvironmentVariables());
             TerminalAppSettings settings = TerminalAppSettings.Load();
             if (!settings.EnableSessionLogging)
             {
@@ -880,6 +885,24 @@ public partial class TerminalTabView : UserControl
                 return inner;
             }
         });
+    }
+
+    private static IReadOnlyDictionary<string, string?> CreateTerminalEnvironmentVariables()
+    {
+        var variables = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        int gitConfigIndex = 0;
+        string? gitConfigCount = Environment.GetEnvironmentVariable("GIT_CONFIG_COUNT");
+        if (!string.IsNullOrWhiteSpace(gitConfigCount) &&
+            int.TryParse(gitConfigCount, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedCount) &&
+            parsedCount >= 0)
+        {
+            gitConfigIndex = parsedCount;
+        }
+
+        variables["GIT_CONFIG_COUNT"] = (gitConfigIndex + 1).ToString(CultureInfo.InvariantCulture);
+        variables[$"GIT_CONFIG_KEY_{gitConfigIndex}"] = "core.quotepath";
+        variables[$"GIT_CONFIG_VALUE_{gitConfigIndex}"] = "false";
+        return variables;
     }
 
     private static async Task<Exception?> DisposeSessionAsync(ITerminalSession? session)

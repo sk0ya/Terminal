@@ -1,4 +1,5 @@
 using Microsoft.Win32.SafeHandles;
+using System.Collections;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -9,6 +10,7 @@ namespace Terminal.Sessions;
 public sealed class ConPtySession : ITerminalSession
 {
     private const uint ExtendedStartupInfoPresent = 0x00080000;
+    private const uint CreateUnicodeEnvironment = 0x00000400;
     private const uint HandleFlagInherit = 0x00000001;
     private const int StartfUseStdHandles = 0x00000100;
     private const int ProcThreadAttributePseudoConsole = 0x00020016;
@@ -18,6 +20,7 @@ public sealed class ConPtySession : ITerminalSession
 
     private readonly object _syncRoot = new();
     private readonly string? _workingDirectory;
+    private readonly IReadOnlyDictionary<string, string?>? _environmentVariables;
     private IntPtr _pseudoConsole;
     private IntPtr _processHandle;
     private IntPtr _threadHandle;
@@ -50,7 +53,12 @@ public sealed class ConPtySession : ITerminalSession
     public event EventHandler<string>? OutputReceived;
     public event EventHandler<int>? Exited;
 
-    public ConPtySession(short columns, short rows, string commandLine, string? workingDirectory = null)
+    public ConPtySession(
+        short columns,
+        short rows,
+        string commandLine,
+        string? workingDirectory = null,
+        IReadOnlyDictionary<string, string?>? environmentVariables = null)
     {
         if (columns <= 0)
         {
@@ -73,6 +81,9 @@ public sealed class ConPtySession : ITerminalSession
         }
 
         _workingDirectory = string.IsNullOrWhiteSpace(workingDirectory) ? null : workingDirectory;
+        _environmentVariables = environmentVariables is null
+            ? null
+            : new Dictionary<string, string?>(environmentVariables, StringComparer.OrdinalIgnoreCase);
 
         try
         {
@@ -402,6 +413,7 @@ public sealed class ConPtySession : ITerminalSession
     {
         IntPtr attributeList = IntPtr.Zero;
         IntPtr attributeListSize = IntPtr.Zero;
+        IntPtr environmentBlock = IntPtr.Zero;
         _ = InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeListSize);
 
         if (attributeListSize == IntPtr.Zero)
@@ -445,6 +457,12 @@ public sealed class ConPtySession : ITerminalSession
                 lpAttributeList = attributeList
             };
             var commandLineBuffer = new StringBuilder(commandLine);
+            environmentBlock = AllocateEnvironmentBlock(_environmentVariables);
+            uint creationFlags = ExtendedStartupInfoPresent;
+            if (environmentBlock != IntPtr.Zero)
+            {
+                creationFlags |= CreateUnicodeEnvironment;
+            }
 
             if (!CreateProcess(
                     null,
@@ -452,8 +470,8 @@ public sealed class ConPtySession : ITerminalSession
                     IntPtr.Zero,
                     IntPtr.Zero,
                     false,
-                    ExtendedStartupInfoPresent,
-                    IntPtr.Zero,
+                    creationFlags,
+                    environmentBlock,
                     _workingDirectory,
                     ref startupInfo,
                     out ProcessInformation processInfo))
@@ -478,7 +496,61 @@ public sealed class ConPtySession : ITerminalSession
                 DeleteProcThreadAttributeList(attributeList);
                 Marshal.FreeHGlobal(attributeList);
             }
+
+            if (environmentBlock != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(environmentBlock);
+            }
         }
+    }
+
+    internal static string[] BuildEnvironmentVariables(IReadOnlyDictionary<string, string?>? overrides)
+    {
+        if (overrides is null || overrides.Count == 0)
+        {
+            return [];
+        }
+
+        var variables = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables())
+        {
+            if (entry.Key is not string key || string.IsNullOrEmpty(key))
+            {
+                continue;
+            }
+
+            variables[key] = entry.Value?.ToString() ?? string.Empty;
+        }
+
+        foreach (KeyValuePair<string, string?> pair in overrides)
+        {
+            if (string.IsNullOrEmpty(pair.Key) || pair.Key.Contains('='))
+            {
+                continue;
+            }
+
+            if (pair.Value is null)
+            {
+                variables.Remove(pair.Key);
+            }
+            else
+            {
+                variables[pair.Key] = pair.Value;
+            }
+        }
+
+        return variables.Select(pair => $"{pair.Key}={pair.Value}").ToArray();
+    }
+
+    private static IntPtr AllocateEnvironmentBlock(IReadOnlyDictionary<string, string?>? overrides)
+    {
+        string[] variables = BuildEnvironmentVariables(overrides);
+        if (variables.Length == 0)
+        {
+            return IntPtr.Zero;
+        }
+
+        return Marshal.StringToHGlobalUni(string.Join('\0', variables) + "\0\0");
     }
 
     private void StartOutputReadLoop()
