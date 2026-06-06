@@ -6,6 +6,7 @@ using System.Windows.Media;
 using System.Globalization;
 
 using Terminal.Unicode;
+using Terminal.Settings;
 
 namespace Terminal.Buffer;
 
@@ -69,32 +70,14 @@ internal sealed class AnsiTerminalBuffer
     private const int MinRows = 10;
     private const int DefaultScrollbackLimit = 2000;
 
-    private static readonly Color DefaultForeground = Color.FromRgb(0xE3, 0xE3, 0xE3);
-    private static readonly Color DefaultBackground = Color.FromRgb(0x11, 0x11, 0x11);
-    private static readonly Color CursorAccent = Color.FromRgb(0x5F, 0xAF, 0xFF);
-    private static readonly Color[] DefaultAnsiPalette =
-    {
-        Color.FromRgb(0x1C, 0x1C, 0x1C),
-        Color.FromRgb(0xC5, 0x0F, 0x1F),
-        Color.FromRgb(0x13, 0xA1, 0x0E),
-        Color.FromRgb(0xC1, 0x9C, 0x00),
-        Color.FromRgb(0x00, 0x37, 0xDA),
-        Color.FromRgb(0x88, 0x17, 0x98),
-        Color.FromRgb(0x3A, 0x96, 0xDD),
-        Color.FromRgb(0xCC, 0xCC, 0xCC),
-        Color.FromRgb(0x76, 0x76, 0x76),
-        Color.FromRgb(0xE7, 0x48, 0x56),
-        Color.FromRgb(0x16, 0xC6, 0x0C),
-        Color.FromRgb(0xF9, 0xF1, 0xA5),
-        Color.FromRgb(0x3B, 0x78, 0xFF),
-        Color.FromRgb(0xB4, 0x00, 0x9E),
-        Color.FromRgb(0x61, 0xD6, 0xD6),
-        Color.FromRgb(0xF2, 0xF2, 0xF2)
-    };
     private static readonly Dictionary<Color, SolidColorBrush> BrushCache = [];
     private static readonly char[] CsiIntermediateCharacters = [' ', '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/'];
 
-    private readonly Color[] _ansiPalette = (Color[])DefaultAnsiPalette.Clone();
+    private Color _defaultForeground = TerminalColorTheme.Default.Foreground;
+    private Color _defaultBackground = TerminalColorTheme.Default.Background;
+    private Color _cursorAccent = TerminalColorTheme.Default.Cursor;
+    private readonly Color[] _defaultAnsiPalette = TerminalColorTheme.Default.AnsiPalette.ToArray();
+    private readonly Color[] _ansiPalette = TerminalColorTheme.Default.AnsiPalette.ToArray();
     private readonly int _scrollbackLimit;
     private readonly List<TerminalLine> _scrollback = [];
     private readonly List<TerminalRenderLineSnapshot> _scrollbackRenderCache = [];
@@ -218,6 +201,23 @@ internal sealed class AnsiTerminalBuffer
     public bool MousePixelMode => _mousePixelMode;
     public int ScrollbackLineCount => _scrollback.Count;
     public int VisibleLineCount => GetLastRenderedScreenRow(showCursor: false) + 1;
+
+    public TerminalColorTheme ColorTheme { get; private set; } = TerminalColorTheme.Default;
+
+    public void ApplyColorTheme(TerminalColorTheme theme)
+    {
+        ArgumentNullException.ThrowIfNull(theme);
+
+        ColorTheme = theme;
+        _defaultForeground = theme.Foreground;
+        _defaultBackground = theme.Background;
+        _cursorAccent = theme.Cursor;
+        CopyPalette(theme.AnsiPalette, _defaultAnsiPalette);
+        CopyPalette(theme.AnsiPalette, _ansiPalette);
+        RebuildScrollbackRenderCache();
+        InvalidateScreenRenderCache();
+        _renderCacheDirty = true;
+    }
     public int KittyKeyboardFlags => _kittyKeyboardFlags;
 
     public void Resize(short columns, short rows)
@@ -422,7 +422,7 @@ internal sealed class AnsiTerminalBuffer
         {
             FontFamily = fontFamily,
             FontSize = fontSize,
-            Background = GetBrush(DefaultBackground),
+            Background = GetBrush(_defaultBackground),
             TextAlignment = TextAlignment.Left
         };
 
@@ -568,6 +568,15 @@ internal sealed class AnsiTerminalBuffer
         }
     }
 
+    private void RebuildScrollbackRenderCache()
+    {
+        _scrollbackRenderCache.Clear();
+        foreach (TerminalLine line in _scrollback)
+        {
+            _scrollbackRenderCache.Add(CreateLineSnapshot(line, -1, -1, showCursor: false));
+        }
+    }
+
     private void ResetMargins()
     {
         _scrollTop = 0;
@@ -665,7 +674,7 @@ internal sealed class AnsiTerminalBuffer
         _csiBuffer.Clear();
         _oscBuffer.Clear();
         _dcsBuffer.Clear();
-        Array.Copy(DefaultAnsiPalette, _ansiPalette, DefaultAnsiPalette.Length);
+        Array.Copy(_defaultAnsiPalette, _ansiPalette, _defaultAnsiPalette.Length);
         _kittyKeyboardFlags = 0;
         _kittyKeyboardStack.Clear();
         ResetTabStops();
@@ -1117,9 +1126,9 @@ internal sealed class AnsiTerminalBuffer
         {
             Color queryColor = command switch
             {
-                "10" => DefaultForeground,
-                "11" => DefaultBackground,
-                _ => CursorAccent
+                "10" => _defaultForeground,
+                "11" => _defaultBackground,
+                _ => _cursorAccent
             };
             EmitInputSequence($"]{command};{FormatRgbColor(queryColor)}");
             return;
@@ -2318,7 +2327,7 @@ internal sealed class AnsiTerminalBuffer
     {
         if (index < 0)
         {
-            return DefaultForeground;
+            return _defaultForeground;
         }
 
         if (index < _ansiPalette.Length)
@@ -2344,7 +2353,7 @@ internal sealed class AnsiTerminalBuffer
             return Color.FromRgb(shade, shade, shade);
         }
 
-        return DefaultForeground;
+        return _defaultForeground;
     }
 
     private static byte ScaleCubeComponent(int value)
@@ -3136,7 +3145,7 @@ internal sealed class AnsiTerminalBuffer
         return new TerminalRenderLineSnapshot(anchorSegmentIndex, visibleLength, segments.ToArray());
     }
 
-    private static void AppendLineSnapshot(InlineCollection inlines, TerminalRenderLineSnapshot lineSnapshot, ref bool isFirstLine, ref FrameworkElement? cursorAnchor)
+    private void AppendLineSnapshot(InlineCollection inlines, TerminalRenderLineSnapshot lineSnapshot, ref bool isFirstLine, ref FrameworkElement? cursorAnchor)
     {
         if (!isFirstLine)
         {
@@ -3403,10 +3412,10 @@ internal sealed class AnsiTerminalBuffer
         cursorAnchor = anchor;
     }
 
-    private static ResolvedStyle ResolveStyle(TerminalStyle style, string? hyperlink, bool isCursor, bool screenReverse = false)
+    private ResolvedStyle ResolveStyle(TerminalStyle style, string? hyperlink, bool isCursor, bool screenReverse = false)
     {
-        Color foreground = style.Foreground ?? DefaultForeground;
-        Color background = style.Background ?? DefaultBackground;
+        Color foreground = style.Foreground ?? _defaultForeground;
+        Color background = style.Background ?? _defaultBackground;
 
         if (style.Inverse)
         {
@@ -3428,8 +3437,8 @@ internal sealed class AnsiTerminalBuffer
             (foreground, background) = (background, foreground);
             if (foreground == background)
             {
-                background = CursorAccent;
-                foreground = DefaultBackground;
+                background = _cursorAccent;
+                foreground = _defaultBackground;
             }
         }
 
@@ -3447,6 +3456,14 @@ internal sealed class AnsiTerminalBuffer
             (byte)Math.Round(color.R * 0.55),
             (byte)Math.Round(color.G * 0.55),
             (byte)Math.Round(color.B * 0.55));
+
+    private static void CopyPalette(IReadOnlyList<Color> source, Color[] destination)
+    {
+        for (int index = 0; index < destination.Length; index++)
+        {
+            destination[index] = source[index];
+        }
+    }
 
     private static TerminalCell CreateBlankCell(TerminalStyle style)
     {

@@ -1,9 +1,56 @@
+using System.Windows.Media;
+
 using Terminal.Buffer;
+using Terminal.Settings;
 
 namespace Terminal.Tests;
 
 public sealed class AnsiTerminalBufferTests
 {
+    [Fact]
+    public void ApplyColorThemeChangesDefaultAndAnsiColorsInRenderSnapshot()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        Color[] palette = TerminalColorTheme.Default.AnsiPalette.ToArray();
+        palette[1] = Colors.OrangeRed;
+        var theme = new TerminalColorTheme(
+            Colors.AliceBlue,
+            Colors.MidnightBlue,
+            palette,
+            Colors.Yellow);
+
+        buffer.ApplyColorTheme(theme);
+        buffer.Process("A\u001b[31mB");
+
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+
+        Assert.Equal(Colors.AliceBlue, snapshot.Lines[0].Segments[0].Foreground);
+        Assert.Equal(Colors.MidnightBlue, snapshot.Lines[0].Segments[0].Background);
+        Assert.Equal(Colors.OrangeRed, snapshot.Lines[0].Segments[1].Foreground);
+    }
+
+    [Fact]
+    public void ApplyColorThemeRebuildsScrollbackRenderSnapshots()
+    {
+        var buffer = new AnsiTerminalBuffer(8, 2);
+        buffer.Process("A\r\nB\r\nC");
+
+        AnsiTerminalBuffer.TerminalRenderSnapshot before = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.Equal(TerminalColorTheme.Default.Foreground, before.Lines[0].Segments[0].Foreground);
+
+        var theme = new TerminalColorTheme(
+            Colors.AliceBlue,
+            Colors.MidnightBlue,
+            TerminalColorTheme.Default.AnsiPalette,
+            Colors.Yellow);
+
+        buffer.ApplyColorTheme(theme);
+
+        AnsiTerminalBuffer.TerminalRenderSnapshot after = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.Equal(Colors.AliceBlue, after.Lines[0].Segments[0].Foreground);
+        Assert.Equal(Colors.MidnightBlue, after.Lines[0].Segments[0].Background);
+    }
+
     [Fact]
     public void ChtAndCbtFollowConfiguredTabStops()
     {

@@ -31,6 +31,34 @@ public partial class TerminalTabView
     private bool _suppressProfileSelectionChanged;
     private bool _suppressCommandTextChanged;
     private bool _suppressWorkingDirectoryTextChanged;
+    private TerminalColorTheme _colorTheme = TerminalColorTheme.Default;
+
+    public TerminalColorTheme ColorTheme => _colorTheme;
+
+    public string FontFamilyName => TerminalOutput.FontFamily.Source;
+
+    public double TerminalFontSize => TerminalOutput.FontSize;
+
+    public void SetColorTheme(TerminalColorTheme theme)
+    {
+        ApplyColorTheme(theme);
+    }
+
+    public void SetFont(string? fontFamilyName, double fontSize)
+    {
+        ApplyTerminalFontFamily(fontFamilyName, persist: false);
+        ApplyTerminalFontSize(fontSize, persist: false);
+    }
+
+    public void SetFontFamily(string? fontFamilyName)
+    {
+        ApplyTerminalFontFamily(fontFamilyName, persist: false);
+    }
+
+    public void SetFontSize(double fontSize)
+    {
+        ApplyTerminalFontSize(fontSize, persist: false);
+    }
 
     private void InitializeTerminalWorkbench()
     {
@@ -414,6 +442,27 @@ public partial class TerminalTabView
         QueueTerminalViewportSizeUpdate();
     }
 
+    private void ApplyColorTheme(TerminalColorTheme theme)
+    {
+        ArgumentNullException.ThrowIfNull(theme);
+
+        _colorTheme = theme;
+        _terminalBuffer.ApplyColorTheme(theme);
+        Brush background = CreateFrozenBrush(theme.Background);
+        Brush foreground = CreateFrozenBrush(theme.Foreground);
+        Brush selectionBackground = CreateFrozenBrush(theme.SelectionBackground);
+
+        TerminalHostBorder.Background = background;
+        TerminalViewportHost.Background = background;
+        TerminalScrollHost.Background = background;
+        TerminalOutput.Background = background;
+        TerminalOutput.Foreground = foreground;
+        TerminalOutput.SelectionBackground = selectionBackground;
+        TerminalInputProxy.Foreground = foreground;
+
+        RequestDocumentRender(immediate: true);
+    }
+
     public void ApplySettings(TerminalAppSettings settings)
     {
         string commandLine = string.IsNullOrWhiteSpace(settings.CommandLine)
@@ -434,7 +483,7 @@ public partial class TerminalTabView
     public void SetBackdropActive(bool active)
     {
         var transparent = new SolidColorBrush(Colors.Transparent);
-        var opaque = new SolidColorBrush(Color.FromRgb(0x0E, 0x0C, 0x0A));
+        var opaque = new SolidColorBrush(_colorTheme.Background);
         Brush bg = active ? transparent : opaque;
         TerminalHostBorder.Background = bg;
         TerminalViewportHost.Background = bg;

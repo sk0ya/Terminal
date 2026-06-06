@@ -13,7 +13,7 @@ namespace Terminal.Rendering;
 
 public sealed class TerminalSurfaceControl : Control, IScrollInfo
 {
-    private static readonly Brush SelectionBrush = CreateFrozenBrush(Color.FromArgb(0x66, 0xE1, 0x9A, 0x4A));
+    private static readonly Brush DefaultSelectionBrush = CreateFrozenBrush(Color.FromArgb(0x66, 0xE1, 0x9A, 0x4A));
     private static readonly Brush DefaultBackgroundBrush = CreateFrozenBrush(Color.FromRgb(0x0E, 0x0C, 0x0A));
     private static readonly Brush DefaultForegroundBrush = CreateFrozenBrush(Color.FromRgb(0xE8, 0xE0, 0xD2));
 
@@ -82,6 +82,19 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     public ScrollViewer? ScrollOwner { get; set; }
 
     public bool HasSelection => _selection.HasValue && !_selection.Value.IsEmpty;
+
+    public Brush? SelectionBackground
+    {
+        get => (Brush?)GetValue(SelectionBackgroundProperty);
+        set => SetValue(SelectionBackgroundProperty, value);
+    }
+
+    public static readonly DependencyProperty SelectionBackgroundProperty =
+        DependencyProperty.Register(
+            nameof(SelectionBackground),
+            typeof(Brush),
+            typeof(TerminalSurfaceControl),
+            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
 
     public int LineCount => _lines.Count;
 
@@ -864,7 +877,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             top,
             (endColumn - startColumn) * _cellSize.Width,
             _cellSize.Height);
-        drawingContext.DrawRectangle(SelectionBrush, null, rect);
+        drawingContext.DrawRectangle(SelectionBackground ?? DefaultSelectionBrush, null, rect);
     }
 
     private void DrawBlockSelection(
@@ -885,7 +898,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             top,
             (rightColumn - leftColumn) * _cellSize.Width,
             _cellSize.Height);
-        drawingContext.DrawRectangle(SelectionBrush, null, rect);
+        drawingContext.DrawRectangle(SelectionBackground ?? DefaultSelectionBrush, null, rect);
     }
 
     private void DrawLineText(DrawingContext drawingContext, LineLayout line, double top, double contentLeft)

@@ -221,9 +221,9 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalOutput_PreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (TryHandleLocalMouseCopy(e))
+        if (IsRightClick(e))
         {
-            e.Handled = true;
+            QueueTerminalInputFocus();
             return;
         }
 
@@ -244,10 +244,16 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalOutput_PreviewMouseUp(object sender, MouseButtonEventArgs e)
     {
-        if (TryHandleLocalMouseCopy(e))
+        if (IsRightClick(e))
         {
             _localMouseSelectionActive = false;
-            e.Handled = true;
+            if (!TerminalOutput.HasSelection)
+            {
+                PasteFromClipboard();
+                QueueTerminalInputFocus();
+                e.Handled = true;
+            }
+
             return;
         }
 
@@ -286,16 +292,32 @@ public partial class TerminalTabView : UserControl
         }
     }
 
-    private bool TryHandleLocalMouseCopy(MouseButtonEventArgs e)
+    private static bool IsRightClick(MouseButtonEventArgs e)
     {
-        if (e.ChangedButton != MouseButton.Right || !TerminalOutput.HasSelection)
-        {
-            return false;
-        }
+        return e.ChangedButton == MouseButton.Right;
+    }
 
+    private void TerminalOutput_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        bool hasSelection = TerminalOutput.HasSelection;
+        CopySelectionMenuItem.IsEnabled = hasSelection;
+        PasteMenuItem.IsEnabled = CanPasteFromClipboard();
+        if (!hasSelection)
+        {
+            e.Handled = true;
+        }
+    }
+
+    private void CopySelectionMenuItem_Click(object sender, RoutedEventArgs e)
+    {
         CopySelectionToClipboard();
         QueueTerminalInputFocus();
-        return true;
+    }
+
+    private void PasteMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        PasteFromClipboard();
+        QueueTerminalInputFocus();
     }
 
     private static bool ShouldStartLocalMouseSelection(MouseButtonEventArgs e)
@@ -1282,6 +1304,11 @@ public partial class TerminalTabView : UserControl
         _ = SendTerminalInput(text);
     }
 
+    private bool CanPasteFromClipboard()
+    {
+        return _session is not null && Clipboard.ContainsText();
+    }
+
     private void CopySelectionToClipboard()
     {
         string text = TerminalOutput.GetSelectedText();
@@ -1934,6 +1961,7 @@ public partial class TerminalTabView : UserControl
     private void ReplaceTerminalBuffer(AnsiTerminalBuffer nextBuffer)
     {
         nextBuffer.AmbiguousWidthIsWide = _terminalBuffer.AmbiguousWidthIsWide;
+        nextBuffer.ApplyColorTheme(_colorTheme);
         _terminalBuffer.InputSequenceGenerated -= TerminalBuffer_InputSequenceGenerated;
         _terminalBuffer.ClipboardSetRequested -= TerminalBuffer_ClipboardSetRequested;
         _terminalBuffer.ClipboardQueryRequested -= TerminalBuffer_ClipboardQueryRequested;

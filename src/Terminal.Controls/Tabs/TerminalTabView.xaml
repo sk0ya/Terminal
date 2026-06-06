@@ -360,9 +360,21 @@
                                                   PreviewMouseUp="TerminalOutput_PreviewMouseUp"
                                                   PreviewMouseMove="TerminalOutput_PreviewMouseMove"
                                                   PreviewMouseWheel="TerminalOutput_PreviewMouseWheel"
+                                                  ContextMenuOpening="TerminalOutput_ContextMenuOpening"
                                                   LostMouseCapture="TerminalOutput_LostMouseCapture"
                                                   GotKeyboardFocus="TerminalOutput_GotKeyboardFocus"
-                                                  LostKeyboardFocus="TerminalOutput_LostKeyboardFocus" />
+                                                  LostKeyboardFocus="TerminalOutput_LostKeyboardFocus">
+                        <rendering:TerminalSurfaceControl.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem x:Name="CopySelectionMenuItem"
+                                          Header="Copy"
+                                          Click="CopySelectionMenuItem_Click" />
+                                <MenuItem x:Name="PasteMenuItem"
+                                          Header="Paste"
+                                          Click="PasteMenuItem_Click" />
+                            </ContextMenu>
+                        </rendering:TerminalSurfaceControl.ContextMenu>
+                    </rendering:TerminalSurfaceControl>
                 </ScrollViewer>
 
                 <Canvas IsHitTestVisible="False"
