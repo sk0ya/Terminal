@@ -101,7 +101,7 @@ internal static class TerminalKeyChordTranslator
         return key switch
         {
             Key.Enter => TerminalInputEncoder.EncodePrefixedControl("\r", modifiers),
-            Key.Back => TerminalInputEncoder.EncodePrefixedControl("\b", modifiers),
+            Key.Back => TerminalInputEncoder.EncodePrefixedControl("\u007f", modifiers),
             Key.Tab => TerminalInputEncoder.EncodeTabKey(modifiers),
             Key.Space => TerminalInputEncoder.EncodePrefixedControl(" ", modifiers),
             Key.Escape => TerminalInputEncoder.EncodePrefixedControl("\u001b", modifiers),

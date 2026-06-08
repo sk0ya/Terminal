@@ -75,6 +75,26 @@ public sealed class TerminalKeyChordTranslatorTests
     }
 
     [Fact]
+    public void TranslateSpecialKeyEncodesBackspaceAsDelete()
+    {
+        // ConPTY maps DEL (0x7f) to Backspace and BS (0x08) to Ctrl+Backspace
+        // (BackwardKillWord in PSReadLine), so the bare key must send DEL.
+        Assert.Equal("\u007f", TerminalKeyChordTranslator.TranslateSpecialKey(
+            Key.Back,
+            ModifierKeys.None,
+            applicationCursorKeys: false));
+    }
+
+    [Fact]
+    public void TranslateSpecialKeyEncodesAltBackspaceWithEscapePrefix()
+    {
+        Assert.Equal("\u001b\u007f", TerminalKeyChordTranslator.TranslateSpecialKey(
+            Key.Back,
+            ModifierKeys.Alt,
+            applicationCursorKeys: false));
+    }
+
+    [Fact]
     public void TranslateEnterKeyUsesCrInTerminalInputMode()
     {
         Assert.Equal("\r", TerminalKeyChordTranslator.TranslateEnterKey(
