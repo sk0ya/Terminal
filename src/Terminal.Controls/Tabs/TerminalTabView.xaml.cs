@@ -1086,7 +1086,7 @@ public partial class TerminalTabView : UserControl
         UpdateOverlayState();
     }
 
-    private bool SendTerminalInput(string text)
+    public bool SendTerminalInput(string text)
     {
         if (_session is null || string.IsNullOrEmpty(text))
         {
@@ -1248,7 +1248,7 @@ public partial class TerminalTabView : UserControl
         }
     }
 
-    private bool SendTerminalInput(byte[] bytes)
+    public bool SendTerminalInput(byte[] bytes)
     {
         if (_session is null || bytes.Length == 0)
         {
