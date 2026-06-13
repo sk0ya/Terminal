@@ -756,6 +756,8 @@ public partial class MainWindow : Window
             WindowWidth = _settings.WindowWidth,
             WindowHeight = _settings.WindowHeight,
             EnableSessionLogging = _settings.EnableSessionLogging,
+            EnableShellIntegrationInjection = _settings.EnableShellIntegrationInjection,
+            ShowStatusBar = _settings.ShowStatusBar,
             SessionLogDirectory = _settings.SessionLogDirectory,
             CjkAmbiguousWidthIsWide = tabSettings.CjkAmbiguousWidthIsWide,
             BackdropType = _settings.BackdropType

@@ -53,6 +53,7 @@
 
 - ~~**OSC 133/633 コマンドナビゲーション** — OSC 133 実装後に有効化。Ctrl+Shift+↑/↓ で前後のプロンプト行へジャンプ~~ **実装済み**
 - ~~**コマンド終了コード表示** — OSC 133 `D;exitCode` を受け取りタブやプロンプト領域に結果を表示~~ **実装済み（非ゼロ終了時にステータスバー表示）**
+- ~~**シェル統合の自動注入** — シェル側が OSC 133 を出さなくても機能するよう、起動時にマーカー出力を仕込む~~ **実装済み（pwsh のみ。shell-integration.ps1 を `-NoExit -Command` で dot-source。`EnableShellIntegrationInjection` 設定 / `TerminalTabView.ShellIntegrationInjectionEnabled` API でオプトアウト可。powershell.exe・cmd・Git Bash は未対応＝センチネル方式フォールバック）**
 - ~~**「同ディレクトリで新規タブ」** — OSC 7 から得たパスを新タブ起動に渡す~~ **実装済み（Ctrl+Shift+D）**
 
 ### UI / UX

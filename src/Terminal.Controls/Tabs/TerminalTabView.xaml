@@ -413,7 +413,8 @@
             </Grid>
         </Border>
 
-        <Border Grid.Row="3"
+        <Border x:Name="StatusBarBorder"
+                Grid.Row="3"
                 Style="{StaticResource PanelBorderStyle}"
                 Padding="8,6"
                 Margin="0"
@@ -422,7 +423,7 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="320" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <WrapPanel Grid.Column="0"
@@ -469,6 +470,7 @@
 
                 <TextBlock x:Name="WorkingDirectorySummaryText"
                            Grid.Column="2"
+                           MaxWidth="320"
                            VerticalAlignment="Center"
                            HorizontalAlignment="Right"
                            Foreground="{StaticResource ForegroundDimBrush}"

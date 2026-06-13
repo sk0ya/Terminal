@@ -39,6 +39,24 @@ public partial class TerminalTabView
 
     public double TerminalFontSize => TerminalOutput.FontSize;
 
+    /// <summary>
+    /// Shows or hides the bottom status bar (session chips, status messages
+    /// such as non-zero exit codes, and the working directory summary).
+    /// </summary>
+    public bool IsStatusBarVisible
+    {
+        get => StatusBarBorder.Visibility == Visibility.Visible;
+        set => StatusBarBorder.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Whether OSC 133 shell integration is injected into sessions started
+    /// after the change (see <see cref="ShellIntegration"/>; pwsh only).
+    /// Running sessions are unaffected until restarted. Marker observation is
+    /// reported by <see cref="IsShellIntegrationActive"/>.
+    /// </summary>
+    public bool ShellIntegrationInjectionEnabled { get; set; } = true;
+
     public void SetColorTheme(TerminalColorTheme theme)
     {
         ApplyColorTheme(theme);
@@ -94,6 +112,8 @@ public partial class TerminalTabView
         ApplyTerminalFontSize(settings.FontSize <= 0 ? DefaultTerminalFontSize : settings.FontSize, persist: false);
         SetSelectedProfile(settings.SelectedProfileId, commandLine);
         _terminalBuffer.AmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide;
+        IsStatusBarVisible = settings.ShowStatusBar;
+        ShellIntegrationInjectionEnabled = settings.EnableShellIntegrationInjection;
     }
 
     public TerminalAppSettings CreateSettingsSnapshot()
@@ -477,6 +497,8 @@ public partial class TerminalTabView
         ApplyTerminalFontSize(settings.FontSize <= 0 ? DefaultTerminalFontSize : settings.FontSize, persist: false);
         SetSelectedProfile(settings.SelectedProfileId, commandLine);
         _terminalBuffer.AmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide;
+        IsStatusBarVisible = settings.ShowStatusBar;
+        ShellIntegrationInjectionEnabled = settings.EnableShellIntegrationInjection;
         UpdateWindowTitle();
     }
 

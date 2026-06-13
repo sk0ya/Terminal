@@ -934,15 +934,19 @@ public partial class TerminalTabView : UserControl
 
     private async Task<ITerminalSession> CreateSessionAsync(string commandLine, short columns, short rows, string workingDirectory)
     {
+        bool injectShellIntegration = ShellIntegrationInjectionEnabled;
         return await Task.Run(() =>
         {
+            TerminalAppSettings settings = TerminalAppSettings.Load();
+            string launchCommandLine = injectShellIntegration
+                ? ShellIntegration.PrepareLaunch(commandLine)
+                : commandLine;
             ITerminalSession inner = new ConPtySession(
                 columns,
                 rows,
-                commandLine,
+                launchCommandLine,
                 workingDirectory,
                 CreateTerminalEnvironmentVariables());
-            TerminalAppSettings settings = TerminalAppSettings.Load();
             if (!settings.EnableSessionLogging)
             {
                 return inner;
@@ -2050,7 +2054,11 @@ public partial class TerminalTabView : UserControl
 
         if (e.ZoneType == ShellCommandZoneType.PromptStart)
         {
-            _shellCommandLines.Add(e.AbsoluteLine);
+            // Prompt redraws re-emit the marker for the same line; skip duplicates.
+            if (_shellCommandLines.Count == 0 || _shellCommandLines[^1] != e.AbsoluteLine)
+            {
+                _shellCommandLines.Add(e.AbsoluteLine);
+            }
         }
         else if (e.ZoneType == ShellCommandZoneType.CommandDone && e.ExitCode.HasValue && e.ExitCode.Value != 0)
         {

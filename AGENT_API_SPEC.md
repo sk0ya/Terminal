@@ -103,9 +103,13 @@ public readonly record struct TerminalCommandResult(
   **完了マーカー＋終了コード**を付与し、出力ストリームから `__ASE_<code>` を検出して完了とみなす。
 - マーカー行は結果 `Output` から除去する。
 
-> 可能なら、起動シェルに**シェル統合プロンプト（OSC133 A/B/C/D を出すプロンプト関数）を自動注入**する
-> オプションを用意してもらえると、4-1 が常に使えて理想的。
-> （PowerShell なら `prompt` 関数で `\e]133;...\a` を出力する初期化スクリプトを流し込む等）
+> **実装済み（pwsh のみ）：** `ShellIntegration.PrepareLaunch`（Terminal.Core）がセッション起動時に
+> `%LOCALAPPDATA%\Terminal\shell-integration.ps1` を `-NoExit -Command` で dot-source させる
+> （prompt ラップで A/B/D、PSConsoleHostReadLine ラップで C を emit）。
+> `TerminalTabView.ShellIntegrationInjectionEnabled`（既定 true、設定 `EnableShellIntegrationInjection` 連動）で
+> オプトアウト可能。`ShellIntegration.CanInject` / `DefaultScriptPath` で注入可否・スクリプトパスを取得できる。
+> `-Command` / `-File` 等を含む非対話起動、powershell.exe・cmd・Git Bash には注入しない
+> （センチネル方式にフォールバック）。
 
 ---
 

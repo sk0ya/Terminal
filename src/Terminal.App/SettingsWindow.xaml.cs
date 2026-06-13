@@ -82,6 +82,7 @@ public partial class SettingsWindow : Window
             FontSizeTextBox.Text = settings.FontSize.ToString("0");
             TabStripPlacementComboBox.SelectedItem = TerminalTabStripPlacementCatalog.ResolveSelectedOption(settings.TabStripPlacement);
             SetSelectedProfile(settings.SelectedProfileId, commandLine);
+            StatusBarCheckBox.IsChecked = settings.ShowStatusBar;
             SetInputValidationState(WorkingDirectoryTextBox, isValid: true);
             SetInputValidationState(FontSizeTextBox, isValid: true);
         }
@@ -294,6 +295,17 @@ public partial class SettingsWindow : Window
         PublishSettingsChanged();
     }
 
+    private void StatusBarCheckBox_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_suppressAutoApply)
+        {
+            return;
+        }
+
+        _currentSettings.ShowStatusBar = StatusBarCheckBox.IsChecked == true;
+        PublishSettingsChanged();
+    }
+
     private void PublishSettingsChanged()
     {
         SettingsChanged?.Invoke(CloneSettings(_currentSettings));
@@ -385,6 +397,8 @@ public partial class SettingsWindow : Window
             WindowWidth = settings.WindowWidth,
             WindowHeight = settings.WindowHeight,
             EnableSessionLogging = settings.EnableSessionLogging,
+            EnableShellIntegrationInjection = settings.EnableShellIntegrationInjection,
+            ShowStatusBar = settings.ShowStatusBar,
             SessionLogDirectory = settings.SessionLogDirectory,
             CjkAmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide,
             BackdropType = settings.BackdropType

@@ -19,6 +19,8 @@ public sealed class TerminalAppSettings
     public double WindowWidth { get; set; } = 1000;
     public double WindowHeight { get; set; } = 720;
     public bool EnableSessionLogging { get; set; } = true;
+    public bool EnableShellIntegrationInjection { get; set; } = true;
+    public bool ShowStatusBar { get; set; } = false;
     public string? SessionLogDirectory { get; set; }
     public bool CjkAmbiguousWidthIsWide { get; set; } = false;
     public string BackdropType { get; set; } = "none";

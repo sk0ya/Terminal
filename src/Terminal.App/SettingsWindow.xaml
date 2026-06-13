@@ -205,6 +205,8 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="10" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="10" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="90" />
@@ -284,6 +286,20 @@
                       Style="{StaticResource InputComboBoxStyle}"
                       ItemTemplate="{StaticResource TabStripPlacementItemTemplate}"
                       SelectionChanged="TabStripPlacementComboBox_SelectionChanged" />
+
+            <TextBlock Grid.Row="12"
+                       Grid.Column="0"
+                       VerticalAlignment="Center"
+                       Foreground="{StaticResource MutedBrush}"
+                       Text="Status bar" />
+            <CheckBox x:Name="StatusBarCheckBox"
+                      Grid.Row="12"
+                      Grid.Column="1"
+                      VerticalAlignment="Center"
+                      Foreground="#F0F0F0"
+                      Content="Show session info and status messages"
+                      Checked="StatusBarCheckBox_Toggled"
+                      Unchecked="StatusBarCheckBox_Toggled" />
         </Grid>
     </Border>
 </Window>
