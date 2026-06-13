@@ -14,7 +14,7 @@ public sealed class TerminalTabViewAppearanceApiTests
     [Fact]
     public void SetFontFamilyAndSizeExposeEffectiveValues()
     {
-        RunSta(() =>
+        StaTestRunner.Run(() =>
         {
             var view = new TerminalTabView("cmd.exe", Environment.CurrentDirectory);
 
@@ -29,7 +29,7 @@ public sealed class TerminalTabViewAppearanceApiTests
     [Fact]
     public void SetColorThemeExposesEffectiveTheme()
     {
-        RunSta(() =>
+        StaTestRunner.Run(() =>
         {
             var theme = new TerminalColorTheme(
                 Colors.LightGray,
@@ -48,7 +48,7 @@ public sealed class TerminalTabViewAppearanceApiTests
     [Fact]
     public void ReplacingTerminalBufferPreservesColorTheme()
     {
-        RunSta(() =>
+        StaTestRunner.Run(() =>
         {
             var theme = new TerminalColorTheme(
                 Colors.LightGray,
@@ -69,24 +69,4 @@ public sealed class TerminalTabViewAppearanceApiTests
         });
     }
 
-    private static void RunSta(Action action)
-    {
-        ExceptionDispatchInfo? captured = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception ex)
-            {
-                captured = ExceptionDispatchInfo.Capture(ex);
-            }
-        });
-
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-        captured?.Throw();
-    }
 }

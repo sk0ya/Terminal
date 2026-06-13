@@ -140,8 +140,17 @@ public partial class TerminalTabView : UserControl
         }
 
         _hasStartedInitialSession = true;
-        await StartTerminalAsync(focusTerminal: true);
+        await StartTerminalAsync(focusTerminal: AutoFocusOnStart);
     }
+
+    /// <summary>
+    /// Whether the automatic initial session start (on first load) moves keyboard focus into
+    /// the terminal once the session is running. Defaults to true (standalone-app behavior).
+    /// Hosts embedding many views (or restoring a saved layout where another pane should own
+    /// focus) can set this to false so a late ConPTY startup does not steal focus; explicit
+    /// starts via the Start button still focus the terminal.
+    /// </summary>
+    public bool AutoFocusOnStart { get; set; } = true;
 
     public async Task CloseAsync()
     {

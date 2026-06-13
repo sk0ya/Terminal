@@ -10,7 +10,7 @@ public sealed class TerminalTabViewShellIntegrationApiTests
     [Fact]
     public void ShellIntegrationInjectionEnabledRoundTrips()
     {
-        RunSta(() =>
+        StaTestRunner.Run(() =>
         {
             // The constructor seeds the value from the saved app settings, so only
             // the setter/getter contract is asserted here.
@@ -27,7 +27,7 @@ public sealed class TerminalTabViewShellIntegrationApiTests
     [Fact]
     public void IsStatusBarVisibleRoundTrips()
     {
-        RunSta(() =>
+        StaTestRunner.Run(() =>
         {
             var view = new TerminalTabView("cmd.exe", Environment.CurrentDirectory);
 
@@ -40,9 +40,23 @@ public sealed class TerminalTabViewShellIntegrationApiTests
     }
 
     [Fact]
+    public void AutoFocusOnStartDefaultsTrueAndRoundTrips()
+    {
+        StaTestRunner.Run(() =>
+        {
+            var view = new TerminalTabView("cmd.exe", Environment.CurrentDirectory);
+
+            Assert.True(view.AutoFocusOnStart);
+
+            view.AutoFocusOnStart = false;
+            Assert.False(view.AutoFocusOnStart);
+        });
+    }
+
+    [Fact]
     public void IsShellIntegrationActiveIsFalseBeforeAnyMarkerArrives()
     {
-        RunSta(() =>
+        StaTestRunner.Run(() =>
         {
             var view = new TerminalTabView("cmd.exe", Environment.CurrentDirectory);
 
@@ -66,7 +80,7 @@ public sealed class TerminalTabViewShellIntegrationApiTests
             ("D", ShellCommandPhase.CommandDone, null),
         };
 
-        RunSta(() =>
+        StaTestRunner.Run(() =>
         {
             var view = new TerminalTabView("cmd.exe", Environment.CurrentDirectory);
             var events = new List<ShellCommandActivityEventArgs>();
@@ -89,24 +103,4 @@ public sealed class TerminalTabViewShellIntegrationApiTests
         });
     }
 
-    private static void RunSta(Action action)
-    {
-        ExceptionDispatchInfo? captured = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception ex)
-            {
-                captured = ExceptionDispatchInfo.Capture(ex);
-            }
-        });
-
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-        captured?.Throw();
-    }
 }
