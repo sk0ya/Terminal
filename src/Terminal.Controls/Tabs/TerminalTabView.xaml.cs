@@ -73,6 +73,15 @@ public partial class TerminalTabView : UserControl
 
     public event EventHandler<string>? HeaderTitleChanged;
 
+    /// <summary>
+    /// Raised on the dispatcher thread for every OSC 133 shell-integration marker observed
+    /// on this session: prompt shown, command input started, command executing, and command
+    /// finished (with exit code). Fires for commands typed by the user as well as those sent
+    /// via <see cref="RunCommandAsync"/>, so hosts can surface live command activity
+    /// (busy indicators, success/failure badges) without polling.
+    /// </summary>
+    public event EventHandler<ShellCommandActivityEventArgs>? ShellCommandActivity;
+
     public string HeaderTitle { get; private set; } = "Terminal";
 
     public TerminalTabView(string? commandLine = null, string? workingDirectory = null)
@@ -2051,6 +2060,7 @@ public partial class TerminalTabView : UserControl
     {
         _shellIntegrationObserved = true;
         OnAgentShellCommandZone(e);
+        RaiseShellCommandActivity(e);
 
         if (e.ZoneType == ShellCommandZoneType.PromptStart)
         {
@@ -2065,6 +2075,26 @@ public partial class TerminalTabView : UserControl
             SetStatus($"Command exited with code {e.ExitCode.Value}.");
         }
     }
+
+    private void RaiseShellCommandActivity(ShellCommandZoneEventArgs e)
+    {
+        if (ShellCommandActivity is not { } handlers)
+        {
+            return;
+        }
+
+        var phase = e.ZoneType switch
+        {
+            ShellCommandZoneType.PromptStart => ShellCommandPhase.PromptStart,
+            ShellCommandZoneType.CommandStart => ShellCommandPhase.CommandStart,
+            ShellCommandZoneType.CommandExecuted => ShellCommandPhase.CommandExecuted,
+            _ => ShellCommandPhase.CommandDone,
+        };
+        handlers(this, new ShellCommandActivityEventArgs(phase, e.ExitCode));
+    }
+
+    /// <summary>Feeds raw PTY output into the terminal buffer; test seam for marker-driven events.</summary>
+    internal void FeedOutputForTests(string data) => _terminalBuffer.Process(data);
 
     private bool TryScrollToAdjacentCommandLine(bool upward)
     {

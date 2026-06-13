@@ -7,7 +7,7 @@
     <UseWPF>true</UseWPF>
     <IsPackable>true</IsPackable>
     <PackageId>sk0ya.Terminal.Controls</PackageId>
-    <Version>1.0.7</Version>
+    <Version>1.0.8</Version>
     <Authors>shigekazukoya</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/sk0ya/Terminal</RepositoryUrl>

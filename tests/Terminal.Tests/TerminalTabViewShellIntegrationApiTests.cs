@@ -50,6 +50,45 @@ public sealed class TerminalTabViewShellIntegrationApiTests
         });
     }
 
+    [Fact]
+    public void ShellCommandActivityMapsOscMarkersToPhases()
+    {
+        // (marker, expected phase, expected exit code). A single view feeds every marker:
+        // constructing one view per case on parallel STA threads races WPF's BAML loading
+        // (System.IO.Packaging is not thread-safe), which made a Theory version flaky.
+        var cases = new (string Marker, ShellCommandPhase Phase, int? ExitCode)[]
+        {
+            ("A", ShellCommandPhase.PromptStart, null),
+            ("B", ShellCommandPhase.CommandStart, null),
+            ("C", ShellCommandPhase.CommandExecuted, null),
+            ("D;0", ShellCommandPhase.CommandDone, 0),
+            ("D;1", ShellCommandPhase.CommandDone, 1),
+            ("D", ShellCommandPhase.CommandDone, null),
+        };
+
+        RunSta(() =>
+        {
+            var view = new TerminalTabView("cmd.exe", Environment.CurrentDirectory);
+            var events = new List<ShellCommandActivityEventArgs>();
+            view.ShellCommandActivity += (_, e) => events.Add(e);
+
+            const char esc = (char)0x1b;
+            const char bel = (char)0x07;
+            foreach (var (marker, _, _) in cases)
+            {
+                view.FeedOutputForTests($"{esc}]133;{marker}{bel}");
+            }
+
+            Assert.True(view.IsShellIntegrationActive);
+            Assert.Equal(cases.Length, events.Count);
+            for (int i = 0; i < cases.Length; i++)
+            {
+                Assert.Equal(cases[i].Phase, events[i].Phase);
+                Assert.Equal(cases[i].ExitCode, events[i].ExitCode);
+            }
+        });
+    }
+
     private static void RunSta(Action action)
     {
         ExceptionDispatchInfo? captured = null;
