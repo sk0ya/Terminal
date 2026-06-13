@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -33,6 +34,9 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private Point? _selectionAnchorPoint;
     private bool _selectionDragStarted;
     private bool _blockSelectionMode;
+    // The link (URL/file path) currently under the mouse pointer, drawn with an underline so it
+    // reads as clickable. Cell-column span on a single line; null when not hovering a link.
+    private (int Line, int StartColumn, int EndColumn)? _hoveredLink;
     private double _blockAnchorCellColumn;
     private double _blockCurrentCellColumn;
     private TerminalTextPosition _keyboardCursor;
@@ -620,7 +624,27 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             }
 
             DrawLineText(drawingContext, line, top, contentLeft);
+
+            if (_hoveredLink is { } hovered && hovered.Line == lineIndex)
+            {
+                DrawHoverUnderline(drawingContext, hovered.StartColumn, hovered.EndColumn, top, contentLeft);
+            }
         }
+    }
+
+    private void DrawHoverUnderline(DrawingContext drawingContext, int startColumn, int endColumn, double top, double contentLeft)
+    {
+        if (endColumn <= startColumn)
+        {
+            return;
+        }
+
+        double x1 = contentLeft + (startColumn * _cellSize.Width);
+        double x2 = contentLeft + (endColumn * _cellSize.Width);
+        double y = Math.Round(top + _cellSize.Height - 1.0) + 0.5; // crisp 1px line on the cell baseline
+        var pen = new Pen(Foreground ?? DefaultForegroundBrush, 1.0);
+        pen.Freeze();
+        drawingContext.DrawLine(pen, new Point(x1, y), new Point(x2, y));
     }
 
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
@@ -630,6 +654,18 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         Focus();
         if (!TryCreateTextPosition(e.GetPosition(this), out TerminalTextPosition position))
         {
+            return;
+        }
+
+        // Ctrl+Click activates the link (URL/file path) under the pointer. Done on mouse-down so it
+        // isn't lost to the capture release in TerminalTabView's PreviewMouseUp, and so it doesn't
+        // interfere with plain-click/drag text selection.
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0 &&
+            TryGetHyperlink(position.LineIndex, position.TextIndex, out string? linkTarget) &&
+            !string.IsNullOrEmpty(linkTarget))
+        {
+            HyperlinkActivated?.Invoke(this, new TerminalHyperlinkActivatedEventArgs(linkTarget));
+            e.Handled = true;
             return;
         }
 
@@ -736,7 +772,17 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     {
         base.OnMouseMove(e);
 
-        if (!_selectionAnchor.HasValue || e.LeftButton != MouseButtonState.Pressed)
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            // Plain hover (no drag): underline + hand-cursor the link under the pointer.
+            UpdateHoveredLink(e.GetPosition(this));
+            return;
+        }
+
+        // A drag is in progress — selection, not a link hover.
+        SetHoveredLink(null);
+
+        if (!_selectionAnchor.HasValue)
         {
             return;
         }
@@ -773,21 +819,13 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             return;
         }
 
-        if (!_selectionDragStarted &&
-            TryCreateTextPosition(e.GetPosition(this), out TerminalTextPosition position) &&
-            TryGetHyperlink(position.LineIndex, position.TextIndex, out Uri? navigateUri) &&
-            navigateUri is not null)
+        // Hyperlink activation is handled on Ctrl+mouse-down (OnMouseLeftButtonDown), not here:
+        // TerminalTabView releases the mouse capture in its PreviewMouseUp before this bubbling
+        // handler runs, which clears _selectionAnchor — so the link gesture can't reliably fire here.
+        TerminalTextRange? normalized = NormalizeSelection(_selection);
+        if (!normalized.HasValue || normalized.Value.IsEmpty)
         {
             ClearSelection();
-            HyperlinkActivated?.Invoke(this, new TerminalHyperlinkActivatedEventArgs(navigateUri));
-        }
-        else
-        {
-            TerminalTextRange? normalized = NormalizeSelection(_selection);
-            if (!normalized.HasValue || normalized.Value.IsEmpty)
-            {
-                ClearSelection();
-            }
         }
 
         _selectionAnchor = null;
@@ -804,6 +842,39 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         _selectionAnchorPoint = null;
         _selectionDragStarted = false;
         _blockSelectionMode = false;
+    }
+
+    protected override void OnMouseLeave(MouseEventArgs e)
+    {
+        base.OnMouseLeave(e);
+        SetHoveredLink(null);
+    }
+
+    /// <summary>Underlines + hand-cursors the link under <paramref name="point"/>, or clears the hover.</summary>
+    private void UpdateHoveredLink(Point point)
+    {
+        if (TryCreateTextPosition(point, out TerminalTextPosition position) &&
+            TryGetHyperlinkRegion(position.LineIndex, position.TextIndex, out _, out int startColumn, out int endColumn))
+        {
+            SetHoveredLink((position.LineIndex, startColumn, endColumn));
+            Cursor = Cursors.Hand;
+        }
+        else
+        {
+            SetHoveredLink(null);
+            ClearValue(CursorProperty);
+        }
+    }
+
+    private void SetHoveredLink((int Line, int StartColumn, int EndColumn)? value)
+    {
+        if (_hoveredLink == value)
+        {
+            return;
+        }
+
+        _hoveredLink = value;
+        InvalidateVisual();
     }
 
     protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
@@ -1220,9 +1291,19 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         return true;
     }
 
-    private bool TryGetHyperlink(int lineIndex, int textIndex, out Uri? navigateUri)
+    private bool TryGetHyperlink(int lineIndex, int textIndex, out string? target)
+        => TryGetHyperlinkRegion(lineIndex, textIndex, out target, out _, out _);
+
+    /// <summary>
+    /// Resolves the clickable target at a text position and the cell-column span it occupies on the
+    /// line (used to draw the hover underline). Matches an OSC 8 hyperlink segment first, then a
+    /// bare URL/file path detected in the plain text.
+    /// </summary>
+    private bool TryGetHyperlinkRegion(int lineIndex, int textIndex, out string? target, out int startColumn, out int endColumn)
     {
-        navigateUri = null;
+        target = null;
+        startColumn = 0;
+        endColumn = 0;
         if (lineIndex < 0 || lineIndex >= _lines.Count)
         {
             return false;
@@ -1244,13 +1325,97 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 continue;
             }
 
-            if (Uri.TryCreate(segment.Snapshot.Hyperlink, UriKind.Absolute, out navigateUri))
+            // Explicit OSC 8 hyperlink — its target is the embedded URI.
+            target = segment.Snapshot.Hyperlink;
+            startColumn = start;
+            endColumn = end;
+            return true;
+        }
+
+        // No explicit OSC 8 hyperlink at this position — fall back to detecting a bare URL
+        // (e.g. "https://example.com") or a file path printed as plain text on the line.
+        if (!TryDetectTargetAt(line.Text, textIndex, out target, out int textStart, out int textLength))
+        {
+            return false;
+        }
+
+        startColumn = GetCellColumnForTextIndex(line, textStart, preferTrailingEdge: false);
+        endColumn = GetCellColumnForTextIndex(line, textStart + textLength, preferTrailingEdge: false);
+        return true;
+    }
+
+    private static readonly Regex UrlPattern = new(
+        @"(?:https?|ftp|file)://[^\s<>""'` ]+",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // A Windows/UNC/Unix file path, optionally followed by :line or :line:col. The first
+    // alternative requires a recognizable root (drive, UNC, ./ ../ or a leading slash); the second
+    // accepts a relative path that has a separator and a file extension, so ordinary words aren't
+    // mistaken for paths (e.g. "src/Foo.cs:12").
+    private static readonly Regex FilePathPattern = new(
+        @"(?:[A-Za-z]:[\\/]|\\\\[^\s\\/]+[\\/]|\.{0,2}[\\/])[^\s:*?""<>|]+(?:[\\/][^\s:*?""<>|]+)*(?::\d+(?::\d+)?)?" +
+        @"|[\w.\-]+(?:[\\/][\w.\-]+)+\.\w+(?::\d+(?::\d+)?)?",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// Scans <paramref name="text"/> for a clickable target (URL or file path) whose span contains
+    /// <paramref name="textIndex"/>. URLs take precedence over file paths. Trailing sentence
+    /// punctuation is trimmed. The raw matched text is returned so the host can route it.
+    /// </summary>
+    private static bool TryDetectTargetAt(string text, int textIndex, out string? target, out int matchStart, out int matchLength)
+    {
+        target = null;
+        matchStart = 0;
+        matchLength = 0;
+        if (string.IsNullOrEmpty(text) || textIndex < 0 || textIndex >= text.Length)
+        {
+            return false;
+        }
+
+        return TryMatchAt(UrlPattern, text, textIndex, out target, out matchStart, out matchLength)
+            || TryMatchAt(FilePathPattern, text, textIndex, out target, out matchStart, out matchLength);
+    }
+
+    private static bool TryMatchAt(Regex pattern, string text, int textIndex, out string? match, out int matchStart, out int matchLength)
+    {
+        match = null;
+        matchStart = 0;
+        matchLength = 0;
+        foreach (Match m in pattern.Matches(text))
+        {
+            int start = m.Index;
+            int length = TrimTrailingPunctuation(m.Value);
+            if (length <= 0 || textIndex < start || textIndex >= start + length)
             {
-                return true;
+                continue;
             }
+
+            match = text.Substring(start, length);
+            matchStart = start;
+            matchLength = length;
+            return true;
         }
 
         return false;
+    }
+
+    private static int TrimTrailingPunctuation(string url)
+    {
+        int length = url.Length;
+        while (length > 0)
+        {
+            char c = url[length - 1];
+            if (c is '.' or ',' or ';' or ':' or '!' or '?' or ')' or ']' or '}' or '>' or '"' or '\'')
+            {
+                length--;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        return length;
     }
 
     private bool TryFindForward(TerminalTextPosition start, string query, StringComparison comparison, out TerminalTextRange range)
@@ -1561,7 +1726,19 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     }
 }
 
-public sealed class TerminalHyperlinkActivatedEventArgs(Uri uri) : EventArgs
+public sealed class TerminalHyperlinkActivatedEventArgs(string target) : EventArgs
 {
-    public Uri Uri { get; } = uri;
+    /// <summary>
+    /// The raw clickable text under the cursor — an OSC 8 hyperlink URI, a detected URL, or a
+    /// detected file path (which may carry a <c>:line</c> or <c>:line:col</c> suffix). A host can
+    /// inspect this to route the activation (e.g. open a URL in an in-app browser and a file path
+    /// in an editor); otherwise the default behavior opens it with the OS shell via <c>Process.Start</c>.
+    /// </summary>
+    public string Target { get; } = target;
+
+    /// <summary>
+    /// Set to <c>true</c> in a <c>TerminalTabView.HyperlinkActivated</c> handler to suppress the
+    /// default behavior (opening <see cref="Target"/> with the OS shell via <c>Process.Start</c>).
+    /// </summary>
+    public bool Handled { get; set; }
 }

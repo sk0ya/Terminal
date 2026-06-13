@@ -82,6 +82,14 @@ public partial class TerminalTabView : UserControl
     /// </summary>
     public event EventHandler<ShellCommandActivityEventArgs>? ShellCommandActivity;
 
+    /// <summary>
+    /// Raised when a terminal hyperlink (OSC 8) is activated, before the default browser launch.
+    /// A host may set <see cref="TerminalHyperlinkActivatedEventArgs.Handled"/> to <c>true</c> to
+    /// take over opening the link (e.g. route it to an in-app browser); otherwise the URL is opened
+    /// with the OS default browser via <c>Process.Start</c>.
+    /// </summary>
+    public event EventHandler<TerminalHyperlinkActivatedEventArgs>? HyperlinkActivated;
+
     public string HeaderTitle { get; private set; } = "Terminal";
 
     public TerminalTabView(string? commandLine = null, string? workingDirectory = null)
@@ -207,9 +215,16 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalOutput_HyperlinkActivated(object? sender, TerminalHyperlinkActivatedEventArgs e)
     {
+        // Give the host a chance to route the link itself (e.g. an in-app browser).
+        HyperlinkActivated?.Invoke(this, e);
+        if (e.Handled)
+        {
+            return;
+        }
+
         try
         {
-            Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri)
+            Process.Start(new ProcessStartInfo(e.Target)
             {
                 UseShellExecute = true
             });
