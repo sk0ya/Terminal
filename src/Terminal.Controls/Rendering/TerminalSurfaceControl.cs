@@ -1173,7 +1173,9 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
         _viewportWidth = nextWidth;
         _viewportHeight = nextHeight;
-        CoerceOffsets();
+        // The extent height folds in the viewport's sub-row remainder, so recompute it whenever
+        // the viewport size changes rather than only on snapshot/floor updates.
+        UpdateScrollMetrics();
         ScrollOwner?.InvalidateScrollInfo();
     }
 
@@ -1184,9 +1186,14 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         _extentWidth = Math.Max(
             _viewportFloorWidth,
             padding.Left + padding.Right + (_maxCellLength * _cellSize.Width));
+        // The visible row count is a floor division of the viewport height by the cell height,
+        // so the viewport is usually a few pixels taller than a whole number of rows. Park that
+        // sub-row remainder below the last line by padding the extent with it: scrolling to the
+        // bottom then aligns rows to the viewport's top edge (e.g. after Ctrl+L) instead of
+        // revealing a stale sliver of the line above the active screen.
         _extentHeight = Math.Max(
             _viewportFloorHeight,
-            padding.Top + padding.Bottom + (_lines.Count * _cellSize.Height));
+            padding.Top + padding.Bottom + (_lines.Count * _cellSize.Height) + ComputeSubCellViewportRemainder(padding));
         CoerceOffsets();
         if (!DoubleUtil.AreClose(_extentWidth, _lastReportedExtentWidth) ||
             !DoubleUtil.AreClose(_extentHeight, _lastReportedExtentHeight))
@@ -1198,6 +1205,32 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 ScrollOwner.InvalidateScrollInfo();
             }
         }
+    }
+
+    private double ComputeSubCellViewportRemainder(Thickness padding)
+    {
+        double cellHeight = _cellSize.Height;
+        if (cellHeight <= 0)
+        {
+            return 0;
+        }
+
+        double contentViewportHeight = _viewportHeight - padding.Top - padding.Bottom;
+        if (contentViewportHeight <= 0)
+        {
+            return 0;
+        }
+
+        double rows = contentViewportHeight / cellHeight;
+        double fraction = rows - Math.Floor(rows);
+        // Treat a viewport that is (within rounding) an exact multiple of the cell height as
+        // having no remainder so floating-point error never inflates the extent by a full row.
+        if (fraction < 1e-6 || fraction > 1 - 1e-6)
+        {
+            return 0;
+        }
+
+        return fraction * cellHeight;
     }
 
     private Size ResolveViewportSize(Size constraint)
