@@ -14,12 +14,9 @@ on:
 jobs:
   publish:
     runs-on: windows-latest
-    permissions:
-      contents: read
-      packages: write
     env:
       DOTNET_NOLOGO: true
-      NUGET_SOURCE_URL: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+      NUGET_SOURCE_URL: https://api.nuget.org/v3/index.json
 
     steps:
       - name: Checkout
@@ -63,16 +60,17 @@ jobs:
           dotnet pack src\Terminal.Core\Terminal.Core.csproj -c Release --no-build -p:Version=${{ steps.version.outputs.package_version }} -o artifacts\packages
           dotnet pack src\Terminal.Controls\Terminal.Controls.csproj -c Release --no-build -p:Version=${{ steps.version.outputs.package_version }} -o artifacts\packages
 
-      - name: Authenticate to GitHub Packages
-        run: dotnet nuget add source --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text --name github ${{ env.NUGET_SOURCE_URL }}
-
-      - name: Publish packages
+      - name: Publish packages to nuget.org
         shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
+          if ([string]::IsNullOrWhiteSpace($env:NUGET_API_KEY)) {
+            throw 'NUGET_API_KEY secret is not set. Add your nuget.org API key as a repository secret.'
+          }
+
           Get-ChildItem artifacts\packages\*.nupkg |
             Where-Object { $_.Name -notlike '*.snupkg' } |
             ForEach-Object {
-              dotnet nuget push $_.FullName --source github --api-key $env:GITHUB_TOKEN --skip-duplicate
+              dotnet nuget push $_.FullName --source $env:NUGET_SOURCE_URL --api-key $env:NUGET_API_KEY --skip-duplicate
             }
