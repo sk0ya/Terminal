@@ -2035,4 +2035,37 @@ public sealed class AnsiTerminalBufferTests
         Assert.Equal("AB   FGHIJ", line);
     }
 
+    [Fact]
+    public void ClearedScreenRendersFullHeightOnceScrollbackExists()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        // Overflow the 10-row screen so older lines move into the scrollback.
+        for (int i = 0; i < 14; i++)
+        {
+            buffer.Process($"line{i}\r\n");
+        }
+
+        Assert.True(buffer.ScrollbackLineCount > 0);
+
+        // ESC[2J + cursor home blanks the active screen (Ctrl+L style clear).
+        buffer.Process("[2J[H");
+
+        // The active screen must still occupy its full height so the stale scrollback is
+        // pushed above the viewport rather than rendered directly beneath the prompt.
+        Assert.Equal(10, buffer.VisibleLineCount);
+    }
+
+    [Fact]
+    public void FreshScreenTrimsTrailingBlankLines()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 6);
+
+        buffer.Process("A\r\nB");
+
+        // With no scrollback yet, trailing blank rows stay trimmed to avoid a blank gap.
+        Assert.Equal(0, buffer.ScrollbackLineCount);
+        Assert.Equal(2, buffer.VisibleLineCount);
+    }
+
 }

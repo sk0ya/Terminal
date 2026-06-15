@@ -65,6 +65,21 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         UseLayoutRounding = true;
         FocusVisualStyle = null;
         TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
+        RequestBringIntoView += OnRequestBringIntoView;
+    }
+
+    private static void OnRequestBringIntoView(object sender, RequestBringIntoViewEventArgs e)
+    {
+        // Clicking the surface focuses it, and WPF then raises RequestBringIntoView, which the
+        // hosting ScrollViewer services via IScrollInfo.MakeVisible — scrolling the viewport
+        // (typically snapping to the top) even though the user did not scroll. The terminal owns
+        // its scroll position: follow-output uses ScrollToVerticalOffset and keyboard-cursor
+        // navigation calls MakeVisible directly, neither of which routes through this event.
+        // Suppress the focus-driven bring-into-view so a click never moves the viewport.
+        if (ReferenceEquals(e.TargetObject, sender))
+        {
+            e.Handled = true;
+        }
     }
 
     public bool CanHorizontallyScroll { get; set; } = true;

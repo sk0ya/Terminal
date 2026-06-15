@@ -3046,9 +3046,21 @@ internal sealed class AnsiTerminalBuffer
 
     private int GetLastRenderedScreenRow(bool showCursor)
     {
-        return _primaryScreenBackup is not null
-            ? _rows - 1
-            : FindLastVisibleScreenRow(showCursor);
+        if (_primaryScreenBackup is not null)
+        {
+            return _rows - 1;
+        }
+
+        // Once output has scrolled into the scrollback, render the active screen at full
+        // height so a cleared screen (Ctrl+L / ESC[2J) pushes the scrollback above the
+        // viewport instead of leaving stale history glued beneath the prompt. With an empty
+        // scrollback (fresh session) keep trimming trailing blanks to avoid a large blank gap.
+        if (_scrollback.Count > 0)
+        {
+            return _rows - 1;
+        }
+
+        return FindLastVisibleScreenRow(showCursor);
     }
 
     private static bool IsLineBlank(TerminalLine line)

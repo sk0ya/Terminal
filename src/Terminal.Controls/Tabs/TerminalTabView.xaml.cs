@@ -1926,19 +1926,29 @@ public partial class TerminalTabView : UserControl
     private void RestoreTerminalViewport(double preservedDistanceFromBottom)
     {
         bool isAlternateScreenActive = _terminalBuffer.IsAlternateScreenActive;
+        // Read the surface's freshly-updated extent/viewport rather than the ScrollViewer's.
+        // UpdateSnapshot recomputes the surface metrics synchronously, but the ScrollViewer's
+        // ExtentHeight/ViewportHeight are only refreshed on its next layout pass (after the
+        // InvalidateScrollInfo queued here). Using the stale ScrollViewer extent would scroll
+        // to the previous bottom and fail to follow newly appended output.
         double targetOffset = ResolveRestoredVerticalOffset(
             isAlternateScreenActive,
             _followTerminalOutput,
             preservedDistanceFromBottom,
-            TerminalScrollHost.ExtentHeight,
-            TerminalScrollHost.ViewportHeight);
+            TerminalOutput.ExtentHeight,
+            TerminalOutput.ViewportHeight);
         TerminalScrollHost.ScrollToVerticalOffset(targetOffset);
         if (isAlternateScreenActive)
         {
             TerminalScrollHost.ScrollToHorizontalOffset(0);
         }
 
-        UpdateFollowOutputState();
+        // Derive the follow state from the restore decision instead of re-reading the
+        // ScrollViewer, whose offset/extent are still stale until the deferred scroll lands.
+        _followTerminalOutput = isAlternateScreenActive
+            || _followTerminalOutput
+            || preservedDistanceFromBottom <= AutoFollowThreshold;
+        UpdateTerminalChrome();
     }
 
     internal static double ResolveRestoredVerticalOffset(
