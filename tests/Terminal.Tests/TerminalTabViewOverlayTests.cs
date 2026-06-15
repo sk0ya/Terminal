@@ -48,6 +48,38 @@ public sealed class TerminalTabViewOverlayTests
     }
 
     [Fact]
+    public void CalculateOverlayLayoutHidesCursorScrolledAboveViewport()
+    {
+        (_, Rect cursorBounds) = TerminalTabView.CalculateOverlayLayout(
+            cursorLeft: 10,
+            cursorTop: -40,
+            proxyWidth: 30,
+            proxyHeight: 20,
+            charWidth: 10,
+            charHeight: 20,
+            viewportBounds: new Rect(0, 0, 100, 200),
+            cursorShape: TerminalCursorShape.Block);
+
+        Assert.True(cursorBounds.IsEmpty);
+    }
+
+    [Fact]
+    public void CalculateOverlayLayoutHidesCursorScrolledBelowViewport()
+    {
+        (_, Rect cursorBounds) = TerminalTabView.CalculateOverlayLayout(
+            cursorLeft: 10,
+            cursorTop: 260,
+            proxyWidth: 30,
+            proxyHeight: 20,
+            charWidth: 10,
+            charHeight: 20,
+            viewportBounds: new Rect(0, 0, 100, 200),
+            cursorShape: TerminalCursorShape.Block);
+
+        Assert.True(cursorBounds.IsEmpty);
+    }
+
+    [Fact]
     public void ResolveRenderedCursorLineIgnoresScrollbackInAlternateScreen()
     {
         int lineIndex = TerminalTabView.ResolveRenderedCursorLine(

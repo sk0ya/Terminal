@@ -1611,7 +1611,7 @@ public partial class TerminalTabView : UserControl
 
     private void UpdateCursorOverlay(Rect bounds)
     {
-        if (!ShouldShowCursorOverlay())
+        if (bounds.IsEmpty || !ShouldShowCursorOverlay())
         {
             TerminalCursorOverlay.Visibility = Visibility.Collapsed;
             return;
@@ -1673,6 +1673,13 @@ public partial class TerminalTabView : UserControl
         Rect viewportBounds,
         TerminalCursorShape cursorShape)
     {
+        // When the cursor's line has scrolled out of the visible viewport, hide the overlay
+        // instead of pinning it to the viewport edge so it tracks the actual input position.
+        if (top + charHeight <= viewportBounds.Top || top >= viewportBounds.Bottom)
+        {
+            return Rect.Empty;
+        }
+
         double overlayWidth = Math.Max(2, Math.Ceiling(charWidth));
         double overlayHeight = Math.Max(2, Math.Ceiling(charHeight));
 
@@ -1914,6 +1921,9 @@ public partial class TerminalTabView : UserControl
         }
 
         UpdateFollowOutputState();
+        // Reposition the cursor/input overlay so it tracks the content as the user scrolls
+        // (and hides once the cursor line leaves the viewport) rather than staying pinned.
+        QueueOverlayStateUpdate();
     }
 
     private double GetDistanceFromBottom()
