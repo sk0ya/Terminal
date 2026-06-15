@@ -332,7 +332,8 @@
                 BorderThickness="0">
             <Grid x:Name="TerminalViewportHost"
                   Background="#0E0C0A"
-                  ClipToBounds="True">
+                  ClipToBounds="True"
+                  SizeChanged="OnTerminalOutputSizeChanged">
                 <ScrollViewer x:Name="TerminalScrollHost"
                               Margin="0"
                               Padding="0"

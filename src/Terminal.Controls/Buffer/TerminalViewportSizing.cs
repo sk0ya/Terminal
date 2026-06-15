@@ -46,6 +46,27 @@ internal static class TerminalViewportSizing
                 contentPadding.Bottom));
     }
 
+    public static Size ResolveScrollViewerViewportSize(
+        Size viewportSize,
+        Size actualSize,
+        Size hostSize,
+        Thickness contentPadding)
+    {
+        return new Size(
+            ResolveScrollViewerViewportExtent(
+                viewportSize.Width,
+                actualSize.Width,
+                hostSize.Width,
+                contentPadding.Left,
+                contentPadding.Right),
+            ResolveScrollViewerViewportExtent(
+                viewportSize.Height,
+                actualSize.Height,
+                hostSize.Height,
+                contentPadding.Top,
+                contentPadding.Bottom));
+    }
+
     public static short CalculateCellCount(double viewportExtent, double cellExtent, short fallback, short min, short max)
     {
         if (!IsFinitePositive(viewportExtent) || !IsFinitePositive(cellExtent))
@@ -84,6 +105,29 @@ internal static class TerminalViewportSizing
         }
 
         return Math.Max(0, actualExtent - paddingStart - paddingEnd);
+    }
+
+    private static double ResolveScrollViewerViewportExtent(
+        double viewportExtent,
+        double actualExtent,
+        double hostExtent,
+        double paddingStart,
+        double paddingEnd)
+    {
+        double actualContentExtent = Math.Max(0, actualExtent - paddingStart - paddingEnd);
+        double hostContentExtent = Math.Max(0, hostExtent - paddingStart - paddingEnd);
+        if (!IsFinitePositive(viewportExtent))
+        {
+            return IsFinitePositive(actualContentExtent) ? actualContentExtent : hostContentExtent;
+        }
+
+        double viewportContentExtent = Math.Max(0, viewportExtent - paddingStart - paddingEnd);
+        if (IsFinitePositive(hostContentExtent) && viewportContentExtent > hostContentExtent)
+        {
+            return hostContentExtent;
+        }
+
+        return viewportContentExtent;
     }
 
     private static bool IsFinitePositive(double? value)

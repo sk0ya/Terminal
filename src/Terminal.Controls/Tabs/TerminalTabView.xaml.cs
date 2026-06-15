@@ -2591,6 +2591,7 @@ public partial class TerminalTabView : UserControl
         return TerminalViewportSizing.ResolveScrollViewerViewportSize(
             new Size(TerminalScrollHost.ViewportWidth, TerminalScrollHost.ViewportHeight),
             new Size(TerminalScrollHost.ActualWidth, TerminalScrollHost.ActualHeight),
+            new Size(TerminalViewportHost.ActualWidth, TerminalViewportHost.ActualHeight),
             contentPadding);
     }
 
