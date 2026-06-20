@@ -1440,10 +1440,6 @@ public partial class TerminalTabView : UserControl
         _isRenderingTerminal = true;
         try
         {
-            // Keep the buffer's notion of a cell's pixel size current so inline images (Sixel /
-            // iTerm 1337) are measured into the right cell footprint.
-            Size cellPixelSize = TerminalOutput.CharacterCellSize;
-            _terminalBuffer.SetCellPixelSize(cellPixelSize.Width, cellPixelSize.Height);
             AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = _terminalBuffer.CreateRenderSnapshot(showCursor: false);
             TerminalOutput.UpdateSnapshot(snapshot);
             // Restore the viewport (auto-follow scroll) BEFORE positioning the input proxy so the

@@ -178,45 +178,6 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
-    public void SixelImageIsPlacedAndAdvancesCursorBelowIt()
-    {
-        var buffer = new AnsiTerminalBuffer(40, 20);
-        buffer.SetCellPixelSize(10, 20);
-
-        // 20x40 px raster -> 2 cells wide, 2 cells tall given the 10x20 cell size.
-        buffer.Process("P0;0;0q\"1;1;20;40#1;2;100;0;0#1~\\");
-
-        AnsiTerminalBuffer.TerminalImagePlacement placement = FindFirstImage(buffer);
-        Assert.Equal(0, placement.AnchorColumn);
-        Assert.Equal(2, placement.CellColumns);
-        Assert.Equal(2, placement.CellRows);
-        Assert.Equal(20, placement.PixelWidth);
-        Assert.Equal(40, placement.PixelHeight);
-
-        // The cursor lands at the start of the line below the two-row image.
-        Assert.Equal(2, buffer.CursorRow);
-        Assert.Equal(0, buffer.CursorColumn);
-    }
-
-    [Fact]
-    public void SixelImageTravelsIntoScrollback()
-    {
-        var buffer = new AnsiTerminalBuffer(40, 6, scrollbackLimit: 100);
-        buffer.SetCellPixelSize(10, 20);
-
-        buffer.Process("P0;0;0q\"1;1;10;20#1;2;0;100;0#1~\\");
-        // Push the image well above the visible screen so it lives only in the scrollback.
-        for (int line = 0; line < 20; line++)
-        {
-            buffer.Process("text\r\n");
-        }
-
-        AnsiTerminalBuffer.TerminalImagePlacement placement = FindFirstImage(buffer);
-        Assert.Equal(1, placement.CellColumns);
-        Assert.Equal(1, placement.CellRows);
-    }
-
-    [Fact]
     public void DecrqssIsNotMistakenForSixel()
     {
         var buffer = new AnsiTerminalBuffer(40, 10);
@@ -227,112 +188,22 @@ public sealed class AnsiTerminalBufferTests
         buffer.Process("P$qm\\");
 
         Assert.True(responded);
-        Assert.False(HasAnyImage(buffer));
     }
 
     [Fact]
-    public void Osc1337InlineImageIsPlacedAtNaturalCellSize()
+    public void Osc1337InlineImageSequenceIsConsumedAndNotRendered()
     {
-        var buffer = new AnsiTerminalBuffer(40, 20);
-        buffer.SetCellPixelSize(10, 20);
+        var buffer = new AnsiTerminalBuffer(40, 10);
 
-        string png = CreatePngBase64(width: 4, height: 2);
-        buffer.Process($"]1337;File=inline=1:{png}");
-
-        AnsiTerminalBuffer.TerminalImagePlacement placement = FindFirstImage(buffer);
-        Assert.Equal(4, placement.PixelWidth);
-        Assert.Equal(2, placement.PixelHeight);
-        // 4x2 px over a 10x20 cell -> a single cell.
-        Assert.Equal(1, placement.CellColumns);
-        Assert.Equal(1, placement.CellRows);
-    }
-
-    [Fact]
-    public void Osc1337WidthArgumentInCellsOverridesFootprintAndPreservesAspect()
-    {
-        var buffer = new AnsiTerminalBuffer(40, 20);
-        buffer.SetCellPixelSize(10, 20);
-
-        string png = CreatePngBase64(width: 4, height: 2);
-        buffer.Process($"]1337;File=inline=1;width=3:{png}");
-
-        AnsiTerminalBuffer.TerminalImagePlacement placement = FindFirstImage(buffer);
-        // width=3 cells -> 30 px; aspect-preserved height = 30 * 2/4 = 15 px -> 1 row.
-        Assert.Equal(30, placement.PixelWidth);
-        Assert.Equal(15, placement.PixelHeight);
-        Assert.Equal(3, placement.CellColumns);
-        Assert.Equal(1, placement.CellRows);
-    }
-
-    [Fact]
-    public void Osc1337DownloadRequestDoesNotRender()
-    {
-        var buffer = new AnsiTerminalBuffer(40, 20);
-        buffer.SetCellPixelSize(10, 20);
-
-        string png = CreatePngBase64(width: 4, height: 2);
-        buffer.Process($"]1337;File=inline=0:{png}");
-
-        Assert.False(HasAnyImage(buffer));
-    }
-
-    [Fact]
-    public void Osc1337MalformedPayloadIsIgnored()
-    {
-        var buffer = new AnsiTerminalBuffer(40, 20);
-
-        buffer.Process("]1337;File=inline=1:not-valid-base64!!!");
+        // Inline images are unsupported: the OSC 1337 sequence (including its base64 payload) is
+        // consumed silently - nothing is drawn - and ordinary text after it prints normally.
+        buffer.Process(
+            "]1337;File=inline=1;width=4:" +
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC" +
+            "");
         buffer.Process("X");
 
-        Assert.False(HasAnyImage(buffer));
         Assert.Equal("X", buffer.GetScreenLineText(0).TrimEnd());
-    }
-
-    private static string CreatePngBase64(int width, int height)
-    {
-        var pixels = new byte[width * height * 4];
-        for (int index = 0; index < pixels.Length; index += 4)
-        {
-            pixels[index] = 0x00;     // B
-            pixels[index + 1] = 0x00; // G
-            pixels[index + 2] = 0xFF; // R
-            pixels[index + 3] = 0xFF; // A
-        }
-
-        BitmapSource source = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, width * 4);
-        var encoder = new PngBitmapEncoder();
-        encoder.Frames.Add(BitmapFrame.Create(source));
-        using var stream = new MemoryStream();
-        encoder.Save(stream);
-        return Convert.ToBase64String(stream.ToArray());
-    }
-
-    private static AnsiTerminalBuffer.TerminalImagePlacement FindFirstImage(AnsiTerminalBuffer buffer)
-    {
-        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
-        foreach (AnsiTerminalBuffer.TerminalRenderLineSnapshot line in snapshot.Lines)
-        {
-            if (line.Image is { } image)
-            {
-                return image;
-            }
-        }
-
-        throw new Xunit.Sdk.XunitException("No inline image was found in the render snapshot.");
-    }
-
-    private static bool HasAnyImage(AnsiTerminalBuffer buffer)
-    {
-        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
-        foreach (AnsiTerminalBuffer.TerminalRenderLineSnapshot line in snapshot.Lines)
-        {
-            if (line.Image is not null)
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     [Fact]
@@ -2080,16 +1951,17 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
-    public void SixelDcsSequencePlacesImageWithoutEmittingResponse()
+    public void SixelDcsSequenceIsConsumedWithoutEmittingResponseOrText()
     {
         var buffer = new AnsiTerminalBuffer(80, 24);
-        buffer.SetCellPixelSize(10, 20);
         string? emitted = null;
         buffer.InputSequenceGenerated += (_, text) => emitted = text;
 
         buffer.Process("Pq#0;2;0;0;0-!200~\\");
+        buffer.Process("A");
+
         Assert.Null(emitted);
-        Assert.True(HasAnyImage(buffer));
+        Assert.Equal("A", buffer.GetScreenLineText(0).TrimEnd());
     }
 
     [Fact]

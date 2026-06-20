@@ -110,10 +110,6 @@ internal sealed class AnsiTerminalBuffer
     private int _leftMargin;
     private int _rightMargin;
     private bool _leftRightMarginEnabled;
-    // Pixel size of a single character cell, supplied by the renderer. Used to convert pixel-based
-    // inline images (Sixel / iTerm 1337) into a cell footprint so they stay grid-aligned.
-    private double _cellPixelWidth = 8;
-    private double _cellPixelHeight = 16;
     private ParserState _state;
     private TerminalStyle _currentStyle = TerminalStyle.Default;
     private TerminalStyle _savedStyle = TerminalStyle.Default;
@@ -230,23 +226,6 @@ internal sealed class AnsiTerminalBuffer
         _renderCacheDirty = true;
     }
     public int KittyKeyboardFlags => _kittyKeyboardFlags;
-
-    /// <summary>
-    /// Reports the pixel size of a single character cell so inline images can be measured into a
-    /// cell footprint. Called by the renderer whenever its font metrics change.
-    /// </summary>
-    public void SetCellPixelSize(double width, double height)
-    {
-        if (width > 0)
-        {
-            _cellPixelWidth = width;
-        }
-
-        if (height > 0)
-        {
-            _cellPixelHeight = height;
-        }
-    }
 
     public void Resize(short columns, short rows)
     {
@@ -663,7 +642,6 @@ internal sealed class AnsiTerminalBuffer
     {
         var clone = new TerminalLine(line.Cells.Length, TerminalStyle.Default);
         Array.Copy(line.Cells, clone.Cells, line.Cells.Length);
-        clone.Image = line.Image;
         return clone;
     }
 
@@ -1228,7 +1206,7 @@ internal sealed class AnsiTerminalBuffer
         int introducer = content.IndexOf('q');
         if (introducer >= 0 && IsSixelIntroducer(content, introducer))
         {
-            DispatchSixel(content[(introducer + 1)..]);
+            // Sixel graphics are not supported; the sequence is consumed and ignored.
             return;
         }
 
@@ -1249,64 +1227,6 @@ internal sealed class AnsiTerminalBuffer
         }
 
         return true;
-    }
-
-    private void DispatchSixel(string data)
-    {
-        SixelImageData? decoded = SixelDecoder.Decode(data);
-        if (decoded is not { } image)
-        {
-            return;
-        }
-
-        BitmapSource bitmap = CreateBitmap(image);
-        PlaceInlineImage(bitmap, image.Width, image.Height);
-    }
-
-    private static BitmapSource CreateBitmap(SixelImageData image)
-    {
-        BitmapSource source = BitmapSource.Create(
-            image.Width,
-            image.Height,
-            96,
-            96,
-            PixelFormats.Bgra32,
-            null,
-            image.Bgra,
-            image.Width * 4);
-        source.Freeze();
-        return source;
-    }
-
-    /// <summary>
-    /// Places a decoded inline image at the cursor, reserving a block of cells sized from the image
-    /// pixels and the reported cell size, then advancing the cursor below the image.
-    /// </summary>
-    private void PlaceInlineImage(ImageSource source, int pixelWidth, int pixelHeight)
-    {
-        FlushPendingCluster();
-
-        int cellColumns = Math.Clamp((int)Math.Ceiling(pixelWidth / _cellPixelWidth), 1, _columns);
-        int cellRows = Math.Max(1, (int)Math.Ceiling(pixelHeight / _cellPixelHeight));
-        int anchorColumn = Math.Clamp(_cursorColumn, 0, _columns - 1);
-
-        _screen[_cursorRow].Image = new TerminalImagePlacement(
-            source,
-            anchorColumn,
-            cellColumns,
-            cellRows,
-            pixelWidth,
-            pixelHeight);
-
-        // Reserve the vertical space the image occupies and leave the cursor at the start of the
-        // line below it, scrolling content (and the anchored image) into scrollback as needed.
-        for (int row = 0; row < cellRows; row++)
-        {
-            MoveDownAndScrollIfNeeded();
-        }
-
-        _cursorColumn = 0;
-        InvalidateScreenRenderCache();
     }
 
     private void DispatchOsc(string content)
@@ -1388,146 +1308,10 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
-        if (command == "1337")
-        {
-            DispatchOscInlineImage(value);
-            return;
-        }
-
         if (command == "52")
         {
             DispatchOscClipboard(value);
         }
-    }
-
-    /// <summary>
-    /// Handles the iTerm2 inline-image protocol: <c>OSC 1337 ; File=args : base64 ST</c>. The
-    /// payload is a base64-encoded image (PNG/JPEG/GIF/…) which WPF decodes natively. Optional
-    /// <c>width</c>/<c>height</c> arguments (cells, <c>px</c>, <c>%</c> or <c>auto</c>) size the
-    /// placement; the aspect ratio is preserved when only one axis is given.
-    /// </summary>
-    private void DispatchOscInlineImage(string value)
-    {
-        const string filePrefix = "File=";
-        if (!value.StartsWith(filePrefix, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        string rest = value[filePrefix.Length..];
-        int colon = rest.IndexOf(':');
-        if (colon < 0)
-        {
-            return;
-        }
-
-        Dictionary<string, string> arguments = ParseInlineImageArguments(rest[..colon]);
-        if (arguments.TryGetValue("inline", out string? inline) && inline == "0")
-        {
-            // inline=0 is a file transfer rather than a display request; nothing to render.
-            return;
-        }
-
-        BitmapSource? frame = TryDecodeImage(rest[(colon + 1)..]);
-        if (frame is null)
-        {
-            return;
-        }
-
-        ResolveInlineImageSize(arguments, frame.PixelWidth, frame.PixelHeight, out int pixelWidth, out int pixelHeight);
-        PlaceInlineImage(frame, pixelWidth, pixelHeight);
-    }
-
-    private static Dictionary<string, string> ParseInlineImageArguments(string argumentText)
-    {
-        var arguments = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (string pair in argumentText.Split(';', StringSplitOptions.RemoveEmptyEntries))
-        {
-            int equals = pair.IndexOf('=');
-            if (equals > 0)
-            {
-                arguments[pair[..equals].Trim()] = pair[(equals + 1)..].Trim();
-            }
-        }
-
-        return arguments;
-    }
-
-    private static BitmapSource? TryDecodeImage(string base64)
-    {
-        try
-        {
-            byte[] bytes = Convert.FromBase64String(base64.Trim());
-            using var stream = new MemoryStream(bytes);
-            BitmapDecoder decoder = BitmapDecoder.Create(
-                stream,
-                BitmapCreateOptions.PreservePixelFormat,
-                BitmapCacheOption.OnLoad);
-            if (decoder.Frames.Count == 0)
-            {
-                return null;
-            }
-
-            BitmapSource frame = decoder.Frames[0];
-            frame.Freeze();
-            return frame;
-        }
-        catch (Exception exception) when (exception is FormatException or NotSupportedException or ArgumentException or System.Runtime.InteropServices.COMException)
-        {
-            // Malformed base64 or an unsupported/corrupt image is ignored rather than crashing.
-            return null;
-        }
-    }
-
-    private void ResolveInlineImageSize(
-        Dictionary<string, string> arguments,
-        int naturalWidth,
-        int naturalHeight,
-        out int pixelWidth,
-        out int pixelHeight)
-    {
-        bool preserveAspect = !arguments.TryGetValue("preserveAspectRatio", out string? aspect) || aspect != "0";
-        double? width = ResolveInlineImageDimension(arguments.GetValueOrDefault("width"), _cellPixelWidth, _columns * _cellPixelWidth);
-        double? height = ResolveInlineImageDimension(arguments.GetValueOrDefault("height"), _cellPixelHeight, _rows * _cellPixelHeight);
-
-        if (preserveAspect && naturalWidth > 0 && naturalHeight > 0)
-        {
-            if (width is { } w && height is null)
-            {
-                height = w * naturalHeight / naturalWidth;
-            }
-            else if (height is { } h && width is null)
-            {
-                width = h * naturalWidth / naturalHeight;
-            }
-        }
-
-        pixelWidth = (int)Math.Round(width ?? naturalWidth);
-        pixelHeight = (int)Math.Round(height ?? naturalHeight);
-        pixelWidth = Math.Max(pixelWidth, 1);
-        pixelHeight = Math.Max(pixelHeight, 1);
-    }
-
-    // Resolves an iTerm width/height argument to pixels. A bare number is a cell count, "<n>px" is
-    // pixels, "<n>%" is a percentage of the available axis, and "auto"/empty leaves it unset.
-    private static double? ResolveInlineImageDimension(string? specification, double cellPixels, double axisPixels)
-    {
-        if (string.IsNullOrEmpty(specification) || specification.Equals("auto", StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        if (specification.EndsWith("px", StringComparison.OrdinalIgnoreCase))
-        {
-            return double.TryParse(specification[..^2], out double pixels) ? pixels : null;
-        }
-
-        if (specification.EndsWith('%'))
-        {
-            return double.TryParse(specification[..^1], out double percent) ? axisPixels * percent / 100.0 : null;
-        }
-
-        return double.TryParse(specification, out double cells) ? cells * cellPixels : null;
     }
 
     private void DispatchOscPaletteChange(string value)
@@ -3412,11 +3196,6 @@ internal sealed class AnsiTerminalBuffer
 
     private static bool IsLineBlank(TerminalLine line)
     {
-        if (line.Image is not null)
-        {
-            return false;
-        }
-
         foreach (TerminalCell cell in line.Cells)
         {
             if ((!cell.IsContinuation && cell.Text != " ") || cell.Style != TerminalStyle.Default)
@@ -3466,8 +3245,7 @@ internal sealed class AnsiTerminalBuffer
             return new TerminalRenderLineSnapshot(
                 anchorColumn == 0 ? 0 : -1,
                 0,
-                Array.Empty<TerminalRenderSegmentSnapshot>(),
-                line.Image);
+                Array.Empty<TerminalRenderSegmentSnapshot>());
         }
 
         var text = new StringBuilder();
@@ -3507,7 +3285,7 @@ internal sealed class AnsiTerminalBuffer
             anchorSegmentIndex = segments.Count;
         }
 
-        return new TerminalRenderLineSnapshot(anchorSegmentIndex, visibleLength, segments.ToArray(), line.Image);
+        return new TerminalRenderLineSnapshot(anchorSegmentIndex, visibleLength, segments.ToArray());
     }
 
     private void AppendLineSnapshot(InlineCollection inlines, TerminalRenderLineSnapshot lineSnapshot, ref bool isFirstLine, ref FrameworkElement? cursorAnchor)
@@ -4004,21 +3782,7 @@ internal sealed class AnsiTerminalBuffer
         }
 
         public TerminalCell[] Cells { get; }
-
-        // An inline image (Sixel / iTerm 1337) whose top-left cell is anchored on this line. Null
-        // for ordinary text lines. Travels with the line as it scrolls into scrollback.
-        public TerminalImagePlacement? Image { get; set; }
     }
-
-    // An inline image anchored to a buffer line: the decoded source plus its footprint measured in
-    // terminal cells (so it stays grid-aligned through scrolling and resize).
-    internal readonly record struct TerminalImagePlacement(
-        ImageSource Source,
-        int AnchorColumn,
-        int CellColumns,
-        int CellRows,
-        int PixelWidth,
-        int PixelHeight);
 
     private sealed record ScreenState(
         List<TerminalLine> Screen,
@@ -4081,15 +3845,13 @@ internal sealed class AnsiTerminalBuffer
     internal readonly record struct TerminalRenderLineSnapshot(
         int AnchorSegmentIndex,
         int CellLength,
-        TerminalRenderSegmentSnapshot[] Segments,
-        TerminalImagePlacement? Image = null)
+        TerminalRenderSegmentSnapshot[] Segments)
     {
         public bool ContentEquals(TerminalRenderLineSnapshot other)
         {
             if (AnchorSegmentIndex != other.AnchorSegmentIndex ||
                 CellLength != other.CellLength ||
-                Segments.Length != other.Segments.Length ||
-                Image != other.Image)
+                Segments.Length != other.Segments.Length)
             {
                 return false;
             }
