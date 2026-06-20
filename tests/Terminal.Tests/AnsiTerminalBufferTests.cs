@@ -176,6 +176,87 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void SixelImageIsPlacedAndAdvancesCursorBelowIt()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 20);
+        buffer.SetCellPixelSize(10, 20);
+
+        // 20x40 px raster -> 2 cells wide, 2 cells tall given the 10x20 cell size.
+        buffer.Process("P0;0;0q\"1;1;20;40#1;2;100;0;0#1~\\");
+
+        AnsiTerminalBuffer.TerminalImagePlacement placement = FindFirstImage(buffer);
+        Assert.Equal(0, placement.AnchorColumn);
+        Assert.Equal(2, placement.CellColumns);
+        Assert.Equal(2, placement.CellRows);
+        Assert.Equal(20, placement.PixelWidth);
+        Assert.Equal(40, placement.PixelHeight);
+
+        // The cursor lands at the start of the line below the two-row image.
+        Assert.Equal(2, buffer.CursorRow);
+        Assert.Equal(0, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void SixelImageTravelsIntoScrollback()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 6, scrollbackLimit: 100);
+        buffer.SetCellPixelSize(10, 20);
+
+        buffer.Process("P0;0;0q\"1;1;10;20#1;2;0;100;0#1~\\");
+        // Push the image well above the visible screen so it lives only in the scrollback.
+        for (int line = 0; line < 20; line++)
+        {
+            buffer.Process("text\r\n");
+        }
+
+        AnsiTerminalBuffer.TerminalImagePlacement placement = FindFirstImage(buffer);
+        Assert.Equal(1, placement.CellColumns);
+        Assert.Equal(1, placement.CellRows);
+    }
+
+    [Fact]
+    public void DecrqssIsNotMistakenForSixel()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+        bool responded = false;
+        buffer.InputSequenceGenerated += (_, _) => responded = true;
+
+        // DECRQSS for SGR: ESC P $ q m ST. Must answer, not place an image.
+        buffer.Process("P$qm\\");
+
+        Assert.True(responded);
+        Assert.False(HasAnyImage(buffer));
+    }
+
+    private static AnsiTerminalBuffer.TerminalImagePlacement FindFirstImage(AnsiTerminalBuffer buffer)
+    {
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        foreach (AnsiTerminalBuffer.TerminalRenderLineSnapshot line in snapshot.Lines)
+        {
+            if (line.Image is { } image)
+            {
+                return image;
+            }
+        }
+
+        throw new Xunit.Sdk.XunitException("No inline image was found in the render snapshot.");
+    }
+
+    private static bool HasAnyImage(AnsiTerminalBuffer buffer)
+    {
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        foreach (AnsiTerminalBuffer.TerminalRenderLineSnapshot line in snapshot.Lines)
+        {
+            if (line.Image is not null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    [Fact]
     public void Osc8AppliesHyperlinksOnlyToSubsequentText()
     {
         var buffer = new AnsiTerminalBuffer(32, 10);
@@ -1920,17 +2001,16 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
-    public void SixelDcsSequenceIsIgnoredWithoutCrash()
+    public void SixelDcsSequencePlacesImageWithoutEmittingResponse()
     {
         var buffer = new AnsiTerminalBuffer(80, 24);
+        buffer.SetCellPixelSize(10, 20);
         string? emitted = null;
         buffer.InputSequenceGenerated += (_, text) => emitted = text;
 
         buffer.Process("Pq#0;2;0;0;0-!200~\\");
-        buffer.Process("B");
-
         Assert.Null(emitted);
-        Assert.Equal("B", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.True(HasAnyImage(buffer));
     }
 
     [Fact]
@@ -1953,7 +2033,7 @@ public sealed class AnsiTerminalBufferTests
 
         // ESC followed by a non-backslash inside DCS passthrough should not terminate
         // the sequence; the parser should stay in DcsPassthrough.
-        buffer.Process("PqdataXmore\\");
+        buffer.Process("PpdataXmore\\");
         buffer.Process("Z");
 
         Assert.Equal("Z", buffer.GetScreenLineText(0).TrimEnd());

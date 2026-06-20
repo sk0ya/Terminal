@@ -627,11 +627,26 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
             DrawLineText(drawingContext, line, top, contentLeft);
 
+            if (line.Image is { } image)
+            {
+                DrawInlineImage(drawingContext, image, top, contentLeft);
+            }
+
             if (_hoveredLink is { } hovered && hovered.Line == lineIndex)
             {
                 DrawHoverUnderline(drawingContext, hovered.StartColumn, hovered.EndColumn, top, contentLeft);
             }
         }
+    }
+
+    private void DrawInlineImage(DrawingContext drawingContext, AnsiTerminalBuffer.TerminalImagePlacement image, double top, double contentLeft)
+    {
+        // The image is anchored to this (its top) line and drawn over the block of cells it
+        // reserved, so it stays grid-aligned and scrolls naturally with the surrounding text.
+        double left = contentLeft + (image.AnchorColumn * _cellSize.Width);
+        double width = image.CellColumns * _cellSize.Width;
+        double height = image.CellRows * _cellSize.Height;
+        drawingContext.DrawImage(image.Source, new Rect(left, top, width, height));
     }
 
     private void DrawHoverUnderline(DrawingContext drawingContext, int startColumn, int endColumn, double top, double contentLeft)
@@ -1577,7 +1592,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             }
         }
 
-        return new LineLayout(text, line.CellLength, segments, allEntries.ToArray());
+        return new LineLayout(text, line.CellLength, segments, allEntries.ToArray(), line.Image);
     }
 
     private static TextElementMapEntry[] BuildTextMap(string text, int targetCellLength, bool ambiguousAsWide)
@@ -1821,7 +1836,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         string Text,
         int CellLength,
         SegmentLayout[] Segments,
-        TextElementMapEntry[] Map);
+        TextElementMapEntry[] Map,
+        AnsiTerminalBuffer.TerminalImagePlacement? Image = null);
 
     private readonly record struct SegmentLayout(
         int StartCell,

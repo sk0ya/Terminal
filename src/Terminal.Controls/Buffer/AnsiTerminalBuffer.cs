@@ -5,10 +5,12 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Globalization;
 
 using Terminal.Unicode;
 using Terminal.Settings;
+using Terminal.Rendering;
 
 using SimdVector = System.Numerics.Vector;
 
@@ -107,6 +109,10 @@ internal sealed class AnsiTerminalBuffer
     private int _leftMargin;
     private int _rightMargin;
     private bool _leftRightMarginEnabled;
+    // Pixel size of a single character cell, supplied by the renderer. Used to convert pixel-based
+    // inline images (Sixel / iTerm 1337) into a cell footprint so they stay grid-aligned.
+    private double _cellPixelWidth = 8;
+    private double _cellPixelHeight = 16;
     private ParserState _state;
     private TerminalStyle _currentStyle = TerminalStyle.Default;
     private TerminalStyle _savedStyle = TerminalStyle.Default;
@@ -223,6 +229,23 @@ internal sealed class AnsiTerminalBuffer
         _renderCacheDirty = true;
     }
     public int KittyKeyboardFlags => _kittyKeyboardFlags;
+
+    /// <summary>
+    /// Reports the pixel size of a single character cell so inline images can be measured into a
+    /// cell footprint. Called by the renderer whenever its font metrics change.
+    /// </summary>
+    public void SetCellPixelSize(double width, double height)
+    {
+        if (width > 0)
+        {
+            _cellPixelWidth = width;
+        }
+
+        if (height > 0)
+        {
+            _cellPixelHeight = height;
+        }
+    }
 
     public void Resize(short columns, short rows)
     {
@@ -639,6 +662,7 @@ internal sealed class AnsiTerminalBuffer
     {
         var clone = new TerminalLine(line.Cells.Length, TerminalStyle.Default);
         Array.Copy(line.Cells, clone.Cells, line.Cells.Length);
+        clone.Image = line.Image;
         return clone;
     }
 
@@ -1194,8 +1218,94 @@ internal sealed class AnsiTerminalBuffer
                     EmitInputSequence("P0$r\\");
                     break;
             }
+
+            return;
         }
-        // All other DCS sequences (Sixel, DECUDK, etc.) are silently ignored.
+
+        // Sixel: ESC P <P1>;<P2>;<P3> q <data> ST. The buffer holds "<params>q<data>"; the 'q' is
+        // the final character of the DCS introducer.
+        int introducer = content.IndexOf('q');
+        if (introducer >= 0 && IsSixelIntroducer(content, introducer))
+        {
+            DispatchSixel(content[(introducer + 1)..]);
+            return;
+        }
+
+        // All other DCS sequences (DECUDK, etc.) are silently ignored.
+    }
+
+    private static bool IsSixelIntroducer(string content, int introducerIndex)
+    {
+        // Everything before the 'q' must be numeric Sixel parameters (digits / ';'), so a DECRQSS
+        // or other DCS that merely contains a 'q' in its payload is not mistaken for Sixel.
+        for (int index = 0; index < introducerIndex; index++)
+        {
+            char ch = content[index];
+            if (ch is not ((>= '0' and <= '9') or ';'))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void DispatchSixel(string data)
+    {
+        SixelImageData? decoded = SixelDecoder.Decode(data);
+        if (decoded is not { } image)
+        {
+            return;
+        }
+
+        BitmapSource bitmap = CreateBitmap(image);
+        PlaceInlineImage(bitmap, image.Width, image.Height);
+    }
+
+    private static BitmapSource CreateBitmap(SixelImageData image)
+    {
+        BitmapSource source = BitmapSource.Create(
+            image.Width,
+            image.Height,
+            96,
+            96,
+            PixelFormats.Bgra32,
+            null,
+            image.Bgra,
+            image.Width * 4);
+        source.Freeze();
+        return source;
+    }
+
+    /// <summary>
+    /// Places a decoded inline image at the cursor, reserving a block of cells sized from the image
+    /// pixels and the reported cell size, then advancing the cursor below the image.
+    /// </summary>
+    private void PlaceInlineImage(ImageSource source, int pixelWidth, int pixelHeight)
+    {
+        FlushPendingCluster();
+
+        int cellColumns = Math.Clamp((int)Math.Ceiling(pixelWidth / _cellPixelWidth), 1, _columns);
+        int cellRows = Math.Max(1, (int)Math.Ceiling(pixelHeight / _cellPixelHeight));
+        int anchorColumn = Math.Clamp(_cursorColumn, 0, _columns - 1);
+
+        _screen[_cursorRow].Image = new TerminalImagePlacement(
+            source,
+            anchorColumn,
+            cellColumns,
+            cellRows,
+            pixelWidth,
+            pixelHeight);
+
+        // Reserve the vertical space the image occupies and leave the cursor at the start of the
+        // line below it, scrolling content (and the anchored image) into scrollback as needed.
+        for (int row = 0; row < cellRows; row++)
+        {
+            MoveDownAndScrollIfNeeded();
+        }
+
+        _cursorColumn = 0;
+        InvalidateScreenRenderCache();
     }
 
     private void DispatchOsc(string content)
@@ -3165,6 +3275,11 @@ internal sealed class AnsiTerminalBuffer
 
     private static bool IsLineBlank(TerminalLine line)
     {
+        if (line.Image is not null)
+        {
+            return false;
+        }
+
         foreach (TerminalCell cell in line.Cells)
         {
             if ((!cell.IsContinuation && cell.Text != " ") || cell.Style != TerminalStyle.Default)
@@ -3214,7 +3329,8 @@ internal sealed class AnsiTerminalBuffer
             return new TerminalRenderLineSnapshot(
                 anchorColumn == 0 ? 0 : -1,
                 0,
-                Array.Empty<TerminalRenderSegmentSnapshot>());
+                Array.Empty<TerminalRenderSegmentSnapshot>(),
+                line.Image);
         }
 
         var text = new StringBuilder();
@@ -3254,7 +3370,7 @@ internal sealed class AnsiTerminalBuffer
             anchorSegmentIndex = segments.Count;
         }
 
-        return new TerminalRenderLineSnapshot(anchorSegmentIndex, visibleLength, segments.ToArray());
+        return new TerminalRenderLineSnapshot(anchorSegmentIndex, visibleLength, segments.ToArray(), line.Image);
     }
 
     private void AppendLineSnapshot(InlineCollection inlines, TerminalRenderLineSnapshot lineSnapshot, ref bool isFirstLine, ref FrameworkElement? cursorAnchor)
@@ -3751,7 +3867,21 @@ internal sealed class AnsiTerminalBuffer
         }
 
         public TerminalCell[] Cells { get; }
+
+        // An inline image (Sixel / iTerm 1337) whose top-left cell is anchored on this line. Null
+        // for ordinary text lines. Travels with the line as it scrolls into scrollback.
+        public TerminalImagePlacement? Image { get; set; }
     }
+
+    // An inline image anchored to a buffer line: the decoded source plus its footprint measured in
+    // terminal cells (so it stays grid-aligned through scrolling and resize).
+    internal readonly record struct TerminalImagePlacement(
+        ImageSource Source,
+        int AnchorColumn,
+        int CellColumns,
+        int CellRows,
+        int PixelWidth,
+        int PixelHeight);
 
     private sealed record ScreenState(
         List<TerminalLine> Screen,
@@ -3814,13 +3944,15 @@ internal sealed class AnsiTerminalBuffer
     internal readonly record struct TerminalRenderLineSnapshot(
         int AnchorSegmentIndex,
         int CellLength,
-        TerminalRenderSegmentSnapshot[] Segments)
+        TerminalRenderSegmentSnapshot[] Segments,
+        TerminalImagePlacement? Image = null)
     {
         public bool ContentEquals(TerminalRenderLineSnapshot other)
         {
             if (AnchorSegmentIndex != other.AnchorSegmentIndex ||
                 CellLength != other.CellLength ||
-                Segments.Length != other.Segments.Length)
+                Segments.Length != other.Segments.Length ||
+                Image != other.Image)
             {
                 return false;
             }
