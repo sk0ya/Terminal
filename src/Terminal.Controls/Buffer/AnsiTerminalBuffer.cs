@@ -1,4 +1,5 @@
-﻿using System.Numerics;
+﻿using System.IO;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
@@ -1387,10 +1388,146 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
+        if (command == "1337")
+        {
+            DispatchOscInlineImage(value);
+            return;
+        }
+
         if (command == "52")
         {
             DispatchOscClipboard(value);
         }
+    }
+
+    /// <summary>
+    /// Handles the iTerm2 inline-image protocol: <c>OSC 1337 ; File=args : base64 ST</c>. The
+    /// payload is a base64-encoded image (PNG/JPEG/GIF/…) which WPF decodes natively. Optional
+    /// <c>width</c>/<c>height</c> arguments (cells, <c>px</c>, <c>%</c> or <c>auto</c>) size the
+    /// placement; the aspect ratio is preserved when only one axis is given.
+    /// </summary>
+    private void DispatchOscInlineImage(string value)
+    {
+        const string filePrefix = "File=";
+        if (!value.StartsWith(filePrefix, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        string rest = value[filePrefix.Length..];
+        int colon = rest.IndexOf(':');
+        if (colon < 0)
+        {
+            return;
+        }
+
+        Dictionary<string, string> arguments = ParseInlineImageArguments(rest[..colon]);
+        if (arguments.TryGetValue("inline", out string? inline) && inline == "0")
+        {
+            // inline=0 is a file transfer rather than a display request; nothing to render.
+            return;
+        }
+
+        BitmapSource? frame = TryDecodeImage(rest[(colon + 1)..]);
+        if (frame is null)
+        {
+            return;
+        }
+
+        ResolveInlineImageSize(arguments, frame.PixelWidth, frame.PixelHeight, out int pixelWidth, out int pixelHeight);
+        PlaceInlineImage(frame, pixelWidth, pixelHeight);
+    }
+
+    private static Dictionary<string, string> ParseInlineImageArguments(string argumentText)
+    {
+        var arguments = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string pair in argumentText.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            int equals = pair.IndexOf('=');
+            if (equals > 0)
+            {
+                arguments[pair[..equals].Trim()] = pair[(equals + 1)..].Trim();
+            }
+        }
+
+        return arguments;
+    }
+
+    private static BitmapSource? TryDecodeImage(string base64)
+    {
+        try
+        {
+            byte[] bytes = Convert.FromBase64String(base64.Trim());
+            using var stream = new MemoryStream(bytes);
+            BitmapDecoder decoder = BitmapDecoder.Create(
+                stream,
+                BitmapCreateOptions.PreservePixelFormat,
+                BitmapCacheOption.OnLoad);
+            if (decoder.Frames.Count == 0)
+            {
+                return null;
+            }
+
+            BitmapSource frame = decoder.Frames[0];
+            frame.Freeze();
+            return frame;
+        }
+        catch (Exception exception) when (exception is FormatException or NotSupportedException or ArgumentException or System.Runtime.InteropServices.COMException)
+        {
+            // Malformed base64 or an unsupported/corrupt image is ignored rather than crashing.
+            return null;
+        }
+    }
+
+    private void ResolveInlineImageSize(
+        Dictionary<string, string> arguments,
+        int naturalWidth,
+        int naturalHeight,
+        out int pixelWidth,
+        out int pixelHeight)
+    {
+        bool preserveAspect = !arguments.TryGetValue("preserveAspectRatio", out string? aspect) || aspect != "0";
+        double? width = ResolveInlineImageDimension(arguments.GetValueOrDefault("width"), _cellPixelWidth, _columns * _cellPixelWidth);
+        double? height = ResolveInlineImageDimension(arguments.GetValueOrDefault("height"), _cellPixelHeight, _rows * _cellPixelHeight);
+
+        if (preserveAspect && naturalWidth > 0 && naturalHeight > 0)
+        {
+            if (width is { } w && height is null)
+            {
+                height = w * naturalHeight / naturalWidth;
+            }
+            else if (height is { } h && width is null)
+            {
+                width = h * naturalWidth / naturalHeight;
+            }
+        }
+
+        pixelWidth = (int)Math.Round(width ?? naturalWidth);
+        pixelHeight = (int)Math.Round(height ?? naturalHeight);
+        pixelWidth = Math.Max(pixelWidth, 1);
+        pixelHeight = Math.Max(pixelHeight, 1);
+    }
+
+    // Resolves an iTerm width/height argument to pixels. A bare number is a cell count, "<n>px" is
+    // pixels, "<n>%" is a percentage of the available axis, and "auto"/empty leaves it unset.
+    private static double? ResolveInlineImageDimension(string? specification, double cellPixels, double axisPixels)
+    {
+        if (string.IsNullOrEmpty(specification) || specification.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (specification.EndsWith("px", StringComparison.OrdinalIgnoreCase))
+        {
+            return double.TryParse(specification[..^2], out double pixels) ? pixels : null;
+        }
+
+        if (specification.EndsWith('%'))
+        {
+            return double.TryParse(specification[..^1], out double percent) ? axisPixels * percent / 100.0 : null;
+        }
+
+        return double.TryParse(specification, out double cells) ? cells * cellPixels : null;
     }
 
     private void DispatchOscPaletteChange(string value)

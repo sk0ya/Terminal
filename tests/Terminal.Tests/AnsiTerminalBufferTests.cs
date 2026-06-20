@@ -1,4 +1,6 @@
+using System.IO;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 using Terminal.Buffer;
 using Terminal.Settings;
@@ -226,6 +228,83 @@ public sealed class AnsiTerminalBufferTests
 
         Assert.True(responded);
         Assert.False(HasAnyImage(buffer));
+    }
+
+    [Fact]
+    public void Osc1337InlineImageIsPlacedAtNaturalCellSize()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 20);
+        buffer.SetCellPixelSize(10, 20);
+
+        string png = CreatePngBase64(width: 4, height: 2);
+        buffer.Process($"]1337;File=inline=1:{png}");
+
+        AnsiTerminalBuffer.TerminalImagePlacement placement = FindFirstImage(buffer);
+        Assert.Equal(4, placement.PixelWidth);
+        Assert.Equal(2, placement.PixelHeight);
+        // 4x2 px over a 10x20 cell -> a single cell.
+        Assert.Equal(1, placement.CellColumns);
+        Assert.Equal(1, placement.CellRows);
+    }
+
+    [Fact]
+    public void Osc1337WidthArgumentInCellsOverridesFootprintAndPreservesAspect()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 20);
+        buffer.SetCellPixelSize(10, 20);
+
+        string png = CreatePngBase64(width: 4, height: 2);
+        buffer.Process($"]1337;File=inline=1;width=3:{png}");
+
+        AnsiTerminalBuffer.TerminalImagePlacement placement = FindFirstImage(buffer);
+        // width=3 cells -> 30 px; aspect-preserved height = 30 * 2/4 = 15 px -> 1 row.
+        Assert.Equal(30, placement.PixelWidth);
+        Assert.Equal(15, placement.PixelHeight);
+        Assert.Equal(3, placement.CellColumns);
+        Assert.Equal(1, placement.CellRows);
+    }
+
+    [Fact]
+    public void Osc1337DownloadRequestDoesNotRender()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 20);
+        buffer.SetCellPixelSize(10, 20);
+
+        string png = CreatePngBase64(width: 4, height: 2);
+        buffer.Process($"]1337;File=inline=0:{png}");
+
+        Assert.False(HasAnyImage(buffer));
+    }
+
+    [Fact]
+    public void Osc1337MalformedPayloadIsIgnored()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 20);
+
+        buffer.Process("]1337;File=inline=1:not-valid-base64!!!");
+        buffer.Process("X");
+
+        Assert.False(HasAnyImage(buffer));
+        Assert.Equal("X", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    private static string CreatePngBase64(int width, int height)
+    {
+        var pixels = new byte[width * height * 4];
+        for (int index = 0; index < pixels.Length; index += 4)
+        {
+            pixels[index] = 0x00;     // B
+            pixels[index + 1] = 0x00; // G
+            pixels[index + 2] = 0xFF; // R
+            pixels[index + 3] = 0xFF; // A
+        }
+
+        BitmapSource source = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, width * 4);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(source));
+        using var stream = new MemoryStream();
+        encoder.Save(stream);
+        return Convert.ToBase64String(stream.ToArray());
     }
 
     private static AnsiTerminalBuffer.TerminalImagePlacement FindFirstImage(AnsiTerminalBuffer buffer)
