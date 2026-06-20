@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Windows;
@@ -54,6 +55,68 @@ public sealed class TerminalSurfaceControlTests
             Assert.True(surface.TrySelectNextMatch("first", StringComparison.Ordinal, forward: false, out wrapped));
             Assert.True(wrapped);
             Assert.Equal("first", surface.GetSelectedText());
+        });
+    }
+
+    [Fact]
+    public void SurfaceBuildsLineLayoutsLazilyAndReachesOffscreenLines()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            const int lineCount = 10_000;
+            AnsiTerminalBuffer.TerminalRenderLineSnapshot[] lines = Enumerable
+                .Range(0, lineCount)
+                .Select(index => CreateLine($"line-{index:D5} content"))
+                .ToArray();
+
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(lines));
+
+            // Adopting a snapshot does not materialize the whole history; layouts are built on
+            // demand, so only a handful (from cursor/selection coercion) exist up front.
+            Assert.Equal(lineCount, surface.LineCount);
+            Assert.True(
+                surface.CachedLineLayoutCount < 50,
+                $"Expected lazy layout construction but {surface.CachedLineLayoutCount} of {lineCount} lines were built up front.");
+
+            // Search and selection reach a line far outside the viewport, proving off-screen layouts
+            // are produced on demand from the lightweight value snapshot.
+            Assert.Equal(1, surface.CountMatches("line-09999", StringComparison.Ordinal));
+            Assert.True(surface.TrySelectNextMatch("line-09999", StringComparison.Ordinal, forward: true, out bool wrapped));
+            Assert.False(wrapped);
+            Assert.Equal("line-09999", surface.GetSelectedText());
+        });
+    }
+
+    [Fact]
+    public void SurfaceReusesUnchangedLayoutsAndEvictsChangedOrRemovedLines()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                CreateLine("stable top"),
+                CreateLine("stable middle"),
+                CreateLine("changing bottom 1"),
+                CreateLine("trailing a"),
+                CreateLine("trailing b")
+            ]));
+
+            // Force every layout to be materialized.
+            surface.CountMatches("stable", StringComparison.Ordinal);
+            Assert.Equal(5, surface.CachedLineLayoutCount);
+
+            // The next snapshot keeps the two stable top lines, changes the third, and drops the
+            // trailing two. Only the unchanged lines survive in the cache.
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                CreateLine("stable top"),
+                CreateLine("stable middle"),
+                CreateLine("changing bottom 2")
+            ]));
+
+            Assert.Equal(2, surface.CachedLineLayoutCount);
         });
     }
 

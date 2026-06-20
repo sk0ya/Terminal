@@ -19,9 +19,12 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private static readonly Brush DefaultForegroundBrush = CreateFrozenBrush(Color.FromRgb(0xE8, 0xE0, 0xD2));
 
     private readonly Dictionary<Color, SolidColorBrush> _brushCache = [];
-    private readonly List<LineLayout> _lines = [];
-    private AnsiTerminalBuffer.TerminalRenderLineSnapshot[]? _prevSnapshotLines;
-    private bool _prevAmbiguousAsWide;
+    // Virtualized line layouts: heavy LineLayout objects (grapheme maps, segment arrays) are built
+    // lazily for the lines that are actually touched (the visible window plus any selection/search
+    // probes) and evicted once they scroll out, so memory and per-update CPU scale with the viewport
+    // rather than with the full scrollback history.
+    private readonly VirtualLineLayouts _lines = new();
+    private bool _ambiguousAsWide;
     private Typeface? _typeface;
     private Typeface? _italicTypeface;
     private FontFallbackResolver? _fontFallback;
@@ -117,6 +120,10 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     public int LineCount => _lines.Count;
 
+    // Test hook: number of LineLayout objects currently materialized. Virtualization keeps this
+    // bounded to roughly the viewport regardless of total scrollback size.
+    internal int CachedLineLayoutCount => _lines.CachedCount;
+
     public Size CharacterCellSize
     {
         get
@@ -129,37 +136,11 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     internal void UpdateSnapshot(AnsiTerminalBuffer.TerminalRenderSnapshot snapshot)
     {
         EnsureMetrics();
-        bool ambiguousAsWide = snapshot.AmbiguousWidthIsWide;
-        AnsiTerminalBuffer.TerminalRenderLineSnapshot[] newLines = snapshot.Lines;
-        int newCount = newLines.Length;
-        int prevCount = _prevSnapshotLines?.Length ?? 0;
-        bool canDiff = _prevSnapshotLines is not null && _prevAmbiguousAsWide == ambiguousAsWide;
-
-        while (_lines.Count > newCount)
-            _lines.RemoveAt(_lines.Count - 1);
-
-        int inPlaceCount = _lines.Count;
-        _maxCellLength = 0;
-
-        for (int i = 0; i < newCount; i++)
-        {
-            if (canDiff && i < prevCount && newLines[i].ContentEquals(_prevSnapshotLines![i]))
-            {
-                _maxCellLength = Math.Max(_maxCellLength, _lines[i].CellLength);
-            }
-            else
-            {
-                LineLayout layout = CreateLineLayout(newLines[i], ambiguousAsWide);
-                if (i < inPlaceCount)
-                    _lines[i] = layout;
-                else
-                    _lines.Add(layout);
-                _maxCellLength = Math.Max(_maxCellLength, layout.CellLength);
-            }
-        }
-
-        _prevSnapshotLines = newLines;
-        _prevAmbiguousAsWide = ambiguousAsWide;
+        // The maximum cell length (for the horizontal scroll extent) comes straight from the
+        // lightweight value snapshots, so no LineLayout has to be built here. Layouts are produced
+        // on demand by the cache when OnRender / selection / search ask for a specific line.
+        _ambiguousAsWide = snapshot.AmbiguousWidthIsWide;
+        _maxCellLength = _lines.SetSnapshot(snapshot.Lines, snapshot.AmbiguousWidthIsWide);
 
         CoerceSelection();
         CoerceKeyboardCursor();
@@ -353,8 +334,9 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         }
 
         int count = 0;
-        foreach (LineLayout line in _lines)
+        for (int lineIndex = 0; lineIndex < _lines.Count; lineIndex++)
         {
+            LineLayout line = _lines[lineIndex];
             int index = 0;
             while (index < line.Text.Length)
             {
@@ -622,6 +604,11 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         int lastVisibleLine = Math.Min(
             _lines.Count - 1,
             (int)Math.Ceiling(Math.Max(0, (_verticalOffset - padding.Top) + _viewportHeight) / _cellSize.Height));
+
+        // Drop layouts that have scrolled out of view (plus a one-screen margin on each side so
+        // small scrolls reuse them) to keep the cache bounded to roughly the viewport.
+        int visibleSpan = lastVisibleLine - firstVisibleLine + 1;
+        _lines.TrimOutsideWindow(firstVisibleLine - visibleSpan, lastVisibleLine + visibleSpan);
 
         TerminalTextRange? selection = NormalizeSelection(_selection);
         for (int lineIndex = firstVisibleLine; lineIndex <= lastVisibleLine; lineIndex++)
@@ -1002,7 +989,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             Brush foreground = GetBrush(segment.Snapshot.Foreground);
             TextDecorationCollection? decorations = BuildDecorations(segment.Snapshot);
             FontFallbackResolver? fallback = _fontFallback;
-            bool ambiguousAsWide = _prevAmbiguousAsWide;
+            bool ambiguousAsWide = _ambiguousAsWide;
 
             if (fallback is null)
             {
@@ -1734,6 +1721,101 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     private static int GetDisplayWidth(Rune rune, bool ambiguousAsWide) =>
         UnicodeWidth.GetWidth(rune, ambiguousAsWide);
+
+    // Lazily builds and caches LineLayout objects for the current render snapshot. Layouts for
+    // unchanged lines are reused across snapshots; layouts outside the viewport window are evicted,
+    // so memory and per-update CPU scale with the visible region rather than the whole scrollback.
+    private sealed class VirtualLineLayouts
+    {
+        private readonly Dictionary<int, LineLayout> _cache = [];
+        private readonly List<int> _evictionScratch = [];
+        private AnsiTerminalBuffer.TerminalRenderLineSnapshot[] _snapshot = [];
+        private bool _ambiguousAsWide;
+
+        public int Count => _snapshot.Length;
+
+        public int CachedCount => _cache.Count;
+
+        public LineLayout this[int index]
+        {
+            get
+            {
+                if (!_cache.TryGetValue(index, out LineLayout layout))
+                {
+                    layout = CreateLineLayout(_snapshot[index], _ambiguousAsWide);
+                    _cache[index] = layout;
+                }
+
+                return layout;
+            }
+        }
+
+        // Adopts a new snapshot and returns the maximum cell length across all lines (for the
+        // horizontal scroll extent). Cached layouts are kept only where the line content is
+        // unchanged, so new output at the bottom reuses the scrollback layouts above it.
+        public int SetSnapshot(AnsiTerminalBuffer.TerminalRenderLineSnapshot[] lines, bool ambiguousAsWide)
+        {
+            AnsiTerminalBuffer.TerminalRenderLineSnapshot[] previous = _snapshot;
+            bool reuse = ambiguousAsWide == _ambiguousAsWide && _cache.Count > 0;
+
+            int maxCellLength = 0;
+            for (int index = 0; index < lines.Length; index++)
+            {
+                if (lines[index].CellLength > maxCellLength)
+                {
+                    maxCellLength = lines[index].CellLength;
+                }
+            }
+
+            _snapshot = lines;
+            _ambiguousAsWide = ambiguousAsWide;
+
+            if (!reuse)
+            {
+                _cache.Clear();
+                return maxCellLength;
+            }
+
+            _evictionScratch.Clear();
+            foreach (int index in _cache.Keys)
+            {
+                if (index >= lines.Length || index >= previous.Length || !lines[index].ContentEquals(previous[index]))
+                {
+                    _evictionScratch.Add(index);
+                }
+            }
+
+            foreach (int index in _evictionScratch)
+            {
+                _cache.Remove(index);
+            }
+
+            return maxCellLength;
+        }
+
+        // Evicts cached layouts whose line index falls outside [startInclusive, endInclusive].
+        public void TrimOutsideWindow(int startInclusive, int endInclusive)
+        {
+            if (_cache.Count == 0)
+            {
+                return;
+            }
+
+            _evictionScratch.Clear();
+            foreach (int index in _cache.Keys)
+            {
+                if (index < startInclusive || index > endInclusive)
+                {
+                    _evictionScratch.Add(index);
+                }
+            }
+
+            foreach (int index in _evictionScratch)
+            {
+                _cache.Remove(index);
+            }
+        }
+    }
 
     private readonly record struct LineLayout(
         string Text,
