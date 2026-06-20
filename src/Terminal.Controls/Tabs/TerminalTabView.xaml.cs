@@ -1442,8 +1442,12 @@ public partial class TerminalTabView : UserControl
         {
             AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = _terminalBuffer.CreateRenderSnapshot(showCursor: false);
             TerminalOutput.UpdateSnapshot(snapshot);
-            UpdateInputProxyPosition();
-            RestoreTerminalViewport(preservedDistanceFromBottom);
+            // Restore the viewport (auto-follow scroll) BEFORE positioning the input proxy so the
+            // IME composition window is anchored to the post-scroll content position. The
+            // ScrollViewer's VerticalOffset is still stale until its deferred scroll lands, so the
+            // resolved target offset is threaded into the proxy layout explicitly.
+            double restoredVerticalOffset = RestoreTerminalViewport(preservedDistanceFromBottom);
+            UpdateInputProxyPosition(restoredVerticalOffset);
             UpdateWindowTitle();
             UpdateFindMatchCount();
             UpdateTerminalChrome();
@@ -1500,10 +1504,10 @@ public partial class TerminalTabView : UserControl
         Keyboard.Focus(TerminalInputProxy);
     }
 
-    private void UpdateInputProxyPosition()
+    private void UpdateInputProxyPosition(double? overrideVerticalOffset = null)
     {
         var (charWidth, charHeight) = MeasureCharacterCell();
-        TerminalViewportMetrics viewport = GetTerminalViewportMetrics();
+        TerminalViewportMetrics viewport = GetTerminalViewportMetrics(overrideVerticalOffset);
         Rect viewportBounds = new(
             viewport.ViewportLeft,
             viewport.ViewportTop,
@@ -1933,7 +1937,7 @@ public partial class TerminalTabView : UserControl
             TerminalScrollHost.ExtentHeight - TerminalScrollHost.VerticalOffset - TerminalScrollHost.ViewportHeight);
     }
 
-    private void RestoreTerminalViewport(double preservedDistanceFromBottom)
+    private double RestoreTerminalViewport(double preservedDistanceFromBottom)
     {
         bool isAlternateScreenActive = _terminalBuffer.IsAlternateScreenActive;
         // Read the surface's freshly-updated extent/viewport rather than the ScrollViewer's.
@@ -1959,6 +1963,7 @@ public partial class TerminalTabView : UserControl
             || _followTerminalOutput
             || preservedDistanceFromBottom <= AutoFollowThreshold;
         UpdateTerminalChrome();
+        return targetOffset;
     }
 
     internal static double ResolveRestoredVerticalOffset(
@@ -2575,7 +2580,7 @@ public partial class TerminalTabView : UserControl
             IsSignificantViewportChange(viewportHeightChange);
     }
 
-    private TerminalViewportMetrics GetTerminalViewportMetrics()
+    private TerminalViewportMetrics GetTerminalViewportMetrics(double? overrideVerticalOffset = null)
     {
         Point viewportOrigin = TerminalScrollHost.TranslatePoint(
             new Point(TerminalOutput.Padding.Left, TerminalOutput.Padding.Top),
@@ -2587,7 +2592,10 @@ public partial class TerminalTabView : UserControl
             TerminalOutput.Padding,
             scrollViewerViewportSize);
         double horizontalOffset = TerminalScrollHost.HorizontalOffset;
-        double verticalOffset = TerminalScrollHost.VerticalOffset;
+        // During RenderTerminal the auto-follow scroll is queued but not yet applied, so the
+        // ScrollViewer still reports the pre-scroll offset. Callers mid-render pass the resolved
+        // target offset so the proxy/IME caret tracks the post-scroll content instead of lagging.
+        double verticalOffset = overrideVerticalOffset ?? TerminalScrollHost.VerticalOffset;
         double viewportWidth = viewportSize.Width;
         double viewportHeight = viewportSize.Height;
         double viewportLeft = viewportOrigin.X;
