@@ -128,6 +128,53 @@ public sealed class AnsiTerminalBufferTests
         Assert.Equal(TerminalMouseEncoding.Utf8, buffer.MouseEncoding);
     }
 
+    [Theory]
+    [InlineData("The quick brown fox jumps over the lazy dog 0123456789!@#$%^&*()")]
+    [InlineData("plain ascii then [31mred[0m then more plain text here")]
+    [InlineData("emoji \U0001F1EF\U0001F1F5 flag and family \U0001F468‍\U0001F469‍\U0001F467 done")]
+    [InlineData("combining áé and wide あい mixed with ascii xyz")]
+    [InlineData("line one\r\nline two\r\nline three with trailing ascii run aaaaaaaaaa")]
+    [InlineData("dec(0lqqqk(Bascii after special graphics charset")]
+    public void AsciiFastPathMatchesPerRunePath(string input)
+    {
+        var fast = new AnsiTerminalBuffer(24, 8);
+        fast.Process(input);
+
+        var perRune = new AnsiTerminalBuffer(24, 8) { AsciiFastPathDisabled = true };
+        perRune.Process(input);
+
+        Assert.Equal(
+            perRune.GetPlainTextForAbsoluteLineRange(0, int.MaxValue),
+            fast.GetPlainTextForAbsoluteLineRange(0, int.MaxValue));
+        Assert.Equal(perRune.CursorRow, fast.CursorRow);
+        Assert.Equal(perRune.CursorColumn, fast.CursorColumn);
+    }
+
+    [Fact]
+    public void LongAsciiRunWrapsAcrossLinesViaFastPath()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 6);
+        string run = new('a', 45);
+
+        buffer.Process(run);
+
+        Assert.Equal(new string('a', 20), buffer.GetScreenLineText(0));
+        Assert.Equal(new string('a', 20), buffer.GetScreenLineText(1));
+        Assert.Equal("aaaaa", buffer.GetScreenLineText(2).TrimEnd());
+    }
+
+    [Fact]
+    public void AsciiFastPathDoesNotRemapDecSpecialGraphics()
+    {
+        // While the DEC Special Graphics charset is active, 'q' renders as the horizontal box-drawing
+        // character; the fast path must defer to the per-rune charset mapping.
+        var buffer = new AnsiTerminalBuffer(20, 4);
+
+        buffer.Process("(0qqq");
+
+        Assert.Equal("───", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
     [Fact]
     public void Osc8AppliesHyperlinksOnlyToSubsequentText()
     {

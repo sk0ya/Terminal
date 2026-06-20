@@ -1,4 +1,6 @@
-﻿using System.Text;
+﻿using System.Numerics;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -7,6 +9,8 @@ using System.Globalization;
 
 using Terminal.Unicode;
 using Terminal.Settings;
+
+using SimdVector = System.Numerics.Vector;
 
 namespace Terminal.Buffer;
 
@@ -326,6 +330,22 @@ internal sealed class AnsiTerminalBuffer
         _synchronizedUpdateEndedDuringProcess = false;
         for (int index = 0; index < text.Length;)
         {
+            // Bulk fast path: when the parser is in its default state and nothing about the
+            // current state can change how a printable ASCII character is placed, scan ahead with
+            // SIMD for a run of such characters and write them in one batch. This skips the
+            // per-character rune decode, width lookup, grapheme-cluster state machine, and per-cell
+            // string allocation that dominate CPU when a program streams plain text (e.g. cat).
+            if (_state == ParserState.Normal && CanUseAsciiFastPath())
+            {
+                int runLength = ScanPrintableAsciiRun(text.AsSpan(index));
+                if (runLength > 0)
+                {
+                    WritePrintableAsciiRun(text.AsSpan(index, runLength));
+                    index += runLength;
+                    continue;
+                }
+            }
+
             if (_state == ParserState.Normal &&
                 Rune.TryGetRuneAt(text, index, out Rune rune) &&
                 !IsControlRune(rune))
@@ -343,6 +363,86 @@ internal sealed class AnsiTerminalBuffer
         FlushPendingCluster();
         InvalidateScreenRenderCache();
         return _synchronizedUpdateEndedDuringProcess;
+    }
+
+    private const char PrintableAsciiMin = ' ';
+    private const char PrintableAsciiMax = '~';
+    private static readonly string[] PrintableAsciiStrings = CreatePrintableAsciiStrings();
+
+    private static string[] CreatePrintableAsciiStrings()
+    {
+        var table = new string[PrintableAsciiMax - PrintableAsciiMin + 1];
+        for (int index = 0; index < table.Length; index++)
+        {
+            table[index] = ((char)(PrintableAsciiMin + index)).ToString();
+        }
+
+        return table;
+    }
+
+    // True when a printable ASCII character would be placed identically by the bulk fast path and
+    // the per-rune path. The fast path assumes the character maps to itself (ASCII charset), starts
+    // a fresh cell, and does not continue a grapheme cluster.
+    // Test seam: forces the per-rune path so tests can assert the fast path and the per-rune path
+    // place identical output for the same single Process call.
+    internal bool AsciiFastPathDisabled { get; set; }
+
+    private bool CanUseAsciiFastPath()
+    {
+        return !AsciiFastPathDisabled &&
+            GetActiveCharacterSet() == TerminalCharacterSet.Ascii &&
+            _pendingClusterText.Length == 0 &&
+            !EndsWithZeroWidthJoiner(_lastPrintedClusterText);
+    }
+
+    // Returns the number of leading UTF-16 units in <paramref name="text"/> that are printable ASCII
+    // (U+0020..U+007E). Each such unit is a standalone, width-1, non-combining cell. SIMD scans whole
+    // vectors at a time and falls back to a scalar loop for the tail and for the block that contains
+    // the first non-printable character.
+    private static int ScanPrintableAsciiRun(ReadOnlySpan<char> text)
+    {
+        int index = 0;
+        int length = text.Length;
+
+        if (SimdVector.IsHardwareAccelerated && length >= Vector<ushort>.Count)
+        {
+            ReadOnlySpan<ushort> units = MemoryMarshal.Cast<char, ushort>(text);
+            var lowerBound = new Vector<ushort>(PrintableAsciiMin);
+            var range = new Vector<ushort>((ushort)(PrintableAsciiMax - PrintableAsciiMin));
+            int limit = length - Vector<ushort>.Count;
+            while (index <= limit)
+            {
+                var block = new Vector<ushort>(units.Slice(index, Vector<ushort>.Count));
+                // (c - 0x20) <= (0x7E - 0x20) as an unsigned comparison: characters below 0x20 wrap
+                // to a large value and characters above 0x7E exceed the range, so both break the run.
+                if (SimdVector.GreaterThanAny(block - lowerBound, range))
+                {
+                    break;
+                }
+
+                index += Vector<ushort>.Count;
+            }
+        }
+
+        while (index < length)
+        {
+            if ((uint)(text[index] - PrintableAsciiMin) > (uint)(PrintableAsciiMax - PrintableAsciiMin))
+            {
+                break;
+            }
+
+            index++;
+        }
+
+        return index;
+    }
+
+    private void WritePrintableAsciiRun(ReadOnlySpan<char> run)
+    {
+        for (int index = 0; index < run.Length; index++)
+        {
+            PutText(PrintableAsciiStrings[run[index] - PrintableAsciiMin], width: 1);
+        }
     }
 
     public bool ForceEndSynchronizedUpdate()
