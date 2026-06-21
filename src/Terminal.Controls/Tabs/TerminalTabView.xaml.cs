@@ -71,6 +71,10 @@ public partial class TerminalTabView : UserControl
     private bool _hasStartedInitialSession;
     private readonly List<int> _shellCommandLines = [];
 
+    // Number of items the right-click menu ships with from XAML (Copy / Paste). Host-provided
+    // items are appended past this index and removed before each opening so they don't accumulate.
+    private int _builtinContextMenuItemCount = -1;
+
     public event EventHandler<string>? HeaderTitleChanged;
 
     /// <summary>
@@ -90,6 +94,21 @@ public partial class TerminalTabView : UserControl
     /// </summary>
     public event EventHandler<TerminalHyperlinkActivatedEventArgs>? HyperlinkActivated;
 
+    /// <summary>
+    /// Raised while the right-click context menu is opening, after the built-in Copy/Paste items.
+    /// The menu only opens when there is a selection, so handlers can rely on
+    /// <see cref="TerminalContextMenuBuildingEventArgs.SelectedText"/> being non-empty. Hosts append
+    /// their own entries to <see cref="TerminalContextMenuBuildingEventArgs.Menu"/>; previously
+    /// appended host items are cleared before each opening, so handlers add fresh items every time.
+    /// </summary>
+    public event EventHandler<TerminalContextMenuBuildingEventArgs>? ContextMenuBuilding;
+
+    /// <summary>The currently selected terminal text (empty when nothing is selected).</summary>
+    public string SelectedText => TerminalOutput.GetSelectedText();
+
+    /// <summary>Whether the terminal currently has a non-empty selection.</summary>
+    public bool HasSelection => TerminalOutput.HasSelection;
+
     public string HeaderTitle { get; private set; } = "Terminal";
 
     public TerminalTabView(string? commandLine = null, string? workingDirectory = null)
@@ -102,6 +121,7 @@ public partial class TerminalTabView : UserControl
             : workingDirectory.Trim();
 
         InitializeComponent();
+        _builtinContextMenuItemCount = TerminalOutput.ContextMenu?.Items.Count ?? 0;
         InputMethod.SetIsInputMethodEnabled(TerminalOutput, false);
         InputMethod.SetIsInputMethodSuspended(TerminalOutput, true);
         InitializeTerminalWorkbench();
@@ -338,7 +358,27 @@ public partial class TerminalTabView : UserControl
         if (!hasSelection)
         {
             e.Handled = true;
+            return;
         }
+
+        RebuildHostContextMenuItems();
+    }
+
+    // Drop any host-provided items appended on a previous opening, then let the host append fresh
+    // entries (e.g. "Ask AI", "Search the web") that act on the current selection.
+    private void RebuildHostContextMenuItems()
+    {
+        if (ContextMenuBuilding is not { } handler
+            || TerminalOutput.ContextMenu is not { } menu
+            || _builtinContextMenuItemCount < 0)
+        {
+            return;
+        }
+
+        for (int i = menu.Items.Count - 1; i >= _builtinContextMenuItemCount; i--)
+            menu.Items.RemoveAt(i);
+
+        handler(this, new TerminalContextMenuBuildingEventArgs(SelectedText, HasSelection, menu));
     }
 
     private void CopySelectionMenuItem_Click(object sender, RoutedEventArgs e)
