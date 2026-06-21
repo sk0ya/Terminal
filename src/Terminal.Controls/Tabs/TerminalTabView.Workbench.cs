@@ -590,6 +590,32 @@ public partial class TerminalTabView
         return TerminalOutput.TrySelectNextMatch(query, comparison, forward, out wrapped);
     }
 
+    /// <summary>
+    /// ターミナルバッファ内の <paramref name="query"/> 一致をすべて列挙する。ホストアプリ
+    /// （コマンドパレット等）が一致一覧を提示するための公開口。選択状態・スクロール位置は変えない。
+    /// </summary>
+    /// <param name="query">検索文字列。空・空白なら空配列を返す。</param>
+    /// <param name="caseSensitive">大文字小文字を区別するか。</param>
+    public IReadOnlyList<TerminalMatch> FindMatches(string query, bool caseSensitive)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return Array.Empty<TerminalMatch>();
+        }
+
+        StringComparison comparison = caseSensitive
+            ? StringComparison.Ordinal
+            : StringComparison.OrdinalIgnoreCase;
+        return TerminalOutput.FindMatches(query, comparison);
+    }
+
+    /// <summary>
+    /// <see cref="FindMatches"/> で得た一致を選択ハイライトし、その箇所までスクロールして可視化する。
+    /// </summary>
+    /// <returns>選択できれば <c>true</c>。</returns>
+    public bool SelectMatch(TerminalMatch match)
+        => TerminalOutput.SelectMatch(match.LineIndex, match.Column, match.Length);
+
     private void UpdateFindMatchCount()
     {
         if (FindPanel.Visibility != Visibility.Visible)

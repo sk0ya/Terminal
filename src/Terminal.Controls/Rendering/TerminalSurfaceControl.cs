@@ -8,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 
 using Terminal.Buffer;
+using Terminal.Tabs;
 using Terminal.Unicode;
 
 namespace Terminal.Rendering;
@@ -352,6 +353,59 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         }
 
         return count;
+    }
+
+    /// <summary>
+    /// バッファ全体から <paramref name="query"/> の一致をすべて列挙する（行頭→行末、上から下へ）。
+    /// 同一行に複数あれば重なりなく順に返す。選択状態やスクロール位置は変更しない。
+    /// </summary>
+    public IReadOnlyList<TerminalMatch> FindMatches(string query, StringComparison comparison)
+    {
+        var matches = new List<TerminalMatch>();
+        if (string.IsNullOrEmpty(query))
+        {
+            return matches;
+        }
+
+        for (int lineIndex = 0; lineIndex < _lines.Count; lineIndex++)
+        {
+            LineLayout line = _lines[lineIndex];
+            int index = 0;
+            while (index <= line.Text.Length)
+            {
+                int found = line.Text.IndexOf(query, index, comparison);
+                if (found < 0)
+                {
+                    break;
+                }
+
+                matches.Add(new TerminalMatch(lineIndex, found, query.Length, line.Text));
+                index = found + query.Length;
+            }
+        }
+
+        return matches;
+    }
+
+    /// <summary>
+    /// 指定位置の範囲を選択ハイライトし、その箇所までスクロールして可視化する
+    /// （<see cref="FindMatches"/> で得た一致へジャンプする用途）。範囲は行内にクランプする。
+    /// </summary>
+    /// <returns>行インデックスが有効で選択できれば <c>true</c>。</returns>
+    public bool SelectMatch(int lineIndex, int column, int length)
+    {
+        if (lineIndex < 0 || lineIndex >= _lines.Count)
+        {
+            return false;
+        }
+
+        LineLayout line = _lines[lineIndex];
+        int start = Math.Clamp(column, 0, line.Text.Length);
+        int end = Math.Clamp(column + length, start, line.Text.Length);
+        SelectRange(new TerminalTextRange(
+            new TerminalTextPosition(lineIndex, start),
+            new TerminalTextPosition(lineIndex, end)));
+        return true;
     }
 
     public bool TrySelectNextMatch(string query, StringComparison comparison, bool forward, out bool wrapped)

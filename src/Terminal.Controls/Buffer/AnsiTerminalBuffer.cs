@@ -75,7 +75,7 @@ internal sealed class AnsiTerminalBuffer
 {
     private const int MinColumns = 20;
     private const int MinRows = 10;
-    private const int DefaultScrollbackLimit = 2000;
+    private const int DefaultScrollbackLimit = 10000;
 
     private static readonly Dictionary<Color, SolidColorBrush> BrushCache = [];
     private static readonly char[] CsiIntermediateCharacters = [' ', '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/'];
