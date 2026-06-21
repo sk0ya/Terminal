@@ -566,6 +566,30 @@ public partial class TerminalTabView
         return true;
     }
 
+    /// <summary>
+    /// 外部UI（ホストアプリのコマンドパレット等）からターミナル内テキスト検索を駆動するための公開口。
+    /// 組み込みの検索パネル（Ctrl+Shift+F）と同じ <see cref="TerminalSurfaceControl.TrySelectNextMatch"/> を用い、
+    /// 一致箇所を選択ハイライトしてそこへスクロールする。検索パネルの表示状態には影響しない。
+    /// </summary>
+    /// <param name="query">検索文字列。空・空白なら何もせず false を返す。</param>
+    /// <param name="forward"><c>true</c>=順方向（次へ）/ <c>false</c>=逆方向（前へ）。</param>
+    /// <param name="caseSensitive">大文字小文字を区別するか。</param>
+    /// <param name="wrapped">末尾／先頭で折り返してヒットしたとき <c>true</c>。</param>
+    /// <returns>一致が見つかれば <c>true</c>。</returns>
+    public bool FindInTerminal(string query, bool forward, bool caseSensitive, out bool wrapped)
+    {
+        wrapped = false;
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return false;
+        }
+
+        StringComparison comparison = caseSensitive
+            ? StringComparison.Ordinal
+            : StringComparison.OrdinalIgnoreCase;
+        return TerminalOutput.TrySelectNextMatch(query, comparison, forward, out wrapped);
+    }
+
     private void UpdateFindMatchCount()
     {
         if (FindPanel.Visibility != Visibility.Visible)
