@@ -1,27 +1,25 @@
 ---
 name: publish-nuget
-description: Publish the sk0ya.Terminal.Controls (and optionally sk0ya.Terminal.Core) NuGet package to nuget.org. Use when asked to release/publish the NuGet package, bump the package version, or "nuget更新/公開". Covers version bump, pack, dependency check, push, and git push.
+description: Publish the sk0ya.Terminal.Controls NuGet package to nuget.org. Use when asked to release/publish the NuGet package, bump the package version, or "nuget更新/公開". Covers version bump, pack, bundling check, push, and git push.
 ---
 
 # Publish Terminal NuGet package
 
 Releases `sk0ya.Terminal.Controls` to nuget.org. There is no CI publish workflow
-(it was removed), so publishing is manual. `Terminal.Core` is a separate package
-(`sk0ya.Terminal.Core`) that `Terminal.Controls` depends on via a `ProjectReference`,
-which `dotnet pack` turns into a package dependency.
+(it was removed), so publishing is manual.
 
-## When to bump which package
+`Terminal.Core` is **no longer published as a standalone package** (`IsPackable=false`).
+Its DLL is bundled inside `sk0ya.Terminal.Controls`: the `ProjectReference` uses
+`PrivateAssets="all"` and an `IncludeReferencedProjectsInPackage` target folds
+`Terminal.Core.dll` into `lib/`, so the packed nuspec has **no** Core dependency.
+There is only one package to bump and push.
 
-- Change only in `src/Terminal.Controls/**` → bump **Controls** only. Leave `Terminal.Core`'s
-  version as-is; the packed Controls nuspec will keep depending on the already-published Core.
-- Change in `src/Terminal.Core/**` → bump **both** Core and Controls, and publish Core first
-  (Controls' dependency must point at a version that already exists on nuget.org).
+## Version bump
 
-Versions live in the `<Version>` element of each csproj:
-- `src/Terminal.Controls/Terminal.Controls.csproj`
-- `src/Terminal.Core/Terminal.Core.csproj`
-
-Use a patch bump (e.g. `1.0.16 → 1.0.17`) unless told otherwise.
+Bump the single `<Version>` in `src/Terminal.Controls/Terminal.Controls.csproj`
+(a patch bump, e.g. `1.0.22 → 1.0.23`, unless told otherwise) regardless of whether
+the change was in `Terminal.Core/**` or `Terminal.Controls/**` — Core ships inside
+the Controls package now. Leave `Terminal.Core`'s `<Version>` alone; it is unused for packaging.
 
 ## Steps
 
@@ -41,15 +39,16 @@ Use a patch bump (e.g. `1.0.16 → 1.0.17`) unless told otherwise.
    dotnet pack src/Terminal.Controls/Terminal.Controls.csproj -c Release -o artifacts/packages --nologo
    ```
 
-4. **Verify the dependency** in the produced nuspec points at a published Core version
-   before pushing (guards against shipping a package that references an unpublished Core):
+4. **Verify the bundling** in the produced nupkg before pushing — `Terminal.Core.dll`
+   must be present in `lib/` and the nuspec must have an **empty** `<dependencies>` group
+   (no `sk0ya.Terminal.Core` dependency):
    ```pwsh
    Add-Type -AssemblyName System.IO.Compression.FileSystem
    $z=[System.IO.Compression.ZipFile]::OpenRead("artifacts/packages/sk0ya.Terminal.Controls.<X.Y.Z>.nupkg")
+   $z.Entries | ForEach-Object { $_.FullName }   # expect lib/.../Terminal.Core.dll + Terminal.Controls.dll
    $e=$z.Entries | Where-Object { $_.Name -like "*.nuspec" }
    $sr=New-Object System.IO.StreamReader($e.Open()); $sr.ReadToEnd(); $sr.Close(); $z.Dispose()
    ```
-   Confirm `<dependency id="sk0ya.Terminal.Core" version="..." />` is a version already on nuget.org.
 
 5. **Push to nuget.org** — the API key is in `$env:NUGET_API_KEY`. Publishing is irreversible
    (a version cannot be overwritten or re-uploaded), so only run this after the user has asked
@@ -60,7 +59,6 @@ Use a patch bump (e.g. `1.0.16 → 1.0.17`) unless told otherwise.
      --source https://api.nuget.org/v3/index.json `
      --skip-duplicate
    ```
-   If publishing Core too, push its nupkg first with the same command.
 
 6. **Push commits to GitHub**:
    ```pwsh

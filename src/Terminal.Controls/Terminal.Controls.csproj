@@ -7,7 +7,10 @@
     <UseWPF>true</UseWPF>
     <IsPackable>true</IsPackable>
     <PackageId>sk0ya.Terminal.Controls</PackageId>
-    <Version>1.0.21</Version>
+    <Version>1.0.22</Version>
+    <!-- Terminal.Core is bundled into this package (see ProjectReference below),
+         so its build output is folded into lib/ rather than emitted as a dependency. -->
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludeReferencedProjectsInPackage</TargetsForTfmSpecificBuildOutput>
     <Authors>shigekazukoya</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/sk0ya/Terminal</RepositoryUrl>
@@ -25,7 +28,16 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Terminal.Core\Terminal.Core.csproj" />
+    <!-- PrivateAssets="all" stops dotnet pack from turning this into a package
+         dependency; the DLL is bundled instead via IncludeReferencedProjectsInPackage. -->
+    <ProjectReference Include="..\Terminal.Core\Terminal.Core.csproj" PrivateAssets="all" />
   </ItemGroup>
+
+  <!-- Fold Terminal.Core.dll (and any of its copy-local outputs) into the package's lib folder. -->
+  <Target Name="IncludeReferencedProjectsInPackage" DependsOnTargets="ResolveReferences">
+    <ItemGroup>
+      <BuildOutputInPackage Include="@(ReferenceCopyLocalPaths->WithMetadataValue('ReferenceSourceTarget', 'ProjectReference'))" />
+    </ItemGroup>
+  </Target>
 
 </Project>
