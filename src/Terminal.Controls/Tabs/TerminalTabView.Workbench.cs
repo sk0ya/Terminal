@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -480,8 +481,41 @@ public partial class TerminalTabView
         TerminalOutput.SelectionBackground = selectionBackground;
         TerminalInputProxy.Foreground = foreground;
 
+        ApplyHistoryPopupTheme(theme);
+
         RequestDocumentRender(immediate: true);
     }
+
+    /// <summary>
+    /// Recolors the Ctrl+R history popup from the active theme by overwriting the
+    /// HistoryPopup* dynamic resources. The accent (prompt / pointer / match
+    /// highlight / caret) and selected-row colour follow the theme's selection
+    /// colour, so a single theme change restyles both the terminal and the popup.
+    /// </summary>
+    private void ApplyHistoryPopupTheme(TerminalColorTheme theme)
+    {
+        Color selection = theme.SelectionBackground;
+        Color accent = Color.FromRgb(selection.R, selection.G, selection.B);
+
+        Resources["HistoryPopupBackgroundBrush"] = CreateFrozenBrush(Blend(theme.Background, theme.Foreground, 0.06));
+        Resources["HistoryPopupBorderBrush"] = CreateFrozenBrush(Blend(theme.Background, theme.Foreground, 0.30));
+        Resources["HistoryPopupForegroundBrush"] = CreateFrozenBrush(theme.Foreground);
+        Resources["HistoryPopupAccentBrush"] = CreateFrozenBrush(accent);
+        Resources["HistoryPopupSelectionBrush"] = CreateFrozenBrush(selection);
+        Resources["HistoryPopupCountBrush"] = CreateFrozenBrush(WithAlpha(theme.Foreground, 0x99));
+    }
+
+    private static Color Blend(Color from, Color to, double amount)
+    {
+        amount = Math.Clamp(amount, 0.0, 1.0);
+        return Color.FromRgb(
+            (byte)Math.Round(from.R + ((to.R - from.R) * amount)),
+            (byte)Math.Round(from.G + ((to.G - from.G) * amount)),
+            (byte)Math.Round(from.B + ((to.B - from.B) * amount)));
+    }
+
+    private static Color WithAlpha(Color color, byte alpha)
+        => Color.FromArgb(alpha, color.R, color.G, color.B);
 
     public void ApplySettings(TerminalAppSettings settings)
     {
@@ -635,6 +669,386 @@ public partial class TerminalTabView
             : StringComparison.OrdinalIgnoreCase;
         int matchCount = TerminalOutput.CountMatches(query, comparison);
         FindCountText.Text = matchCount == 1 ? "1 match" : $"{matchCount} matches";
+    }
+
+    private void OpenHistoryPanel()
+    {
+        CloseFindPanel();
+        EnsureHistorySeeded();
+        HistorySearchBox.Clear();
+        HistoryPopup.IsOpen = true;
+        UpdateHistoryResults();
+    }
+
+    private void EnsureHistorySeeded()
+    {
+        if (_historySeeded)
+        {
+            return;
+        }
+
+        _historySeeded = true;
+        if (!PSReadLineHistorySeedingEnabled)
+        {
+            return;
+        }
+
+        string? path = ResolvePSReadLineHistoryPath();
+        if (path is null)
+        {
+            return;
+        }
+
+        IReadOnlyList<string> past = PSReadLineHistory.Read(path);
+        if (past.Count > 0)
+        {
+            MergeSeedHistory(past);
+        }
+    }
+
+    private string? ResolvePSReadLineHistoryPath()
+    {
+        // The shell reports its exact HistorySavePath via OSC 633;P when shell
+        // integration is active; that is authoritative (handles custom paths).
+        if (!string.IsNullOrWhiteSpace(_shellHistoryPath) && File.Exists(_shellHistoryPath))
+        {
+            return _shellHistoryPath;
+        }
+
+        // Otherwise only guess for PowerShell shells, probing the known defaults.
+        string commandLine = string.IsNullOrWhiteSpace(_activeCommandLine) ? _initialCommandLine : _activeCommandLine;
+        string executable = ExtractExecutableName(commandLine);
+        bool isPowerShell = executable.Equals("pwsh", StringComparison.OrdinalIgnoreCase)
+            || executable.Equals("powershell", StringComparison.OrdinalIgnoreCase);
+
+        return isPowerShell ? PSReadLineHistory.FindDefaultHistoryPath() : null;
+    }
+
+    private static string ExtractExecutableName(string? commandLine)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine))
+        {
+            return string.Empty;
+        }
+
+        string trimmed = commandLine.TrimStart();
+        string token;
+        if (trimmed.StartsWith('"'))
+        {
+            int end = trimmed.IndexOf('"', 1);
+            token = end > 0 ? trimmed[1..end] : trimmed[1..];
+        }
+        else
+        {
+            int space = trimmed.IndexOf(' ');
+            token = space > 0 ? trimmed[..space] : trimmed;
+        }
+
+        return Path.GetFileNameWithoutExtension(token);
+    }
+
+    /// <summary>
+    /// Merges <paramref name="olderFirst"/> (oldest first) ahead of the commands
+    /// already recorded this session, deduplicating so the most recent
+    /// occurrence keeps its position, then trims to the history cap.
+    /// </summary>
+    private void MergeSeedHistory(IReadOnlyList<string> olderFirst)
+    {
+        var combined = new List<string>(olderFirst.Count + _commandHistory.Count);
+        combined.AddRange(olderFirst);
+        combined.AddRange(_commandHistory);
+
+        // Walk newest-to-oldest keeping the first time each command is seen, so
+        // the most recent occurrence wins; reverse back to oldest-first order.
+        var seen = new HashSet<string>();
+        _commandHistory.Clear();
+        for (int i = combined.Count - 1; i >= 0; i--)
+        {
+            string command = combined[i];
+            if (string.IsNullOrWhiteSpace(command) || !seen.Add(command))
+            {
+                continue;
+            }
+
+            _commandHistory.Add(command);
+        }
+
+        _commandHistory.Reverse();
+
+        if (_commandHistory.Count > CommandHistoryLimit)
+        {
+            _commandHistory.RemoveRange(0, _commandHistory.Count - CommandHistoryLimit);
+        }
+    }
+
+    private void CloseHistoryPanel()
+    {
+        if (!HistoryPopup.IsOpen)
+        {
+            return;
+        }
+
+        HistoryPopup.IsOpen = false;
+        HistoryResults.Items.Clear();
+        if (_session is not null)
+        {
+            FocusTerminalInput();
+        }
+    }
+
+    private void HistoryPopup_Opened(object sender, EventArgs e)
+    {
+        // The popup lives outside the main visual tree, so move keyboard focus
+        // explicitly once it is shown.
+        HistorySearchBox.Focus();
+        Keyboard.Focus(HistorySearchBox);
+    }
+
+    private void UpdateHistoryResults()
+    {
+        string query = HistorySearchBox.Text;
+        bool showAll = string.IsNullOrWhiteSpace(query);
+
+        // recency = index into _commandHistory (higher = more recent), used to
+        // break score ties and to order the unfiltered list newest-first.
+        var ranked = new List<(int score, int recency, string command, string display, IReadOnlyList<int> matches)>();
+        for (int i = 0; i < _commandHistory.Count; i++)
+        {
+            string command = _commandHistory[i];
+            string display = command.ReplaceLineEndings("⏎");
+            if (showAll)
+            {
+                ranked.Add((0, i, command, display, []));
+            }
+            else if (TryFuzzyMatch(display, query, out int score, out IReadOnlyList<int> matches))
+            {
+                ranked.Add((score, i, command, display, matches));
+            }
+        }
+
+        ranked.Sort(static (a, b) =>
+        {
+            int byScore = b.score.CompareTo(a.score);
+            return byScore != 0 ? byScore : b.recency.CompareTo(a.recency);
+        });
+
+        // fzf renders the best match at the bottom (next to the prompt), so add
+        // the ranked list in reverse: worst on top, best last.
+        HistoryResults.Items.Clear();
+        for (int i = ranked.Count - 1; i >= 0; i--)
+        {
+            (int _, int _, string command, string display, IReadOnlyList<int> matches) = ranked[i];
+            HistoryResults.Items.Add(BuildHistoryItem(command, display, matches));
+        }
+
+        if (HistoryResults.Items.Count > 0)
+        {
+            HistoryResults.SelectedIndex = HistoryResults.Items.Count - 1;
+            HistoryResults.ScrollIntoView(HistoryResults.SelectedItem);
+        }
+
+        HistoryCountText.Text = $"{ranked.Count}/{_commandHistory.Count}";
+    }
+
+    private TextBlock BuildHistoryItem(string command, string display, IReadOnlyList<int> matchedIndices)
+    {
+        var block = new TextBlock
+        {
+            Tag = command,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+
+        if (matchedIndices.Count == 0)
+        {
+            block.Inlines.Add(new Run(display));
+            return block;
+        }
+
+        Brush highlight = TryFindResource("HistoryPopupAccentBrush") as Brush ?? Brushes.Orange;
+        var matched = new HashSet<int>(matchedIndices);
+        var segment = new StringBuilder();
+        bool segmentHighlighted = false;
+
+        void Flush()
+        {
+            if (segment.Length == 0)
+            {
+                return;
+            }
+
+            var run = new Run(segment.ToString());
+            if (segmentHighlighted)
+            {
+                run.Foreground = highlight;
+                run.FontWeight = FontWeights.Bold;
+            }
+
+            block.Inlines.Add(run);
+            segment.Clear();
+        }
+
+        for (int i = 0; i < display.Length; i++)
+        {
+            bool isMatch = matched.Contains(i);
+            if (isMatch != segmentHighlighted)
+            {
+                Flush();
+                segmentHighlighted = isMatch;
+            }
+
+            segment.Append(display[i]);
+        }
+
+        Flush();
+        return block;
+    }
+
+    /// <summary>
+    /// fzf-style fuzzy match: every character of <paramref name="query"/> must
+    /// appear in <paramref name="text"/> in order (case-insensitive). Scores
+    /// higher for matches that are consecutive, at the start, or after a word
+    /// boundary. Returns the matched character indices for highlighting.
+    /// </summary>
+    internal static bool TryFuzzyMatch(string text, string query, out int score, out IReadOnlyList<int> matchedIndices)
+    {
+        score = 0;
+        var indices = new List<int>(query.Length);
+        matchedIndices = indices;
+
+        int textIndex = 0;
+        int previousMatch = -2;
+        int consecutive = 0;
+
+        foreach (char rawQueryChar in query)
+        {
+            if (char.IsWhiteSpace(rawQueryChar))
+            {
+                continue;
+            }
+
+            char queryChar = char.ToLowerInvariant(rawQueryChar);
+            bool found = false;
+            for (; textIndex < text.Length; textIndex++)
+            {
+                if (char.ToLowerInvariant(text[textIndex]) != queryChar)
+                {
+                    continue;
+                }
+
+                int charScore = 1;
+                if (textIndex == previousMatch + 1)
+                {
+                    consecutive++;
+                    charScore += 5 + consecutive;
+                }
+                else
+                {
+                    consecutive = 0;
+                }
+
+                if (textIndex == 0)
+                {
+                    charScore += 8;
+                }
+                else if (IsWordBoundary(text[textIndex - 1]))
+                {
+                    charScore += 6;
+                }
+
+                indices.Add(textIndex);
+                score += charScore;
+                previousMatch = textIndex;
+                textIndex++;
+                found = true;
+                break;
+            }
+
+            if (!found)
+            {
+                score = 0;
+                return false;
+            }
+        }
+
+        return indices.Count > 0;
+    }
+
+    private static bool IsWordBoundary(char c)
+        => c is ' ' or '/' or '\\' or '-' or '_' or '.' or ':' or '\t';
+
+    private void HistorySearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (HistoryPopup.IsOpen)
+        {
+            UpdateHistoryResults();
+        }
+    }
+
+    private void HistorySearchBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        switch (e.Key)
+        {
+            case Key.Escape:
+                CloseHistoryPanel();
+                e.Handled = true;
+                break;
+            case Key.Enter:
+                AcceptHistorySelection();
+                e.Handled = true;
+                break;
+            case Key.Down:
+                MoveHistorySelection(1);
+                e.Handled = true;
+                break;
+            case Key.Up:
+                MoveHistorySelection(-1);
+                e.Handled = true;
+                break;
+            case Key.N when ctrl:
+                MoveHistorySelection(1);
+                e.Handled = true;
+                break;
+            case Key.P when ctrl:
+                MoveHistorySelection(-1);
+                e.Handled = true;
+                break;
+            case Key.R when ctrl:
+                // Repeating Ctrl+R walks upward to older matches, like reverse-i-search.
+                MoveHistorySelection(-1);
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void MoveHistorySelection(int delta)
+    {
+        int count = HistoryResults.Items.Count;
+        if (count == 0)
+        {
+            return;
+        }
+
+        int next = Math.Clamp(HistoryResults.SelectedIndex + delta, 0, count - 1);
+        HistoryResults.SelectedIndex = next;
+        HistoryResults.ScrollIntoView(HistoryResults.SelectedItem);
+    }
+
+    private void HistoryResults_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        AcceptHistorySelection();
+    }
+
+    private void AcceptHistorySelection()
+    {
+        if (HistoryResults.SelectedItem is not FrameworkElement element || element.Tag is not string command)
+        {
+            return;
+        }
+
+        CloseHistoryPanel();
+        // Insert into the shell's input line only; the user reviews and submits.
+        SendTerminalInput(command);
     }
 
     private void SaveTranscript()

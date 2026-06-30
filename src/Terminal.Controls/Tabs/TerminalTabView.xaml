@@ -19,6 +19,15 @@
         <SolidColorBrush x:Key="ForegroundMutedBrush" Color="#B9AD9E" />
         <SolidColorBrush x:Key="ForegroundDimBrush" Color="#8B7E70" />
 
+        <!-- Ctrl+R history popup palette. Defaults below; overwritten per tab from
+             the active color theme in ApplyColorTheme so SetColorTheme themes it too. -->
+        <SolidColorBrush x:Key="HistoryPopupBackgroundBrush" Color="#211C18" />
+        <SolidColorBrush x:Key="HistoryPopupBorderBrush" Color="#43372B" />
+        <SolidColorBrush x:Key="HistoryPopupForegroundBrush" Color="#F4EBDD" />
+        <SolidColorBrush x:Key="HistoryPopupAccentBrush" Color="#E19A4A" />
+        <SolidColorBrush x:Key="HistoryPopupSelectionBrush" Color="#4F3820" />
+        <SolidColorBrush x:Key="HistoryPopupCountBrush" Color="#8B7E70" />
+
         <DataTemplate x:Key="TerminalProfileItemTemplate">
             <TextBlock Text="{Binding DisplayName}" />
         </DataTemplate>
@@ -262,7 +271,7 @@
                     <TextBlock Grid.Column="1"
                                Foreground="{StaticResource ForegroundDimBrush}"
                                HorizontalAlignment="Right"
-                               Text="Ctrl+Shift+F Find   Ctrl+Shift+S Save   Ctrl+Shift+R Restart   Ctrl+Plus/Minus Zoom" />
+                               Text="Ctrl+R History   Ctrl+Shift+F Find   Ctrl+Shift+S Save   Ctrl+Shift+R Restart   Ctrl+Plus/Minus Zoom" />
                 </Grid>
             </Grid>
         </Border>
@@ -413,6 +422,116 @@
                 </Canvas>
             </Grid>
         </Border>
+
+        <Popup x:Name="HistoryPopup"
+               Grid.Row="2"
+               Placement="Top"
+               PlacementTarget="{Binding ElementName=TerminalInputProxy}"
+               VerticalOffset="-4"
+               AllowsTransparency="True"
+               Focusable="True"
+               StaysOpen="False"
+               PopupAnimation="None"
+               Opened="HistoryPopup_Opened">
+            <Border Style="{StaticResource PanelBorderStyle}"
+                    Background="{DynamicResource HistoryPopupBackgroundBrush}"
+                    BorderBrush="{DynamicResource HistoryPopupBorderBrush}"
+                    Padding="6"
+                    MinWidth="480"
+                    MaxWidth="820">
+                <!-- fzf-style: results grow upward, count above the prompt, prompt at the bottom. -->
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <ListBox x:Name="HistoryResults"
+                             Grid.Row="0"
+                             MaxHeight="300"
+                             VerticalAlignment="Bottom"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             Foreground="{DynamicResource HistoryPopupForegroundBrush}"
+                             FontFamily="Consolas"
+                             FontSize="14"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             MouseDoubleClick="HistoryResults_MouseDoubleClick">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="2,1" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border x:Name="ItemBorder"
+                                                    Background="Transparent"
+                                                    Padding="{TemplateBinding Padding}">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="16" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock x:Name="Pointer"
+                                                               Grid.Column="0"
+                                                               FontFamily="Consolas"
+                                                               FontSize="14"
+                                                               Foreground="{DynamicResource HistoryPopupAccentBrush}"
+                                                               Visibility="Hidden"
+                                                               Text="❯" />
+                                                    <ContentPresenter Grid.Column="1" />
+                                                </Grid>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource HistoryPopupSelectionBrush}" />
+                                                    <Setter TargetName="Pointer" Property="Visibility" Value="Visible" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                    </ListBox>
+
+                    <TextBlock x:Name="HistoryCountText"
+                               Grid.Row="1"
+                               Margin="18,4,2,2"
+                               FontFamily="Consolas"
+                               FontSize="12"
+                               Foreground="{DynamicResource HistoryPopupCountBrush}" />
+
+                    <Grid Grid.Row="2" Margin="2,0,2,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Margin="0,0,8,0"
+                                   VerticalAlignment="Center"
+                                   FontFamily="Consolas"
+                                   FontSize="14"
+                                   Foreground="{DynamicResource HistoryPopupAccentBrush}"
+                                   Text="❯" />
+                        <TextBox x:Name="HistorySearchBox"
+                                 Grid.Column="1"
+                                 BorderThickness="0"
+                                 Background="Transparent"
+                                 Foreground="{DynamicResource HistoryPopupForegroundBrush}"
+                                 FontFamily="Consolas"
+                                 FontSize="14"
+                                 VerticalContentAlignment="Center"
+                                 CaretBrush="{DynamicResource HistoryPopupAccentBrush}"
+                                 SelectionBrush="{DynamicResource HistoryPopupAccentBrush}"
+                                 TextChanged="HistorySearchBox_TextChanged"
+                                 PreviewKeyDown="HistorySearchBox_PreviewKeyDown" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </Popup>
 
         <Border x:Name="StatusBarBorder"
                 Grid.Row="3"

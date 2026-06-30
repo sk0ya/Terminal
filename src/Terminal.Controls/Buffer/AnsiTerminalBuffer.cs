@@ -167,6 +167,20 @@ internal sealed class AnsiTerminalBuffer
     public event EventHandler<string>? NotificationRequested;
     public event EventHandler<ShellCommandZoneEventArgs>? ShellCommandZoneReceived;
 
+    /// <summary>
+    /// Raised with the full command-line text the shell reported via the
+    /// OSC 633;E shell-integration marker, just before the command executes.
+    /// Used to build a navigable command history without scraping the screen.
+    /// </summary>
+    public event EventHandler<string>? ShellCommandLineReceived;
+
+    /// <summary>
+    /// Raised with the shell's PSReadLine history file path, reported via the
+    /// OSC 633;P;HistoryPath shell-integration property. Lets the host seed the
+    /// command history from the exact file the shell uses.
+    /// </summary>
+    public event EventHandler<string>? ShellHistoryPathReceived;
+
     public AnsiTerminalBuffer(short columns, short rows, int scrollbackLimit = DefaultScrollbackLimit)
     {
         _scrollbackLimit = Math.Max(scrollbackLimit, rows);
@@ -1343,6 +1357,28 @@ internal sealed class AnsiTerminalBuffer
         string type = separatorIndex >= 0 ? value[..separatorIndex] : value;
         string parameters = separatorIndex >= 0 ? value[(separatorIndex + 1)..] : string.Empty;
 
+        if (type == "E")
+        {
+            // 633;E;<command> reports the command line itself (Windows Terminal
+            // shell-integration). A trailing ;<nonce> may follow but we never emit one.
+            ShellCommandLineReceived?.Invoke(this, DecodeShellCommandLine(parameters));
+            return;
+        }
+
+        if (type == "P")
+        {
+            // 633;P;<Key>=<Value> sets a shell property. We consume HistoryPath
+            // (the encoded PSReadLine history file location) and ignore others.
+            int equals = parameters.IndexOf('=');
+            if (equals > 0 &&
+                parameters[..equals].Equals("HistoryPath", StringComparison.OrdinalIgnoreCase))
+            {
+                ShellHistoryPathReceived?.Invoke(this, DecodeShellCommandLine(parameters[(equals + 1)..]));
+            }
+
+            return;
+        }
+
         ShellCommandZoneType? zoneType = type switch
         {
             "A" => ShellCommandZoneType.PromptStart,
@@ -1370,6 +1406,47 @@ internal sealed class AnsiTerminalBuffer
 
         int absoluteLine = _scrollback.Count + _cursorRow;
         ShellCommandZoneReceived?.Invoke(this, new ShellCommandZoneEventArgs(zoneType.Value, absoluteLine, exitCode));
+    }
+
+    /// <summary>
+    /// Reverses the escaping the shell-integration script applies to a command
+    /// line before transmitting it in OSC 633;E: <c>\\</c> for backslash and
+    /// <c>\xNN</c> for control characters and the <c>;</c> field separator.
+    /// </summary>
+    private static string DecodeShellCommandLine(string encoded)
+    {
+        if (encoded.IndexOf('\\') < 0)
+        {
+            return encoded;
+        }
+
+        var builder = new StringBuilder(encoded.Length);
+        for (int i = 0; i < encoded.Length; i++)
+        {
+            char c = encoded[i];
+            if (c == '\\' && i + 1 < encoded.Length)
+            {
+                char next = encoded[i + 1];
+                if (next == '\\')
+                {
+                    builder.Append('\\');
+                    i++;
+                    continue;
+                }
+
+                if (next == 'x' && i + 3 < encoded.Length &&
+                    byte.TryParse(encoded.AsSpan(i + 2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out byte code))
+                {
+                    builder.Append((char)code);
+                    i += 3;
+                    continue;
+                }
+            }
+
+            builder.Append(c);
+        }
+
+        return builder.ToString();
     }
 
     private static bool TryParseOscColorSpec(string spec, out Color color)

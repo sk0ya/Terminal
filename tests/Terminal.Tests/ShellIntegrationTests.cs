@@ -97,6 +97,15 @@ public sealed class ShellIntegrationTests
     }
 
     [Fact]
+    public void PowerShellScriptEmitsCommandLineMarker()
+    {
+        // The ReadLine hook must report the command via OSC 633;E before 133;C
+        // so the host can build a command history.
+        Assert.Contains("]633;E;", ShellIntegration.PowerShellScript);
+        Assert.Contains("__ConPtyTerminalEncodeCommandLine", ShellIntegration.PowerShellScript);
+    }
+
+    [Fact]
     public void DefaultScriptPathPointsIntoLocalApplicationData()
     {
         string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);

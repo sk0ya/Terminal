@@ -71,6 +71,13 @@ public partial class TerminalTabView : UserControl
     private bool _hasStartedInitialSession;
     private readonly List<int> _shellCommandLines = [];
 
+    // Command lines reported via OSC 633;E, most-recent last. Backs the Ctrl+R
+    // history overlay and the public CommandHistory API. Capped to keep memory bounded.
+    private const int CommandHistoryLimit = 5000;
+    private readonly List<string> _commandHistory = [];
+    private bool _historySeeded;
+    private string? _shellHistoryPath;
+
     // Number of items the right-click menu ships with from XAML (Copy / Paste). Host-provided
     // items are appended past this index and removed before each opening so they don't accumulate.
     private int _builtinContextMenuItemCount = -1;
@@ -85,6 +92,48 @@ public partial class TerminalTabView : UserControl
     /// (busy indicators, success/failure badges) without polling.
     /// </summary>
     public event EventHandler<ShellCommandActivityEventArgs>? ShellCommandActivity;
+
+    /// <summary>
+    /// Raised on the dispatcher thread whenever a command line is appended to
+    /// <see cref="CommandHistory"/> (reported by the shell via OSC 633;E). The
+    /// argument is the newly recorded command. Lets a host mirror the history in
+    /// its own command palette without polling.
+    /// </summary>
+    public event EventHandler<string>? CommandHistoryRecorded;
+
+    /// <summary>
+    /// The shell command lines observed on this tab via OSC 633;E shell
+    /// integration, oldest first, deduplicated (a repeat moves to the end).
+    /// Backs the built-in Ctrl+R history overlay; exposed so hosts can drive
+    /// their own history search UI. Empty until shell integration is active.
+    /// </summary>
+    public IReadOnlyList<string> CommandHistory => _commandHistory;
+
+    /// <summary>
+    /// When true (default), the first time the Ctrl+R history search opens for a
+    /// PowerShell session, the tab seeds <see cref="CommandHistory"/> from
+    /// PSReadLine's persistent on-disk history so commands from previous
+    /// sessions are searchable. Set to false to keep history limited to commands
+    /// observed in the current session.
+    /// </summary>
+    public bool PSReadLineHistorySeedingEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Merges <paramref name="commands"/> (oldest first) into
+    /// <see cref="CommandHistory"/>, deduplicating so the most recent occurrence
+    /// wins. Lets a host pre-load history from its own store. Suppresses the
+    /// automatic PSReadLine seeding for this tab.
+    /// </summary>
+    public void LoadCommandHistory(IEnumerable<string> commands)
+    {
+        ArgumentNullException.ThrowIfNull(commands);
+        _historySeeded = true;
+        MergeSeedHistory([.. commands]);
+        if (HistoryPopup.IsOpen)
+        {
+            UpdateHistoryResults();
+        }
+    }
 
     /// <summary>
     /// Raised when a terminal hyperlink (OSC 8) is activated, before the default browser launch.
@@ -153,6 +202,8 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.NotificationRequested += TerminalBuffer_NotificationRequested;
         _terminalBuffer.ShellCommandZoneReceived += TerminalBuffer_ShellCommandZoneReceived;
+        _terminalBuffer.ShellCommandLineReceived += TerminalBuffer_ShellCommandLineReceived;
+        _terminalBuffer.ShellHistoryPathReceived += TerminalBuffer_ShellHistoryPathReceived;
 
         Loaded += OnLoaded;
     }
@@ -654,6 +705,12 @@ public partial class TerminalTabView : UserControl
         if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.Down)
         {
             return TryScrollToAdjacentCommandLine(upward: false);
+        }
+
+        if (modifiers == ModifierKeys.Control && e.Key == Key.R)
+        {
+            OpenHistoryPanel();
+            return true;
         }
 
         return false;
@@ -2070,8 +2127,11 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.CurrentDirectoryChanged -= TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.NotificationRequested -= TerminalBuffer_NotificationRequested;
         _terminalBuffer.ShellCommandZoneReceived -= TerminalBuffer_ShellCommandZoneReceived;
+        _terminalBuffer.ShellCommandLineReceived -= TerminalBuffer_ShellCommandLineReceived;
+        _terminalBuffer.ShellHistoryPathReceived -= TerminalBuffer_ShellHistoryPathReceived;
         _shellCommandLines.Clear();
         _shellIntegrationObserved = false;
+        // _commandHistory intentionally survives a restart so the user keeps their history.
         _terminalBuffer = nextBuffer;
         _terminalBuffer.InputSequenceGenerated += TerminalBuffer_InputSequenceGenerated;
         _terminalBuffer.ClipboardSetRequested += TerminalBuffer_ClipboardSetRequested;
@@ -2079,6 +2139,16 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.NotificationRequested += TerminalBuffer_NotificationRequested;
         _terminalBuffer.ShellCommandZoneReceived += TerminalBuffer_ShellCommandZoneReceived;
+        _terminalBuffer.ShellCommandLineReceived += TerminalBuffer_ShellCommandLineReceived;
+        _terminalBuffer.ShellHistoryPathReceived += TerminalBuffer_ShellHistoryPathReceived;
+    }
+
+    private void TerminalBuffer_ShellHistoryPathReceived(object? sender, string path)
+    {
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            _shellHistoryPath = path;
+        }
     }
 
     private void TerminalBuffer_InputSequenceGenerated(object? sender, string text)
@@ -2162,6 +2232,44 @@ public partial class TerminalTabView : UserControl
         else if (e.ZoneType == ShellCommandZoneType.CommandDone && e.ExitCode.HasValue && e.ExitCode.Value != 0)
         {
             SetStatus($"Command exited with code {e.ExitCode.Value}.");
+        }
+    }
+
+    private void TerminalBuffer_ShellCommandLineReceived(object? sender, string command)
+    {
+        RecordCommandHistory(command);
+    }
+
+    private void RecordCommandHistory(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return;
+        }
+
+        // A repeated command moves to the most-recent position rather than duplicating.
+        int existing = _commandHistory.LastIndexOf(command);
+        if (existing >= 0)
+        {
+            if (existing == _commandHistory.Count - 1)
+            {
+                return;
+            }
+
+            _commandHistory.RemoveAt(existing);
+        }
+
+        _commandHistory.Add(command);
+        if (_commandHistory.Count > CommandHistoryLimit)
+        {
+            _commandHistory.RemoveRange(0, _commandHistory.Count - CommandHistoryLimit);
+        }
+
+        CommandHistoryRecorded?.Invoke(this, command);
+
+        if (HistoryPopup.IsOpen)
+        {
+            UpdateHistoryResults();
         }
     }
 

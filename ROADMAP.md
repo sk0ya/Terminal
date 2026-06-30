@@ -52,6 +52,7 @@
 ### シェル統合
 
 - ~~**OSC 133/633 コマンドナビゲーション** — OSC 133 実装後に有効化。Ctrl+Shift+↑/↓ で前後のプロンプト行へジャンプ~~ **実装済み**
+- ~~**Ctrl+R コマンド履歴検索** — シェルが OSC 633;E で報告したコマンド文字列を蓄積し、Ctrl+R で再利用~~ **実装済み（fzf 風ファジーファインダ。入力キャレット直上に Popup を表示し、ファジー絞り込み＋一致文字ハイライト、↑↓/Ctrl+N/P で選択、Ctrl+R で次候補、Enter で入力欄へ挿入。pwsh の PSReadLine フックが `633;E;<エスケープ済みコマンド>` を送出。初回 Ctrl+R 時に PSReadLine の永続履歴ファイル（`ConsoleHost_history.txt`、バッククォート継続行を結合）を読み込み**過去セッションの履歴**もシード（`PSReadLineHistorySeedingEnabled` でオプトアウト、`LoadCommandHistory` で任意ソース注入可）。`TerminalTabView.CommandHistory` / `CommandHistoryRecorded` で公開。重複は最新位置へ移動、上限5000件、再起動後も保持）**
 - ~~**コマンド終了コード表示** — OSC 133 `D;exitCode` を受け取りタブやプロンプト領域に結果を表示~~ **実装済み（非ゼロ終了時にステータスバー表示）**
 - ~~**シェル統合の自動注入** — シェル側が OSC 133 を出さなくても機能するよう、起動時にマーカー出力を仕込む~~ **実装済み（pwsh のみ。shell-integration.ps1 を `-NoExit -Command` で dot-source。`EnableShellIntegrationInjection` 設定 / `TerminalTabView.ShellIntegrationInjectionEnabled` API でオプトアウト可。powershell.exe・cmd・Git Bash は未対応＝センチネル方式フォールバック）**
 - ~~**「同ディレクトリで新規タブ」** — OSC 7 から得たパスを新タブ起動に渡す~~ **実装済み（Ctrl+Shift+D）**

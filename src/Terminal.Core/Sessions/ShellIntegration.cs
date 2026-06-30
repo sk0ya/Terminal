@@ -38,17 +38,51 @@ public static class ShellIntegration
         $global:__ConPtyTerminalShellIntegration = $true
         $global:__ConPtyTerminalOriginalPrompt = $function:prompt
 
+        function global:__ConPtyTerminalEncodeCommandLine([string]$text) {
+            # Escapes backslash, the ';' field separator, and control characters
+            # (incl. newlines) as \xNN so the command survives one OSC 633;E line.
+            # Must match DecodeShellCommandLine in AnsiTerminalBuffer.
+            if ([string]::IsNullOrEmpty($text)) { return '' }
+            $sb = [System.Text.StringBuilder]::new($text.Length)
+            foreach ($ch in $text.ToCharArray()) {
+                $code = [int]$ch
+                if ($ch -eq '\') { [void]$sb.Append('\\') }
+                elseif ($code -lt 0x20 -or $code -eq 0x7f -or $ch -eq ';') {
+                    [void]$sb.Append(('\x{0:x2}' -f $code))
+                } else {
+                    [void]$sb.Append($ch)
+                }
+            }
+            $sb.ToString()
+        }
+
         function global:__ConPtyTerminalEnsureReadLineHook {
             if ($global:__ConPtyTerminalReadLineHooked) { return }
             $readLine = Get-Command -Name PSConsoleHostReadLine -CommandType Function -ErrorAction SilentlyContinue
             if ($null -eq $readLine) { return }
             $global:__ConPtyTerminalReadLineHooked = $true
             $global:__ConPtyTerminalOriginalReadLine = $readLine.ScriptBlock
-            # Emits 133;C (command executed) right after the user submits a line, so
-            # the terminal knows where command output starts.
+            # Report the real PSReadLine history file so the host can seed Ctrl+R
+            # search from previous sessions. Best-effort; ignored if unavailable.
+            if (-not $global:__ConPtyTerminalHistoryPathSent) {
+                try {
+                    $histPath = (Get-PSReadLineOption).HistorySavePath
+                    if ($histPath) {
+                        $global:__ConPtyTerminalHistoryPathSent = $true
+                        $encodedPath = __ConPtyTerminalEncodeCommandLine $histPath
+                        [Console]::Write("$([char]27)]633;P;HistoryPath=$encodedPath$([char]7)")
+                    }
+                } catch { }
+            }
+            # Emits 633;E (the command line text) then 133;C (command executed) right
+            # after the user submits a line, so the terminal knows the command and
+            # where its output starts.
             function global:PSConsoleHostReadLine {
                 $line = & $global:__ConPtyTerminalOriginalReadLine
-                [Console]::Write("$([char]27)]133;C$([char]7)")
+                $esc = [char]27
+                $bel = [char]7
+                $encoded = __ConPtyTerminalEncodeCommandLine ([string]$line)
+                [Console]::Write("$esc]633;E;$encoded$bel$esc]133;C$bel")
                 $line
             }
         }

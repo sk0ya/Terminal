@@ -258,6 +258,31 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void Osc633ReportsCommandLine()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? command = null;
+        buffer.ShellCommandLineReceived += (_, value) => command = value;
+
+        buffer.Process("]633;E;git status");
+
+        Assert.Equal("git status", command);
+    }
+
+    [Fact]
+    public void Osc633DecodesEscapedSeparatorAndControlCharacters()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? command = null;
+        buffer.ShellCommandLineReceived += (_, value) => command = value;
+
+        // echo a\;b followed by a newline and a literal backslash.
+        buffer.Process("]633;E;echo a\\x3bb\\x0a\\\\");
+
+        Assert.Equal("echo a;b\n\\", command);
+    }
+
+    [Fact]
     public void ZwjEmojiSequenceOccupiesSingleWideCluster()
     {
         var buffer = new AnsiTerminalBuffer(32, 10);
