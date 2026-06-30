@@ -488,14 +488,20 @@ public partial class TerminalTabView
 
     /// <summary>
     /// Recolors the Ctrl+R history popup from the active theme by overwriting the
-    /// HistoryPopup* dynamic resources. The accent (prompt / pointer / match
-    /// highlight / caret) and selected-row colour follow the theme's selection
-    /// colour, so a single theme change restyles both the terminal and the popup.
+    /// HistoryPopup* dynamic resources. The selected-row colour is the theme's
+    /// selection colour, and the accent (prompt / pointer / match highlight /
+    /// caret) is a brightened variant of it, so a single theme change restyles
+    /// both the terminal and the popup while keeping the accent legible on the
+    /// selected row.
     /// </summary>
     private void ApplyHistoryPopupTheme(TerminalColorTheme theme)
     {
         Color selection = theme.SelectionBackground;
-        Color accent = Color.FromRgb(selection.R, selection.G, selection.B);
+        // Brighten the selection hue toward the foreground for the accent
+        // (match highlight / pointer / caret). If the accent matched the
+        // selection background exactly, matched characters became invisible on
+        // the auto-selected row, whose background is that same selection colour.
+        Color accent = Blend(selection, theme.Foreground, 0.55);
 
         Resources["HistoryPopupBackgroundBrush"] = CreateFrozenBrush(Blend(theme.Background, theme.Foreground, 0.06));
         Resources["HistoryPopupBorderBrush"] = CreateFrozenBrush(Blend(theme.Background, theme.Foreground, 0.30));
