@@ -27,6 +27,23 @@ public sealed class TerminalTabViewAppearanceApiTests
     }
 
     [Fact]
+    public void SetFontLigaturesEnabledTogglesEffectiveValue()
+    {
+        StaTestRunner.Run(() =>
+        {
+            var view = new TerminalTabView("cmd.exe", Environment.CurrentDirectory);
+
+            Assert.False(view.FontLigaturesEnabled);
+
+            view.SetFontLigaturesEnabled(true);
+            Assert.True(view.FontLigaturesEnabled);
+
+            view.SetFontLigaturesEnabled(false);
+            Assert.False(view.FontLigaturesEnabled);
+        });
+    }
+
+    [Fact]
     public void SetColorThemeExposesEffectiveTheme()
     {
         StaTestRunner.Run(() =>

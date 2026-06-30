@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.TextFormatting;
 
 using Terminal.Buffer;
 using Terminal.Tabs;
@@ -28,7 +29,10 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private bool _ambiguousAsWide;
     private Typeface? _typeface;
     private Typeface? _italicTypeface;
+    private GlyphTypeface? _primaryGlyphTypeface;
     private FontFallbackResolver? _fontFallback;
+    private bool _fontLigaturesEnabled;
+    private TextFormatter? _textFormatter;
     private Size _cellSize = new(8, 16);
     private double _pixelsPerDip = 1.0;
     private bool _metricsDirty = true;
@@ -124,6 +128,31 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     // Test hook: number of LineLayout objects currently materialized. Virtualization keeps this
     // bounded to roughly the viewport regardless of total scrollback size.
     internal int CachedLineLayoutCount => _lines.CachedCount;
+
+    // Test hook: number of lines whose shaped, ready-to-paint drawable is currently cached. Each
+    // line shapes its glyphs once and reuses them across repaints until the line content or font
+    // metrics change.
+    internal int CachedLineDrawableCount => _lines.CachedDrawableCount;
+
+    // When enabled, primary-font runs are shaped through TextFormatter with OpenType standard
+    // ligatures and contextual alternates turned on, so programming fonts (FiraCode, Cascadia Code)
+    // render sequences like "=>", "!=", "->" as their ligated glyphs. Default off so the exact
+    // one-cell-per-glyph rendering is preserved. Wide/fallback runs keep cell-by-cell positioning.
+    public bool FontLigaturesEnabled
+    {
+        get => _fontLigaturesEnabled;
+        set
+        {
+            if (_fontLigaturesEnabled == value)
+            {
+                return;
+            }
+
+            _fontLigaturesEnabled = value;
+            _lines.InvalidateDrawables();
+            InvalidateVisual();
+        }
+    }
 
     public Size CharacterCellSize
     {
@@ -679,7 +708,11 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 DrawSelection(drawingContext, selection, lineIndex, line, top, contentLeft);
             }
 
-            DrawLineText(drawingContext, line, top, contentLeft);
+            LineDrawable drawable = _lines.GetDrawable(lineIndex, BuildLineDrawable);
+            foreach (IDrawCommand command in drawable.Commands)
+            {
+                command.Render(drawingContext, contentLeft, top);
+            }
 
             if (_hoveredLink is { } hovered && hovered.Line == lineIndex)
             {
@@ -1028,8 +1061,13 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         drawingContext.DrawRectangle(SelectionBackground ?? DefaultSelectionBrush, null, rect);
     }
 
-    private void DrawLineText(DrawingContext drawingContext, LineLayout line, double top, double contentLeft)
+    // Builds the cached, ready-to-paint commands for one line. Positions are relative to the line's
+    // top-left (cell-based X, Y = 0); OnRender translates them by the current scroll/padding offsets.
+    // The commands are shaped once and reused across repaints until the line content or font metrics
+    // change, so OnRender no longer re-shapes every visible line on every frame.
+    private LineDrawable BuildLineDrawable(LineLayout line)
     {
+        var commands = new List<IDrawCommand>();
         foreach (SegmentLayout segment in line.Segments)
         {
             if (string.IsNullOrEmpty(segment.Snapshot.Text))
@@ -1044,11 +1082,12 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             TextDecorationCollection? decorations = BuildDecorations(segment.Snapshot);
             FontFallbackResolver? fallback = _fontFallback;
             bool ambiguousAsWide = _ambiguousAsWide;
+            bool italic = segment.Snapshot.Italic;
 
             if (fallback is null)
             {
-                DrawSegmentRun(drawingContext, segText, primaryTypeface, fontWeight, foreground, decorations,
-                    contentLeft + (segment.StartCell * _cellSize.Width), top);
+                commands.Add(CreateRunCommand(segText, primaryTypeface, isPrimary: true, fontWeight, foreground,
+                    decorations, segment.StartCell * _cellSize.Width));
                 continue;
             }
 
@@ -1072,9 +1111,9 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 else if (!ReferenceEquals(resolved, runGlyph))
                 {
                     string runText = segText[runStart..elemStart];
-                    Typeface tf = ResolveTypeface(runGlyph, primaryTypeface, segment.Snapshot.Italic);
-                    DrawSegmentRun(drawingContext, runText, tf, fontWeight, foreground, decorations,
-                        contentLeft + runCellX, top);
+                    Typeface tf = ResolveTypeface(runGlyph, primaryTypeface, italic);
+                    commands.Add(CreateRunCommand(runText, tf, IsPrimaryGlyph(runGlyph), fontWeight, foreground,
+                        decorations, runCellX));
                     runStart = elemStart;
                     runCellX = cellX;
                     runGlyph = resolved;
@@ -1087,12 +1126,71 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             if (runStart < segText.Length)
             {
                 string runText = segText[runStart..];
-                Typeface tf = ResolveTypeface(runGlyph, primaryTypeface, segment.Snapshot.Italic);
-                DrawSegmentRun(drawingContext, runText, tf, fontWeight, foreground, decorations,
-                    contentLeft + runCellX, top);
+                Typeface tf = ResolveTypeface(runGlyph, primaryTypeface, italic);
+                commands.Add(CreateRunCommand(runText, tf, IsPrimaryGlyph(runGlyph), fontWeight, foreground,
+                    decorations, runCellX));
             }
         }
+
+        return new LineDrawable(commands.ToArray());
     }
+
+    private bool IsPrimaryGlyph(GlyphTypeface? glyphTypeface)
+        => glyphTypeface is null || ReferenceEquals(glyphTypeface, _primaryGlyphTypeface);
+
+    // Builds a position-relative paint command for one same-font run. With ligatures enabled,
+    // primary-font runs are shaped through TextFormatter (honoring OpenType liga/calt); wide and
+    // fallback runs always use FormattedText so they keep exact cell-by-cell placement.
+    private IDrawCommand CreateRunCommand(
+        string text,
+        Typeface typeface,
+        bool isPrimary,
+        FontWeight fontWeight,
+        Brush foreground,
+        TextDecorationCollection? decorations,
+        double relativeX)
+    {
+        if (_fontLigaturesEnabled && isPrimary)
+        {
+            TextLine line = FormatLigatureRun(text, typeface, fontWeight, foreground, decorations);
+            return new TextLineCommand(line, relativeX);
+        }
+
+        var formatted = new FormattedText(
+            text,
+            CultureInfo.CurrentCulture,
+            FlowDirection.LeftToRight,
+            typeface,
+            FontSize,
+            foreground,
+            _pixelsPerDip);
+        formatted.SetFontWeight(fontWeight);
+        if (decorations is not null)
+        {
+            formatted.SetTextDecorations(decorations);
+        }
+
+        return new FormattedTextCommand(formatted, relativeX);
+    }
+
+    private TextLine FormatLigatureRun(
+        string text,
+        Typeface typeface,
+        FontWeight fontWeight,
+        Brush foreground,
+        TextDecorationCollection? decorations)
+    {
+        Typeface weighted = typeface.Weight == fontWeight
+            ? typeface
+            : new Typeface(typeface.FontFamily, typeface.Style, fontWeight, typeface.Stretch);
+        var runProperties = new LigatureRunProperties(weighted, FontSize, _pixelsPerDip, foreground, decorations);
+        var paragraphProperties = new LineParagraphProperties(runProperties);
+        var source = new SingleRunTextSource(text, runProperties);
+        _textFormatter ??= TextFormatter.Create(TextFormattingMode.Display);
+        return _textFormatter.FormatLine(source, 0, LigatureParagraphWidth, paragraphProperties, null);
+    }
+
+    private const double LigatureParagraphWidth = 1_000_000.0;
 
     private static Typeface ResolveTypeface(GlyphTypeface? glyphTypeface, Typeface primaryTypeface, bool italic)
     {
@@ -1115,33 +1213,6 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             italic ? FontStyles.Italic : FontStyles.Normal,
             FontWeights.Regular,
             FontStretches.Normal);
-    }
-
-    private void DrawSegmentRun(
-        DrawingContext drawingContext,
-        string text,
-        Typeface typeface,
-        FontWeight fontWeight,
-        Brush foreground,
-        TextDecorationCollection? decorations,
-        double left,
-        double top)
-    {
-        var formatted = new FormattedText(
-            text,
-            CultureInfo.CurrentCulture,
-            FlowDirection.LeftToRight,
-            typeface,
-            FontSize,
-            foreground,
-            _pixelsPerDip);
-        formatted.SetFontWeight(fontWeight);
-        if (decorations is not null)
-        {
-            formatted.SetTextDecorations(decorations);
-        }
-
-        drawingContext.DrawText(formatted, new Point(left, top));
     }
 
     private static TextDecorationCollection? BuildDecorations(AnsiTerminalBuffer.TerminalRenderSegmentSnapshot snapshot)
@@ -1176,7 +1247,10 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         _pixelsPerDip = pixelsPerDip;
         _typeface = new Typeface(FontFamily, FontStyle, FontWeight, FontStretch);
         _italicTypeface = new Typeface(FontFamily, FontStyles.Italic, FontWeight, FontStretch);
+        _typeface.TryGetGlyphTypeface(out _primaryGlyphTypeface);
         _fontFallback = new FontFallbackResolver(_typeface);
+        // Font metrics changed, so any glyphs shaped against the old typeface/size are stale.
+        _lines.InvalidateDrawables();
         var text = new FormattedText(
             "W",
             CultureInfo.CurrentCulture,
@@ -1776,12 +1850,20 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private static int GetDisplayWidth(Rune rune, bool ambiguousAsWide) =>
         UnicodeWidth.GetWidth(rune, ambiguousAsWide);
 
-    // Lazily builds and caches LineLayout objects for the current render snapshot. Layouts for
-    // unchanged lines are reused across snapshots; layouts outside the viewport window are evicted,
-    // so memory and per-update CPU scale with the visible region rather than the whole scrollback.
+    // Lazily builds and caches LineLayout objects (and, alongside each, the shaped paint commands)
+    // for the current render snapshot. Layouts for unchanged lines are reused across snapshots;
+    // entries outside the viewport window are evicted, so memory and per-update CPU scale with the
+    // visible region rather than the whole scrollback. The shaped drawable rides in the same entry,
+    // so it is reused across repaints and discarded together with its layout on eviction.
     private sealed class VirtualLineLayouts
     {
-        private readonly Dictionary<int, LineLayout> _cache = [];
+        private sealed class Entry(LineLayout layout)
+        {
+            public LineLayout Layout { get; } = layout;
+            public LineDrawable? Drawable { get; set; }
+        }
+
+        private readonly Dictionary<int, Entry> _cache = [];
         private readonly List<int> _evictionScratch = [];
         private AnsiTerminalBuffer.TerminalRenderLineSnapshot[] _snapshot = [];
         private bool _ambiguousAsWide;
@@ -1790,22 +1872,57 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
         public int CachedCount => _cache.Count;
 
-        public LineLayout this[int index]
+        public int CachedDrawableCount
         {
             get
             {
-                if (!_cache.TryGetValue(index, out LineLayout layout))
+                int count = 0;
+                foreach (Entry entry in _cache.Values)
                 {
-                    layout = CreateLineLayout(_snapshot[index], _ambiguousAsWide);
-                    _cache[index] = layout;
+                    if (entry.Drawable is not null)
+                    {
+                        count++;
+                    }
                 }
 
-                return layout;
+                return count;
+            }
+        }
+
+        public LineLayout this[int index] => GetEntry(index).Layout;
+
+        private Entry GetEntry(int index)
+        {
+            if (!_cache.TryGetValue(index, out Entry? entry))
+            {
+                entry = new Entry(CreateLineLayout(_snapshot[index], _ambiguousAsWide));
+                _cache[index] = entry;
+            }
+
+            return entry;
+        }
+
+        // Returns the shaped paint commands for a line, building them once via <paramref name="builder"/>
+        // and reusing them on subsequent repaints until the entry is evicted or invalidated.
+        public LineDrawable GetDrawable(int index, Func<LineLayout, LineDrawable> builder)
+        {
+            Entry entry = GetEntry(index);
+            return entry.Drawable ??= builder(entry.Layout);
+        }
+
+        // Drops every cached drawable (keeping the layouts) so the next repaint re-shapes against the
+        // current font metrics or ligature setting.
+        public void InvalidateDrawables()
+        {
+            foreach (Entry entry in _cache.Values)
+            {
+                entry.Drawable?.Dispose();
+                entry.Drawable = null;
             }
         }
 
         // Adopts a new snapshot and returns the maximum cell length across all lines (for the
-        // horizontal scroll extent). Cached layouts are kept only where the line content is
+        // horizontal scroll extent). Cached entries are kept only where the line content is
         // unchanged, so new output at the bottom reuses the scrollback layouts above it.
         public int SetSnapshot(AnsiTerminalBuffer.TerminalRenderLineSnapshot[] lines, bool ambiguousAsWide)
         {
@@ -1826,7 +1943,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
             if (!reuse)
             {
-                _cache.Clear();
+                DisposeAndClear();
                 return maxCellLength;
             }
 
@@ -1839,15 +1956,11 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 }
             }
 
-            foreach (int index in _evictionScratch)
-            {
-                _cache.Remove(index);
-            }
-
+            Evict();
             return maxCellLength;
         }
 
-        // Evicts cached layouts whose line index falls outside [startInclusive, endInclusive].
+        // Evicts cached entries whose line index falls outside [startInclusive, endInclusive].
         public void TrimOutsideWindow(int startInclusive, int endInclusive)
         {
             if (_cache.Count == 0)
@@ -1864,11 +1977,186 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 }
             }
 
+            Evict();
+        }
+
+        private void Evict()
+        {
             foreach (int index in _evictionScratch)
             {
-                _cache.Remove(index);
+                if (_cache.Remove(index, out Entry? entry))
+                {
+                    entry.Drawable?.Dispose();
+                }
             }
         }
+
+        private void DisposeAndClear()
+        {
+            foreach (Entry entry in _cache.Values)
+            {
+                entry.Drawable?.Dispose();
+            }
+
+            _cache.Clear();
+        }
+    }
+
+    // A line's shaped, position-relative paint commands, reused across repaints. Disposing it
+    // releases any unmanaged text resources held by its commands (e.g. TextLine).
+    private sealed class LineDrawable(IDrawCommand[] commands) : IDisposable
+    {
+        public IDrawCommand[] Commands { get; } = commands;
+
+        public void Dispose()
+        {
+            foreach (IDrawCommand command in Commands)
+            {
+                if (command is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
+            }
+        }
+    }
+
+    // A single run's paint operation, positioned relative to its line's top-left. OnRender supplies
+    // the current (offsetX, offsetY) to translate it into device coordinates.
+    private interface IDrawCommand
+    {
+        void Render(DrawingContext drawingContext, double offsetX, double offsetY);
+    }
+
+    private sealed class FormattedTextCommand(FormattedText text, double relativeX) : IDrawCommand
+    {
+        public void Render(DrawingContext drawingContext, double offsetX, double offsetY)
+            => drawingContext.DrawText(text, new Point(relativeX + offsetX, offsetY));
+    }
+
+    private sealed class TextLineCommand(TextLine line, double relativeX) : IDrawCommand, IDisposable
+    {
+        public void Render(DrawingContext drawingContext, double offsetX, double offsetY)
+            => line.Draw(drawingContext, new Point(relativeX + offsetX, offsetY), InvertAxes.None);
+
+        public void Dispose() => line.Dispose();
+    }
+
+    // Feeds a single styled run to TextFormatter.FormatLine, followed by an end-of-paragraph marker.
+    private sealed class SingleRunTextSource(string text, TextRunProperties properties) : TextSource
+    {
+        public override TextRun GetTextRun(int textSourceCharacterIndex)
+        {
+            if (textSourceCharacterIndex >= text.Length)
+            {
+                return new TextEndOfParagraph(1);
+            }
+
+            return new TextCharacters(text, textSourceCharacterIndex, text.Length - textSourceCharacterIndex, properties);
+        }
+
+        public override TextSpan<CultureSpecificCharacterBufferRange> GetPrecedingText(int textSourceCharacterIndexLimit)
+            => new(0, new CultureSpecificCharacterBufferRange(
+                properties.CultureInfo,
+                new CharacterBufferRange(string.Empty, 0, 0)));
+
+        public override int GetTextEffectCharacterIndexFromTextSourceCharacterIndex(int textSourceCharacterIndex)
+            => textSourceCharacterIndex;
+    }
+
+    private sealed class LineParagraphProperties(TextRunProperties defaultProperties) : TextParagraphProperties
+    {
+        public override FlowDirection FlowDirection => FlowDirection.LeftToRight;
+        public override TextAlignment TextAlignment => TextAlignment.Left;
+        public override double LineHeight => 0;
+        public override bool FirstLineInParagraph => false;
+        public override TextRunProperties DefaultTextRunProperties => defaultProperties;
+        public override TextWrapping TextWrapping => TextWrapping.NoWrap;
+        public override TextMarkerProperties? TextMarkerProperties => null;
+        public override double Indent => 0;
+    }
+
+    private sealed class LigatureRunProperties : TextRunProperties
+    {
+        private static readonly TextRunTypographyProperties Typography = new LigatureTypographyProperties();
+
+        private readonly Typeface _typeface;
+        private readonly double _emSize;
+        private readonly Brush _foreground;
+        private readonly TextDecorationCollection? _decorations;
+
+        public LigatureRunProperties(
+            Typeface typeface,
+            double emSize,
+            double pixelsPerDip,
+            Brush foreground,
+            TextDecorationCollection? decorations)
+        {
+            _typeface = typeface;
+            _emSize = emSize;
+            _foreground = foreground;
+            _decorations = decorations;
+            PixelsPerDip = pixelsPerDip;
+        }
+
+        public override Typeface Typeface => _typeface;
+        public override double FontRenderingEmSize => _emSize;
+        public override double FontHintingEmSize => _emSize;
+        public override TextDecorationCollection? TextDecorations => _decorations;
+        public override Brush ForegroundBrush => _foreground;
+        public override Brush? BackgroundBrush => null;
+        public override CultureInfo CultureInfo => CultureInfo.CurrentCulture;
+        public override TextEffectCollection? TextEffects => null;
+        public override TextRunTypographyProperties TypographyProperties => Typography;
+    }
+
+    // OpenType feature set enabling programming-font ligatures: standard/contextual ligatures plus
+    // contextual alternates (which fonts like FiraCode use to assemble multi-character glyphs). All
+    // other features stay at their neutral defaults so glyph advances are otherwise unchanged.
+    private sealed class LigatureTypographyProperties : TextRunTypographyProperties
+    {
+        public override bool StandardLigatures => true;
+        public override bool ContextualLigatures => true;
+        public override bool ContextualAlternates => true;
+        public override bool DiscretionaryLigatures => false;
+        public override bool HistoricalLigatures => false;
+        public override bool HistoricalForms => false;
+        public override bool Kerning => false;
+        public override bool CapitalSpacing => false;
+        public override bool CaseSensitiveForms => false;
+        public override bool SlashedZero => false;
+        public override bool MathematicalGreek => false;
+        public override bool EastAsianExpertForms => false;
+        public override int AnnotationAlternates => 0;
+        public override int StandardSwashes => 0;
+        public override int ContextualSwashes => 0;
+        public override int StylisticAlternates => 0;
+        public override FontFraction Fraction => FontFraction.Normal;
+        public override FontVariants Variants => FontVariants.Normal;
+        public override FontCapitals Capitals => FontCapitals.Normal;
+        public override FontNumeralStyle NumeralStyle => FontNumeralStyle.Normal;
+        public override FontNumeralAlignment NumeralAlignment => FontNumeralAlignment.Normal;
+        public override FontEastAsianWidths EastAsianWidths => FontEastAsianWidths.Normal;
+        public override FontEastAsianLanguage EastAsianLanguage => FontEastAsianLanguage.Normal;
+        public override bool StylisticSet1 => false;
+        public override bool StylisticSet2 => false;
+        public override bool StylisticSet3 => false;
+        public override bool StylisticSet4 => false;
+        public override bool StylisticSet5 => false;
+        public override bool StylisticSet6 => false;
+        public override bool StylisticSet7 => false;
+        public override bool StylisticSet8 => false;
+        public override bool StylisticSet9 => false;
+        public override bool StylisticSet10 => false;
+        public override bool StylisticSet11 => false;
+        public override bool StylisticSet12 => false;
+        public override bool StylisticSet13 => false;
+        public override bool StylisticSet14 => false;
+        public override bool StylisticSet15 => false;
+        public override bool StylisticSet16 => false;
+        public override bool StylisticSet17 => false;
+        public override bool StylisticSet18 => false;
+        public override bool StylisticSet19 => false;
+        public override bool StylisticSet20 => false;
     }
 
     private readonly record struct LineLayout(

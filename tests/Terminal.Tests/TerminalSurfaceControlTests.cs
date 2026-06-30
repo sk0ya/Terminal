@@ -369,6 +369,108 @@ public sealed class TerminalSurfaceControlTests
         });
     }
 
+    [Fact]
+    public void Surface_CachesLineDrawablesAcrossRepaints()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                CreateLine("first line"),
+                CreateLine("second line")
+            ]));
+
+            Assert.Equal(0, surface.CachedLineDrawableCount);
+
+            ForceRender(surface);
+            int afterFirstRender = surface.CachedLineDrawableCount;
+            Assert.True(afterFirstRender > 0, "Expected visible lines to shape and cache their drawables.");
+
+            // A second paint with no content change reuses the cached drawables (count is unchanged,
+            // not rebuilt from scratch).
+            ForceRender(surface);
+            Assert.Equal(afterFirstRender, surface.CachedLineDrawableCount);
+        });
+    }
+
+    [Fact]
+    public void Surface_TogglingLigatures_InvalidatesAndRebuildsDrawables()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                CreateLine("a => b != c -> d")
+            ]));
+
+            ForceRender(surface);
+            Assert.True(surface.CachedLineDrawableCount > 0);
+
+            // Flipping the ligature mode must drop the stale shaped drawables so the next paint
+            // re-shapes through the ligature-aware path.
+            surface.FontLigaturesEnabled = true;
+            Assert.Equal(0, surface.CachedLineDrawableCount);
+
+            ForceRender(surface);
+            Assert.True(surface.CachedLineDrawableCount > 0);
+        });
+    }
+
+    [Fact]
+    public void Surface_ChangingFontMetrics_InvalidatesDrawables()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                CreateLine("metrics line")
+            ]));
+
+            ForceRender(surface);
+            Assert.True(surface.CachedLineDrawableCount > 0);
+
+            // A font-size change reshapes every glyph, so the cached drawables must be discarded.
+            surface.FontSize = 18;
+            Assert.Equal(0, surface.CachedLineDrawableCount);
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Surface_RendersMixedContentWithoutThrowing(bool ligaturesEnabled)
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            surface.FontLigaturesEnabled = ligaturesEnabled;
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                CreateLine("=> != -> >= <= == === |> <|"),
+                CreateLine("ascii 日本語 mix 絵文字😀 tail"),
+                CreateDecoratedLine("underlined strikethrough")
+            ]));
+
+            // Exercises both the ligature TextFormatter path (primary-font runs) and the
+            // FormattedText fallback path (wide/CJK/emoji runs and decorated runs) in one paint.
+            ForceRender(surface);
+
+            Assert.True(surface.CachedLineDrawableCount > 0);
+        });
+    }
+
+    private static void ForceRender(TerminalSurfaceControl surface)
+    {
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var onRender = typeof(TerminalSurfaceControl).GetMethod("OnRender", flags, [typeof(DrawingContext)])!;
+        var visual = new DrawingVisual();
+        using DrawingContext context = visual.RenderOpen();
+        onRender.Invoke(surface, [context]);
+    }
+
     private static TerminalSurfaceControl CreateSurface()
     {
         var surface = new TerminalSurfaceControl
@@ -402,6 +504,27 @@ public sealed class TerminalSurfaceControlTests
                     UnderlineColor: null,
                     Strikethrough: false,
                     Overline: false,
+                    Hyperlink: null)
+            ]);
+    }
+
+    private static AnsiTerminalBuffer.TerminalRenderLineSnapshot CreateDecoratedLine(string text)
+    {
+        return new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
+            AnchorSegmentIndex: -1,
+            CellLength: text.Length,
+            [
+                new AnsiTerminalBuffer.TerminalRenderSegmentSnapshot(
+                    text,
+                    CellLength: text.Length,
+                    Colors.White,
+                    Colors.Black,
+                    Bold: true,
+                    Italic: true,
+                    UnderlineStyle: UnderlineStyle.Curly,
+                    UnderlineColor: Colors.Red,
+                    Strikethrough: true,
+                    Overline: true,
                     Hyperlink: null)
             ]);
     }

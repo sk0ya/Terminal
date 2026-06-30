@@ -207,6 +207,8 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="10" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="10" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="90" />
@@ -300,6 +302,20 @@
                       Content="Show session info and status messages"
                       Checked="StatusBarCheckBox_Toggled"
                       Unchecked="StatusBarCheckBox_Toggled" />
+
+            <TextBlock Grid.Row="14"
+                       Grid.Column="0"
+                       VerticalAlignment="Center"
+                       Foreground="{StaticResource MutedBrush}"
+                       Text="Ligatures" />
+            <CheckBox x:Name="FontLigaturesCheckBox"
+                      Grid.Row="14"
+                      Grid.Column="1"
+                      VerticalAlignment="Center"
+                      Foreground="#F0F0F0"
+                      Content="Enable programming font ligatures (=&gt;, !=, -&gt;)"
+                      Checked="FontLigaturesCheckBox_Toggled"
+                      Unchecked="FontLigaturesCheckBox_Toggled" />
         </Grid>
     </Border>
 </Window>

@@ -68,9 +68,9 @@
 
 ### 描画 / レンダリング
 
-- **フォントリガチャ** — FiraCode・Cascadia Code のリガチャ（`->`, `=>`, `!=` 等を合字表示）
+- ~~**フォントリガチャ** — FiraCode・Cascadia Code のリガチャ（`->`, `=>`, `!=` 等を合字表示）~~ **実装済み（`EnableFontLigatures` 設定 / `TerminalTabView.SetFontLigaturesEnabled` API、既定 OFF。ON 時は主フォントのランを `TextFormatter` + OpenType `liga`/`clig`/`calt` でシェイプして合字描画。ワイド/フォールバックのランはセル単位描画を維持。設定 UI にトグル追加）**
 - ~~**フォントフォールバック** — 主フォントにないグリフを CJK フォントや絵文字フォントで補完~~ **実装済み（FontFallbackResolver、Segoe UI Emoji/Yu Gothic UI/Meiryo/MS Gothic/SimSun、グリフキャッシュ）**
-- **GPU アクセラレーション** — DirectComposition / Direct2D を使った高フレームレート描画。大量テキスト更新時のドロップフレーム解消
+- ~~**GPU アクセラレーション** — DirectComposition / Direct2D を使った高フレームレート描画。大量テキスト更新時のドロップフレーム解消~~ **実装済み（WPF は既定で GPU 合成のため、真因の「毎フレーム全可視行の `FormattedText` 再シェイプ」という CPU コストを解消。`TerminalSurfaceControl` が行ごとにシェイプ済み描画物（`FormattedText`/`TextLine`）をキャッシュし再描画で再利用。キャッシュは `VirtualLineLayouts` のエントリに同梱して行内容変化・可視外で退避、フォントメトリクス/リガチャ変更で無効化。`CachedLineDrawableCount` テストフック。※真の Direct2D/D3DImage 自前描画はスコープ外）**
 - ~~**Mica / Acrylic 背景** — Windows 11 ウィンドウ素材 API を使った半透明背景エフェクト~~ **実装済み（DWMWA_SYSTEMBACKDROP_TYPE、none/mica/acrylic/mica-alt 設定、DwmBackdrop.cs）**
 - ~~**インライン画像（OSC 1337 / iTerm2 プロトコル）** — Sixel と並ぶもう一方の画像表示プロトコル~~ **実装済み（`OSC 1337 ; File=args:base64`。WPF で PNG/JPEG/GIF 等をネイティブデコード、`width`/`height`（セル・`px`・`%`・`auto`）指定とアスペクト比保持、`inline=0` はダウンロード扱いで非表示、不正データは無視。Sixel と共用のインライン画像配置・描画・スクロールバック基盤を再利用）**
 

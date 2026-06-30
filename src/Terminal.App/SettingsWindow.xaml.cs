@@ -83,6 +83,7 @@ public partial class SettingsWindow : Window
             TabStripPlacementComboBox.SelectedItem = TerminalTabStripPlacementCatalog.ResolveSelectedOption(settings.TabStripPlacement);
             SetSelectedProfile(settings.SelectedProfileId, commandLine);
             StatusBarCheckBox.IsChecked = settings.ShowStatusBar;
+            FontLigaturesCheckBox.IsChecked = settings.EnableFontLigatures;
             SetInputValidationState(WorkingDirectoryTextBox, isValid: true);
             SetInputValidationState(FontSizeTextBox, isValid: true);
         }
@@ -306,6 +307,17 @@ public partial class SettingsWindow : Window
         PublishSettingsChanged();
     }
 
+    private void FontLigaturesCheckBox_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_suppressAutoApply)
+        {
+            return;
+        }
+
+        _currentSettings.EnableFontLigatures = FontLigaturesCheckBox.IsChecked == true;
+        PublishSettingsChanged();
+    }
+
     private void PublishSettingsChanged()
     {
         SettingsChanged?.Invoke(CloneSettings(_currentSettings));
@@ -401,7 +413,8 @@ public partial class SettingsWindow : Window
             ShowStatusBar = settings.ShowStatusBar,
             SessionLogDirectory = settings.SessionLogDirectory,
             CjkAmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide,
-            BackdropType = settings.BackdropType
+            BackdropType = settings.BackdropType,
+            EnableFontLigatures = settings.EnableFontLigatures
         };
     }
 

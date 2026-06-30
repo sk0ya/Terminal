@@ -41,6 +41,12 @@ public partial class TerminalTabView
     public double TerminalFontSize => TerminalOutput.FontSize;
 
     /// <summary>
+    /// Whether OpenType programming-font ligatures (e.g. <c>=&gt;</c>, <c>!=</c>, <c>-&gt;</c>) are
+    /// rendered. Off by default so the exact one-cell-per-glyph terminal rendering is preserved.
+    /// </summary>
+    public bool FontLigaturesEnabled => TerminalOutput.FontLigaturesEnabled;
+
+    /// <summary>
     /// Shows or hides the bottom status bar (session chips, status messages
     /// such as non-zero exit codes, and the working directory summary).
     /// </summary>
@@ -79,6 +85,11 @@ public partial class TerminalTabView
         ApplyTerminalFontSize(fontSize, persist: false);
     }
 
+    public void SetFontLigaturesEnabled(bool enabled)
+    {
+        TerminalOutput.FontLigaturesEnabled = enabled;
+    }
+
     private void InitializeTerminalWorkbench()
     {
         WorkingDirectoryTextBox.Text = Environment.CurrentDirectory;
@@ -113,6 +124,7 @@ public partial class TerminalTabView
         ApplyTerminalFontSize(settings.FontSize <= 0 ? DefaultTerminalFontSize : settings.FontSize, persist: false);
         SetSelectedProfile(settings.SelectedProfileId, commandLine);
         _terminalBuffer.AmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide;
+        TerminalOutput.FontLigaturesEnabled = settings.EnableFontLigatures;
         IsStatusBarVisible = settings.ShowStatusBar;
         ShellIntegrationInjectionEnabled = settings.EnableShellIntegrationInjection;
     }
@@ -130,7 +142,8 @@ public partial class TerminalTabView
                 : WorkingDirectoryTextBox.Text.Trim(),
             FontFamilyName = TerminalOutput.FontFamily.Source,
             FontSize = TerminalOutput.FontSize,
-            CjkAmbiguousWidthIsWide = _terminalBuffer.AmbiguousWidthIsWide
+            CjkAmbiguousWidthIsWide = _terminalBuffer.AmbiguousWidthIsWide,
+            EnableFontLigatures = TerminalOutput.FontLigaturesEnabled
         };
     }
 
@@ -537,6 +550,7 @@ public partial class TerminalTabView
         ApplyTerminalFontSize(settings.FontSize <= 0 ? DefaultTerminalFontSize : settings.FontSize, persist: false);
         SetSelectedProfile(settings.SelectedProfileId, commandLine);
         _terminalBuffer.AmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide;
+        TerminalOutput.FontLigaturesEnabled = settings.EnableFontLigatures;
         IsStatusBarVisible = settings.ShowStatusBar;
         ShellIntegrationInjectionEnabled = settings.EnableShellIntegrationInjection;
         UpdateWindowTitle();
