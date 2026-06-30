@@ -24,9 +24,11 @@ public sealed class HistoryPopupThemeTests
 
             view.SetColorTheme(theme);
 
-            // Accent (prompt / pointer / match highlight / caret) is the opaque selection colour.
+            // Accent (prompt / pointer / match highlight / caret) is the selection
+            // hue brightened 55% toward the foreground, so matched characters stay
+            // visible on the auto-selected row (whose background is the selection colour).
             Assert.Equal(
-                Color.FromRgb(0x20, 0xC0, 0x40),
+                Color.FromRgb(0x9B, 0xE3, 0xA9),
                 ((SolidColorBrush)view.Resources["HistoryPopupAccentBrush"]).Color);
 
             // Selected-row background keeps the selection colour including its alpha.
