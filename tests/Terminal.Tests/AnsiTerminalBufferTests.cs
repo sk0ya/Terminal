@@ -704,6 +704,36 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void BelInNormalStateRaisesBellReceived()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 10);
+        int bellCount = 0;
+        buffer.BellReceived += (_, _) => bellCount++;
+
+        // 通常状態の制御文字 BEL はベルを鳴らし、カーソルは進めない。
+        buffer.Process("a\u0007b");
+
+        Assert.Equal(1, bellCount);
+        Assert.Equal("ab", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void BelTerminatingOscDoesNotRaiseBellReceived()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 10);
+        bool bellRaised = false;
+        string? notification = null;
+        buffer.BellReceived += (_, _) => bellRaised = true;
+        buffer.NotificationRequested += (_, m) => notification = m;
+
+        // ESC ] 9 ; <message> BEL — BEL は OSC の終端として消費され、ベルにはならない。
+        buffer.Process("\u001b]9;Build done\u0007");
+
+        Assert.False(bellRaised);
+        Assert.Equal("Build done", notification);
+    }
+
+    [Fact]
     public void C1CsiDecPrivate1049RestoresPrimaryScreen()
     {
         var buffer = new AnsiTerminalBuffer(20, 10);

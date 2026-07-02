@@ -173,6 +173,24 @@ public partial class TerminalTabView : UserControl
     /// <summary>直近に受信したタスクバー進捗率（0–100）。</summary>
     public int CurrentTaskbarProgress { get; private set; }
 
+    /// <summary>
+    /// アプリケーションが BEL（0x07）を出力したときにディスパッチャスレッドで発火する。
+    /// ホストは非アクティブタブのヘッダにベルインジケータを出すなどに利用できる。
+    /// </summary>
+    public event EventHandler? BellRang;
+
+    /// <summary>
+    /// 直近のベルがまだ確認（このタブの表示）されていないかどうか。ホストがタブヘッダの
+    /// ベルインジケータ表示に用い、タブがアクティブになったら <see cref="ClearPendingBell"/> でクリアする。
+    /// </summary>
+    public bool HasPendingBell { get; private set; }
+
+    /// <summary>未確認ベル状態をクリアする。ホストがタブをアクティブ表示した時点で呼ぶ。</summary>
+    public void ClearPendingBell()
+    {
+        HasPendingBell = false;
+    }
+
     public TerminalTabView(string? commandLine = null, string? workingDirectory = null)
     {
         _initialCommandLine = string.IsNullOrWhiteSpace(commandLine)
@@ -215,6 +233,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.NotificationRequested += TerminalBuffer_NotificationRequested;
         _terminalBuffer.TaskbarProgressChanged += TerminalBuffer_TaskbarProgressChanged;
+        _terminalBuffer.BellReceived += TerminalBuffer_BellReceived;
         _terminalBuffer.ShellCommandZoneReceived += TerminalBuffer_ShellCommandZoneReceived;
         _terminalBuffer.ShellCommandLineReceived += TerminalBuffer_ShellCommandLineReceived;
         _terminalBuffer.ShellHistoryPathReceived += TerminalBuffer_ShellHistoryPathReceived;
@@ -2141,6 +2160,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.CurrentDirectoryChanged -= TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.NotificationRequested -= TerminalBuffer_NotificationRequested;
         _terminalBuffer.TaskbarProgressChanged -= TerminalBuffer_TaskbarProgressChanged;
+        _terminalBuffer.BellReceived -= TerminalBuffer_BellReceived;
         _terminalBuffer.ShellCommandZoneReceived -= TerminalBuffer_ShellCommandZoneReceived;
         _terminalBuffer.ShellCommandLineReceived -= TerminalBuffer_ShellCommandLineReceived;
         _terminalBuffer.ShellHistoryPathReceived -= TerminalBuffer_ShellHistoryPathReceived;
@@ -2154,6 +2174,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.NotificationRequested += TerminalBuffer_NotificationRequested;
         _terminalBuffer.TaskbarProgressChanged += TerminalBuffer_TaskbarProgressChanged;
+        _terminalBuffer.BellReceived += TerminalBuffer_BellReceived;
         _terminalBuffer.ShellCommandZoneReceived += TerminalBuffer_ShellCommandZoneReceived;
         _terminalBuffer.ShellCommandLineReceived += TerminalBuffer_ShellCommandLineReceived;
         _terminalBuffer.ShellHistoryPathReceived += TerminalBuffer_ShellHistoryPathReceived;
@@ -2255,6 +2276,20 @@ public partial class TerminalTabView : UserControl
         CurrentTaskbarProgressState = state;
         CurrentTaskbarProgress = progress;
         TaskbarProgressChanged?.Invoke(this, new TaskbarProgressChangedEventArgs(state, progress));
+    }
+
+    private void TerminalBuffer_BellReceived(object? sender, EventArgs e)
+    {
+        // Process はディスパッチャスレッドで実行されるため、そのまま UI 処理してよい。
+        HasPendingBell = true;
+        PlayBell();
+        BellRang?.Invoke(this, EventArgs.Empty);
+    }
+
+    // 可聴ベルの再生。将来的に設定でオン/オフできるよう、鳴動処理はこの一箇所に集約する。
+    private void PlayBell()
+    {
+        System.Media.SystemSounds.Beep.Play();
     }
 
     private void TerminalBuffer_ShellCommandZoneReceived(object? sender, ShellCommandZoneEventArgs e)

@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -176,6 +176,12 @@ internal sealed class AnsiTerminalBuffer
     public event EventHandler<string>? ClipboardQueryRequested;
     public event EventHandler<string>? CurrentDirectoryChanged;
     public event EventHandler<string>? NotificationRequested;
+
+    /// <summary>
+    /// 通常状態で BEL（0x07）を受信したときに発火する。OSC / DCS の終端文字として
+    /// 消費される 0x07 は対象外で、あくまで制御文字として届いたベルのみを通知する。
+    /// </summary>
+    public event EventHandler? BellReceived;
 
     /// <summary>
     /// ConEmu OSC 9;4（タスクバー進捗）を受信したときに発火する。デスクトップ通知
@@ -861,6 +867,7 @@ internal sealed class AnsiTerminalBuffer
         switch (ch)
         {
             case '\u0007':
+                BellReceived?.Invoke(this, EventArgs.Empty);
                 return;
             case '\u000E':
                 _useG1CharacterSet = true;

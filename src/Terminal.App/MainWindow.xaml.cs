@@ -166,6 +166,17 @@ public partial class MainWindow : Window
                 ApplyTaskbarProgress(e.State, e.Progress);
             }
         };
+        view.BellRang += (_, _) =>
+        {
+            // アクティブタブは可聴ベルのみ。非アクティブタブはヘッダにベルインジケータを出す。
+            if (ReferenceEquals(GetActiveTab()?.View, view))
+            {
+                view.ClearPendingBell();
+                return;
+            }
+
+            UpdateTabHeader(tab, view.HeaderTitle);
+        };
         UpdateTabHeader(tab, view.HeaderTitle);
         TabStrip.SelectedItem = tab.ListBoxItem;
     }
@@ -361,7 +372,10 @@ public partial class MainWindow : Window
         }
 
         ActiveTabHost.Content = tab.View;
-        Title = $"{tab.TitleText.Text} - ConPTY Terminal";
+        // アクティブになったタブの未確認ベルをクリアし、ヘッダのベルインジケータを消す。
+        tab.View.ClearPendingBell();
+        UpdateTabHeader(tab, tab.View.HeaderTitle);
+        Title = $"{tab.View.HeaderTitle} - ConPTY Terminal";
         UpdateTabVisuals();
         // 新しいアクティブタブが保持する進捗をタスクバーへ反映する。
         ApplyTaskbarProgress(tab.View.CurrentTaskbarProgressState, tab.View.CurrentTaskbarProgress);
@@ -691,7 +705,8 @@ public partial class MainWindow : Window
 
     private void UpdateTabHeader(TerminalTabItem tab, string title)
     {
-        tab.TitleText.Text = title;
+        // 未確認ベルがある非アクティブタブはタイトル先頭にベルインジケータを付ける。
+        tab.TitleText.Text = tab.View.HasPendingBell ? $"🔔 {title}" : title;
         if (ReferenceEquals(TabStrip.SelectedItem, tab.ListBoxItem))
         {
             Title = $"{title} - ConPTY Terminal";
