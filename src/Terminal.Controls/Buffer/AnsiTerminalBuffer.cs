@@ -297,18 +297,216 @@ internal sealed class AnsiTerminalBuffer
 
     private void ResizePrimaryScreen(int newColumns, int newRows)
     {
-        bool preserveBottomRows = newRows < _rows;
-        _screen = ResizeScreenBuffer(_screen, _rows, _columns, newRows, newColumns, preserveBottomRows);
-        _cursorRow = AdjustRowForResize(_cursorRow, _rows, newRows, preserveBottomRows);
-        _cursorColumn = Math.Clamp(_cursorColumn, 0, newColumns - 1);
-        _savedCursorRow = AdjustRowForResize(_savedCursorRow, _rows, newRows, preserveBottomRows);
+        ReflowPrimaryScreen(newColumns, newRows);
+    }
+
+    private void ReflowPrimaryScreen(int newColumns, int newRows)
+    {
+        bool hadScrollback = _scrollback.Count > 0;
+        var source = new List<TerminalLine>(_scrollback.Count + _screen.Count);
+        source.AddRange(_scrollback);
+        int screenLineCount = hadScrollback ? _screen.Count : Math.Max(_cursorRow + 1, FindLastVisibleScreenRow(showCursor: false) + 1);
+        source.AddRange(_screen.Take(screenLineCount));
+
+        int cursorSourceRow = _scrollback.Count + _cursorRow;
+        int savedCursorSourceRow = _scrollback.Count + _savedCursorRow;
+        List<TerminalLine> reflowed = ReflowLines(
+            source,
+            newColumns,
+            cursorSourceRow,
+            _cursorColumn,
+            out int cursorRow,
+            out int cursorColumn,
+            savedCursorSourceRow,
+            _savedCursorColumn,
+            out int savedCursorRow,
+            out int savedCursorColumn);
+
+        int screenStart = Math.Max(0, reflowed.Count - newRows);
+        _scrollback.Clear();
+        int historyStart = Math.Max(0, screenStart - _scrollbackLimit);
+        for (int row = historyStart; row < screenStart; row++)
+        {
+            _scrollback.Add(reflowed[row]);
+        }
+
+        _screen = CreateScreen(newRows, newColumns, TerminalStyle.Default);
+        int copiedRows = reflowed.Count - screenStart;
+        int targetStart = hadScrollback ? newRows - copiedRows : 0;
+        for (int row = 0; row < copiedRows; row++)
+        {
+            _screen[targetStart + row] = reflowed[screenStart + row];
+        }
+
+        _cursorRow = Math.Clamp(targetStart + cursorRow - screenStart, 0, newRows - 1);
+        _cursorColumn = Math.Clamp(cursorColumn, 0, newColumns - 1);
+        _savedCursorRow = Math.Clamp(targetStart + savedCursorRow - screenStart, 0, newRows - 1);
+        _savedCursorColumn = Math.Clamp(savedCursorColumn, 0, newColumns - 1);
+        RebuildScrollbackRenderCache();
+    }
+
+    private static List<TerminalLine> ReflowLines(
+        List<TerminalLine> source,
+        int targetColumns,
+        int cursorSourceRow,
+        int cursorSourceColumn,
+        out int cursorTargetRow,
+        out int cursorTargetColumn,
+        int savedCursorSourceRow,
+        int savedCursorSourceColumn,
+        out int savedCursorTargetRow,
+        out int savedCursorTargetColumn)
+    {
+        var result = new List<TerminalLine>();
+        cursorTargetRow = cursorTargetColumn = savedCursorTargetRow = savedCursorTargetColumn = 0;
+        int sourceRow = 0;
+        while (sourceRow < source.Count)
+        {
+            int logicalStart = sourceRow;
+            var cells = new List<TerminalCell>();
+            do
+            {
+                TerminalLine line = source[sourceRow];
+                int length = line.IsWrapped ? line.Cells.Length : FindLastOccupiedColumn(line) + 1;
+                for (int column = 0; column < length; column++)
+                {
+                    cells.Add(line.Cells[column]);
+                }
+
+                sourceRow++;
+                if (!line.IsWrapped)
+                {
+                    break;
+                }
+            }
+            while (sourceRow < source.Count);
+
+            int logicalEnd = sourceRow - 1;
+            int outputStart = result.Count;
+            if (cells.Count == 0)
+            {
+                result.Add(new TerminalLine(targetColumns, TerminalStyle.Default));
+            }
+            else
+            {
+                int offset = 0;
+                while (offset < cells.Count)
+                {
+                    var line = new TerminalLine(targetColumns, TerminalStyle.Default);
+                    int column = 0;
+                    while (offset < cells.Count && column < targetColumns)
+                    {
+                        TerminalCell cell = cells[offset];
+                        int width = cell.IsContinuation ? 1 : Math.Max(1, cell.Width);
+                        if (!cell.IsContinuation && width == 2 && column == targetColumns - 1)
+                        {
+                            break;
+                        }
+
+                        line.Cells[column++] = cell;
+                        offset++;
+                        if (width == 2 && offset < cells.Count && cells[offset].IsContinuation)
+                        {
+                            line.Cells[column++] = cells[offset++];
+                        }
+                    }
+
+                    line.IsWrapped = offset < cells.Count;
+                    result.Add(line);
+                }
+            }
+
+            MapReflowedPosition(source, logicalStart, logicalEnd, cursorSourceRow, cursorSourceColumn,
+                targetColumns, outputStart, result.Count - outputStart, out int mappedRow, out int mappedColumn);
+            if (cursorSourceRow >= logicalStart && cursorSourceRow <= logicalEnd)
+            {
+                cursorTargetRow = mappedRow;
+                cursorTargetColumn = mappedColumn;
+            }
+
+            MapReflowedPosition(source, logicalStart, logicalEnd, savedCursorSourceRow, savedCursorSourceColumn,
+                targetColumns, outputStart, result.Count - outputStart, out mappedRow, out mappedColumn);
+            if (savedCursorSourceRow >= logicalStart && savedCursorSourceRow <= logicalEnd)
+            {
+                savedCursorTargetRow = mappedRow;
+                savedCursorTargetColumn = mappedColumn;
+            }
+        }
+
+        return result;
+    }
+
+    private static void MapReflowedPosition(List<TerminalLine> source, int logicalStart, int logicalEnd,
+        int positionRow, int positionColumn, int targetColumns, int outputStart, int outputCount,
+        out int targetRow, out int targetColumn)
+    {
+        var cells = new List<TerminalCell>();
+        int positionOffset = 0;
+        int clampedPositionRow = Math.Clamp(positionRow, logicalStart, logicalEnd);
+        for (int row = logicalStart; row <= logicalEnd; row++)
+        {
+            TerminalLine line = source[row];
+            int length = line.IsWrapped ? line.Cells.Length : FindLastOccupiedColumn(line) + 1;
+            if (row < clampedPositionRow)
+            {
+                positionOffset += length;
+            }
+
+            for (int column = 0; column < length; column++)
+            {
+                cells.Add(line.Cells[column]);
+            }
+        }
+
+        positionOffset += Math.Max(0, positionColumn);
+        int rowOffset = 0;
+        int targetCellColumn = 0;
+        for (int offset = 0; offset < Math.Min(positionOffset, cells.Count); offset++)
+        {
+            TerminalCell cell = cells[offset];
+            if (!cell.IsContinuation && cell.Width == 2 && targetCellColumn == targetColumns - 1)
+            {
+                rowOffset++;
+                targetCellColumn = 0;
+            }
+
+            targetCellColumn++;
+            if (targetCellColumn >= targetColumns)
+            {
+                rowOffset++;
+                targetCellColumn = 0;
+            }
+        }
+
+        targetRow = outputStart + Math.Min(rowOffset, outputCount - 1);
+        targetColumn = Math.Min(targetCellColumn, targetColumns - 1);
     }
 
     private void ResizeActiveScreen(int newColumns, int newRows)
     {
-        _screen = ResizeScreenBuffer(_screen, _rows, _columns, newRows, newColumns, preserveBottomRows: false);
-        _cursorRow = AdjustRowForResize(_cursorRow, _rows, newRows, preserveBottomRows: false);
-        _cursorColumn = Math.Clamp(_cursorColumn, 0, newColumns - 1);
+        List<TerminalLine> reflowed = ReflowLines(
+            _screen,
+            newColumns,
+            _cursorRow,
+            _cursorColumn,
+            out int cursorRow,
+            out int cursorColumn,
+            _savedCursorRow,
+            _savedCursorColumn,
+            out int savedCursorRow,
+            out int savedCursorColumn);
+
+        _screen = CreateScreen(newRows, newColumns, TerminalStyle.Default);
+        int copyRows = Math.Min(newRows, reflowed.Count);
+        for (int row = 0; row < copyRows; row++)
+        {
+            _screen[row] = reflowed[row];
+        }
+
+        _cursorRow = Math.Clamp(cursorRow, 0, newRows - 1);
+        _cursorColumn = Math.Clamp(cursorColumn, 0, newColumns - 1);
+        _savedCursorRow = Math.Clamp(savedCursorRow, 0, newRows - 1);
+        _savedCursorColumn = Math.Clamp(savedCursorColumn, 0, newColumns - 1);
     }
 
     private static List<TerminalLine> ResizeScreenBuffer(
@@ -338,17 +536,6 @@ internal sealed class AnsiTerminalBuffer
         }
 
         return resizedScreen;
-    }
-
-    private static int AdjustRowForResize(int row, int sourceRows, int targetRows, bool preserveBottomRows)
-    {
-        int sourceStartRow = preserveBottomRows && targetRows < sourceRows
-            ? sourceRows - targetRows
-            : 0;
-        int targetStartRow = preserveBottomRows && targetRows > sourceRows
-            ? targetRows - sourceRows
-            : 0;
-        return Math.Clamp(row - sourceStartRow + targetStartRow, 0, targetRows - 1);
     }
 
     private static void SanitizeRightEdge(TerminalLine source, TerminalLine target, int copiedColumns, int sourceColumns)
@@ -679,6 +866,7 @@ internal sealed class AnsiTerminalBuffer
     {
         var clone = new TerminalLine(line.Cells.Length, TerminalStyle.Default);
         Array.Copy(line.Cells, clone.Cells, line.Cells.Length);
+        clone.IsWrapped = line.IsWrapped;
         return clone;
     }
 
@@ -2894,6 +3082,7 @@ internal sealed class AnsiTerminalBuffer
     private void ClearEntireLine(int row)
     {
         FillRange(_screen[row], 0, _columns);
+        _screen[row].IsWrapped = false;
     }
 
     private void FillRange(TerminalLine line, int startColumn, int endExclusive)
@@ -2913,6 +3102,7 @@ internal sealed class AnsiTerminalBuffer
         {
             if (_autoWrapEnabled)
             {
+                _screen[_cursorRow].IsWrapped = true;
                 _cursorColumn = 0;
                 MoveDownAndScrollIfNeeded();
             }
@@ -2926,6 +3116,7 @@ internal sealed class AnsiTerminalBuffer
         {
             if (_autoWrapEnabled)
             {
+                _screen[_cursorRow].IsWrapped = true;
                 _cursorColumn = 0;
                 MoveDownAndScrollIfNeeded();
             }
@@ -3911,6 +4102,7 @@ internal sealed class AnsiTerminalBuffer
         }
 
         public TerminalCell[] Cells { get; }
+        public bool IsWrapped { get; set; }
     }
 
     private sealed record ScreenState(

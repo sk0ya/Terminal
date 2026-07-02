@@ -365,7 +365,7 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
-    public void ResizeTruncatesVisibleContentWhenShrinkingColumnsWithoutReflow()
+    public void ResizeReflowsVisibleContentWhenShrinkingColumns()
     {
         var buffer = new AnsiTerminalBuffer(32, 10);
 
@@ -373,7 +373,83 @@ public sealed class AnsiTerminalBufferTests
         buffer.Resize(20, 10);
 
         Assert.Equal("ABCDEFGHIJKLMNOPQRST", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("UVWX", buffer.GetScreenLineText(1).TrimEnd());
+    }
+
+    [Fact]
+    public void ResizeRestoresReflowedContentWhenColumnsGrowAgain()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890");
+        buffer.Resize(20, 10);
+        buffer.Resize(40, 10);
+
+        Assert.Equal("ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890", buffer.GetScreenLineText(0).TrimEnd());
         Assert.Equal(string.Empty, buffer.GetScreenLineText(1).TrimEnd());
+    }
+
+    [Fact]
+    public void ResizeDoesNotJoinExplicitlySeparatedLines()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+
+        buffer.Process("first\r\nsecond");
+        buffer.Resize(20, 10);
+
+        Assert.Equal("first", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("second", buffer.GetScreenLineText(1).TrimEnd());
+    }
+
+    [Fact]
+    public void ResizeReflowsAlternateScreenContent()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        buffer.Process("\u001b[?1049h");
+        buffer.Process("ABCDEFGHIJKLMNOPQRSTUVWX");
+
+        buffer.Resize(20, 10);
+
+        Assert.Equal("ABCDEFGHIJKLMNOPQRST", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("UVWX", buffer.GetScreenLineText(1).TrimEnd());
+    }
+
+    [Fact]
+    public void ResizeReflowsWideCharactersWithoutSplittingCells()
+    {
+        var buffer = new AnsiTerminalBuffer(22, 10);
+        buffer.Process("1234567890123456789界Z");
+
+        buffer.Resize(20, 10);
+
+        Assert.Equal("1234567890123456789", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("界Z", buffer.GetScreenLineText(1).TrimEnd());
+    }
+
+    [Fact]
+    public void ResizeReflowsScrollbackWithoutLosingText()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+        string text = new('x', 240);
+        buffer.Process(text);
+
+        buffer.Resize(40, 10);
+
+        Assert.Equal(text, buffer.CreatePlainTextSnapshot().Replace(Environment.NewLine, string.Empty));
+    }
+
+    [Fact]
+    public void ResizeMapsCursorToReflowedPosition()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+        buffer.Process("ABCDEFGHIJKLMNOPQRSTUVWX");
+
+        buffer.Resize(20, 10);
+        buffer.Process("\u001b[6n");
+
+        Assert.Equal("\u001b[2;5R", emitted);
     }
 
     [Fact]
