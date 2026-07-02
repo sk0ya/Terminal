@@ -38,6 +38,15 @@ public partial class TerminalTabView
     private bool _suppressWorkingDirectoryTextChanged;
     private TerminalColorTheme _colorTheme = TerminalColorTheme.Default;
 
+    // 画面内テキスト検索（Ctrl+Shift+F）の状態。_findMatches は現在の検索語に対する一致一覧
+    // （FindMatches と同じ整列）、_findIndex はそのうち現在ハイライト中の一致、
+    // _findAnchorLine/_findAnchorColumn は検索語変更時に「今見ている位置に近い一致」を選び直す
+    // ための起点位置（直近に選択した一致の位置）。
+    private IReadOnlyList<TerminalMatch> _findMatches = Array.Empty<TerminalMatch>();
+    private int _findIndex = -1;
+    private int _findAnchorLine;
+    private int _findAnchorColumn;
+
     public TerminalColorTheme ColorTheme => _colorTheme;
 
     public string FontFamilyName => TerminalOutput.FontFamily.Source;
@@ -323,46 +332,41 @@ public partial class TerminalTabView
         ToggleFindPanel();
     }
 
-    private void CloseFindButton_Click(object sender, RoutedEventArgs e)
-    {
-        CloseFindPanel();
-    }
-
-    private void FindNextButton_Click(object sender, RoutedEventArgs e)
-    {
-        _ = TryFindInTerminal(forward: true);
-    }
-
-    private void FindPreviousButton_Click(object sender, RoutedEventArgs e)
-    {
-        _ = TryFindInTerminal(forward: false);
-    }
-
-    private void FindTextBox_KeyDown(object sender, KeyEventArgs e)
+    private void FindTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         Key key = GetEffectiveKey(e);
-        if (key == Key.Enter)
+        switch (key)
         {
-            _ = TryFindInTerminal((Keyboard.Modifiers & ModifierKeys.Shift) == 0);
-            e.Handled = true;
-            return;
-        }
-
-        if (key == Key.Escape)
-        {
-            CloseFindPanel();
-            e.Handled = true;
+            case Key.Escape:
+                CloseFindPanel();
+                e.Handled = true;
+                break;
+            case Key.Enter:
+            case Key.F3:
+                // Enter / F3 で次、Shift 併用で前の一致へ。
+                MoveFind(forward: (Keyboard.Modifiers & ModifierKeys.Shift) == 0);
+                e.Handled = true;
+                break;
+            case Key.C when (Keyboard.Modifiers & ModifierKeys.Alt) != 0:
+                // Alt+C で大文字小文字の区別をトグル。
+                FindCaseSensitiveCheckBox.IsChecked = FindCaseSensitiveCheckBox.IsChecked != true;
+                RefreshFind(reseek: true);
+                e.Handled = true;
+                break;
         }
     }
 
     private void FindTextBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        UpdateFindMatchCount();
+        if (FindPopup.IsOpen)
+        {
+            RefreshFind(reseek: true);
+        }
     }
 
     private void FindOptions_Changed(object sender, RoutedEventArgs e)
     {
-        UpdateFindMatchCount();
+        RefreshFind(reseek: true);
     }
 
     private void ZoomOutButton_Click(object sender, RoutedEventArgs e)
@@ -401,13 +405,6 @@ public partial class TerminalTabView
         ModifierKeys modifiers = Keyboard.Modifiers;
         Key key = GetEffectiveKey(e);
 
-        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.F)
-        {
-            OpenFindPanel();
-            e.Handled = true;
-            return;
-        }
-
         if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.S)
         {
             SaveTranscript();
@@ -443,14 +440,14 @@ public partial class TerminalTabView
             return;
         }
 
-        if (FindPanel.Visibility == Visibility.Visible && key == Key.F3)
+        if (FindPopup.IsOpen && key == Key.F3)
         {
-            _ = TryFindInTerminal((modifiers & ModifierKeys.Shift) == 0);
+            MoveFind((modifiers & ModifierKeys.Shift) == 0);
             e.Handled = true;
             return;
         }
 
-        if (FindPanel.Visibility == Visibility.Visible && key == Key.Escape)
+        if (FindPopup.IsOpen && key == Key.Escape)
         {
             CloseFindPanel();
             e.Handled = true;
@@ -576,7 +573,7 @@ public partial class TerminalTabView
 
     private void ToggleFindPanel()
     {
-        if (FindPanel.Visibility == Visibility.Visible)
+        if (FindPopup.IsOpen)
         {
             CloseFindPanel();
         }
@@ -588,43 +585,126 @@ public partial class TerminalTabView
 
     private void OpenFindPanel()
     {
-        FindPanel.Visibility = Visibility.Visible;
-        UpdateFindMatchCount();
-        FindTextBox.Focus();
-        FindTextBox.SelectAll();
+        CloseHistoryPanel();
+        // 開くたびに起点を先頭へ戻し、既存の検索語があれば近い一致を選び直す。
+        _findAnchorLine = 0;
+        _findAnchorColumn = 0;
+        FindPopup.IsOpen = true;
+        RefreshFind(reseek: true);
     }
 
     private void CloseFindPanel()
     {
-        FindPanel.Visibility = Visibility.Collapsed;
-        FindCountText.Text = "Find";
+        if (!FindPopup.IsOpen)
+        {
+            return;
+        }
+
+        FindPopup.IsOpen = false;
+    }
+
+    private void FindPopup_Opened(object sender, EventArgs e)
+    {
+        // Popup はメインのビジュアルツリー外なので、表示後に明示的にフォーカスを移す。
+        FindTextBox.Focus();
+        FindTextBox.SelectAll();
+        Keyboard.Focus(FindTextBox);
+    }
+
+    private void FindPopup_Closed(object sender, EventArgs e)
+    {
+        // 閉じたら検索ハイライト（選択）を消し、ターミナルへフォーカスを戻す。
+        _findMatches = Array.Empty<TerminalMatch>();
+        _findIndex = -1;
+        TerminalOutput.ClearSelection();
+        FindCountText.Text = "Type to search";
         if (_session is not null)
         {
             FocusTerminalInput();
         }
     }
 
-    private bool TryFindInTerminal(bool forward)
+    // 現在の検索語・オプションから一致一覧を作り直す。UI 状態には触れない。
+    private void RecomputeFindMatches()
     {
         string query = FindTextBox.Text;
-        if (string.IsNullOrWhiteSpace(query))
+        if (string.IsNullOrEmpty(query))
         {
-            FindCountText.Text = "Type to search";
-            return false;
+            _findMatches = Array.Empty<TerminalMatch>();
+            return;
         }
 
-        StringComparison comparison = FindCaseSensitiveCheckBox.IsChecked == true
+        _findMatches = TerminalOutput.FindMatches(query, ResolveFindComparison());
+    }
+
+    private StringComparison ResolveFindComparison()
+        => FindCaseSensitiveCheckBox.IsChecked == true
             ? StringComparison.Ordinal
             : StringComparison.OrdinalIgnoreCase;
 
-        if (!TerminalOutput.TrySelectNextMatch(query, comparison, forward, out bool wrapped))
+    // 検索語・オプション変更時に呼ぶ。一致を作り直し、reseek=true なら起点に近い一致を、そうでな
+    // ければ現在インデックスを維持して現在一致を選び直す。空検索語・不一致はカウント表示のみ更新。
+    private void RefreshFind(bool reseek)
+    {
+        if (!FindPopup.IsOpen)
         {
-            FindCountText.Text = "No match";
-            return false;
+            return;
         }
 
-        FindCountText.Text = wrapped ? "Wrapped" : "Match";
-        return true;
+        if (string.IsNullOrEmpty(FindTextBox.Text))
+        {
+            _findMatches = Array.Empty<TerminalMatch>();
+            _findIndex = -1;
+            TerminalOutput.ClearSelection();
+            FindCountText.Text = "Type to search";
+            return;
+        }
+
+        RecomputeFindMatches();
+        if (_findMatches.Count == 0)
+        {
+            _findIndex = -1;
+            TerminalOutput.ClearSelection();
+            FindCountText.Text = "No match";
+            return;
+        }
+
+        _findIndex = reseek
+            ? TerminalFindNavigator.SeedIndex(_findMatches, _findAnchorLine, _findAnchorColumn, forward: true)
+            : Math.Clamp(_findIndex, 0, _findMatches.Count - 1);
+        ApplyCurrentFindMatch();
+    }
+
+    // Enter / F3（＋Shift）やナビゲーションボタンからの「次/前」移動。
+    private void MoveFind(bool forward)
+    {
+        RecomputeFindMatches();
+        if (_findMatches.Count == 0)
+        {
+            _findIndex = -1;
+            TerminalOutput.ClearSelection();
+            FindCountText.Text = string.IsNullOrEmpty(FindTextBox.Text) ? "Type to search" : "No match";
+            return;
+        }
+
+        _findIndex = TerminalFindNavigator.Advance(_findIndex, _findMatches.Count, forward);
+        ApplyCurrentFindMatch();
+    }
+
+    // 現在インデックスの一致を選択ハイライトし、可視範囲へスクロールしてカウント表示を更新する。
+    // 選択ハイライト＋スクロール経路（TerminalSurfaceControl.SelectMatch）を再利用する。
+    private void ApplyCurrentFindMatch()
+    {
+        if (_findIndex < 0 || _findIndex >= _findMatches.Count)
+        {
+            return;
+        }
+
+        TerminalMatch match = _findMatches[_findIndex];
+        TerminalOutput.SelectMatch(match.LineIndex, match.Column, match.Length);
+        _findAnchorLine = match.LineIndex;
+        _findAnchorColumn = match.Column;
+        FindCountText.Text = TerminalFindNavigator.FormatPosition(_findIndex, _findMatches.Count);
     }
 
     /// <summary>
@@ -677,25 +757,34 @@ public partial class TerminalTabView
     public bool SelectMatch(TerminalMatch match)
         => TerminalOutput.SelectMatch(match.LineIndex, match.Column, match.Length);
 
+    // ターミナル出力が流れて行が変化するたび（RenderTerminal から）呼ばれ、検索バーが開いていれば
+    // 一致一覧とカウント表示を追従させる。現在ハイライトは動かさない（自動追従スクロールと競合させ
+    // ないため）よう、インデックスはクランプのみで再スクロールしない。
     private void UpdateFindMatchCount()
     {
-        if (FindPanel.Visibility != Visibility.Visible)
+        if (!FindPopup.IsOpen)
         {
             return;
         }
 
-        string query = FindTextBox.Text;
-        if (string.IsNullOrWhiteSpace(query))
+        if (string.IsNullOrEmpty(FindTextBox.Text))
         {
+            _findMatches = Array.Empty<TerminalMatch>();
+            _findIndex = -1;
             FindCountText.Text = "Type to search";
             return;
         }
 
-        StringComparison comparison = FindCaseSensitiveCheckBox.IsChecked == true
-            ? StringComparison.Ordinal
-            : StringComparison.OrdinalIgnoreCase;
-        int matchCount = TerminalOutput.CountMatches(query, comparison);
-        FindCountText.Text = matchCount == 1 ? "1 match" : $"{matchCount} matches";
+        RecomputeFindMatches();
+        if (_findMatches.Count == 0)
+        {
+            _findIndex = -1;
+            FindCountText.Text = "No match";
+            return;
+        }
+
+        _findIndex = _findIndex < 0 ? 0 : Math.Clamp(_findIndex, 0, _findMatches.Count - 1);
+        FindCountText.Text = TerminalFindNavigator.FormatPosition(_findIndex, _findMatches.Count);
     }
 
     private void OpenHistoryPanel()

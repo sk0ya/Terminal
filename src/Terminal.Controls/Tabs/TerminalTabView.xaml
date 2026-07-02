@@ -276,62 +276,6 @@
             </Grid>
         </Border>
 
-        <Border x:Name="FindPanel"
-                Grid.Row="1"
-                Style="{StaticResource PanelBorderStyle}"
-                Padding="10"
-                Margin="0"
-                Visibility="Collapsed">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="280" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-
-                <TextBlock Grid.Column="0"
-                           Margin="0,0,10,0"
-                           VerticalAlignment="Center"
-                           Foreground="{StaticResource ForegroundMutedBrush}"
-                           Text="Find" />
-                <TextBox x:Name="FindTextBox"
-                         Grid.Column="1"
-                         Margin="0,0,10,0"
-                         Style="{StaticResource InputTextBoxStyle}"
-                         TextChanged="FindTextBox_TextChanged"
-                         KeyDown="FindTextBox_KeyDown" />
-                <CheckBox x:Name="FindCaseSensitiveCheckBox"
-                          Grid.Column="2"
-                          Margin="0,0,12,0"
-                          VerticalAlignment="Center"
-                          Foreground="{StaticResource ForegroundMutedBrush}"
-                          Click="FindOptions_Changed"
-                          Content="Case" />
-                <Button Grid.Column="3"
-                        Style="{StaticResource ToolbarButtonStyle}"
-                        Content="Previous"
-                        Click="FindPreviousButton_Click" />
-                <Button Grid.Column="4"
-                        Style="{StaticResource ToolbarButtonStyle}"
-                        Content="Next"
-                        Click="FindNextButton_Click" />
-                <TextBlock x:Name="FindCountText"
-                           Grid.Column="5"
-                           VerticalAlignment="Center"
-                           Foreground="{StaticResource ForegroundMutedBrush}"
-                           Text="Find" />
-                <Button Grid.Column="6"
-                        Style="{StaticResource ToolbarButtonStyle}"
-                        Margin="0"
-                        Content="Close"
-                        Click="CloseFindButton_Click" />
-            </Grid>
-        </Border>
-
         <Border x:Name="TerminalHostBorder"
                 Grid.Row="2"
                 Style="{StaticResource PanelBorderStyle}"
@@ -528,6 +472,85 @@
                                  SelectionBrush="{DynamicResource HistoryPopupAccentBrush}"
                                  TextChanged="HistorySearchBox_TextChanged"
                                  PreviewKeyDown="HistorySearchBox_PreviewKeyDown" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </Popup>
+
+        <!-- 画面内テキスト検索バー（Ctrl+Shift+F）。Ctrl+R 履歴オーバーレイと同じく入力キャレット直上に
+             アンカーする Popup とし、配色・フォントも HistoryPopup* リソースで統一する。 -->
+        <Popup x:Name="FindPopup"
+               Grid.Row="2"
+               Placement="Top"
+               PlacementTarget="{Binding ElementName=TerminalInputProxy}"
+               VerticalOffset="-4"
+               AllowsTransparency="True"
+               Focusable="True"
+               StaysOpen="False"
+               PopupAnimation="None"
+               Opened="FindPopup_Opened"
+               Closed="FindPopup_Closed">
+            <Border Style="{StaticResource PanelBorderStyle}"
+                    Background="{DynamicResource HistoryPopupBackgroundBrush}"
+                    BorderBrush="{DynamicResource HistoryPopupBorderBrush}"
+                    Padding="6"
+                    MinWidth="360"
+                    MaxWidth="640">
+                <!-- fzf 風: 現在位置カウントとオプションをプロンプトの上に、プロンプトを最下段に置く。 -->
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0" Margin="18,0,2,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="FindCountText"
+                                   Grid.Column="0"
+                                   VerticalAlignment="Center"
+                                   FontFamily="Consolas"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource HistoryPopupCountBrush}"
+                                   Text="Type to search" />
+                        <CheckBox x:Name="FindCaseSensitiveCheckBox"
+                                  Grid.Column="1"
+                                  VerticalAlignment="Center"
+                                  FontFamily="Consolas"
+                                  FontSize="12"
+                                  Foreground="{DynamicResource HistoryPopupCountBrush}"
+                                  Click="FindOptions_Changed"
+                                  ToolTip="大文字小文字を区別（Alt+C）"
+                                  Content="Aa" />
+                    </Grid>
+
+                    <Grid Grid.Row="1" Margin="2,0,2,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Margin="0,0,8,0"
+                                   VerticalAlignment="Center"
+                                   FontFamily="Consolas"
+                                   FontSize="14"
+                                   Foreground="{DynamicResource HistoryPopupAccentBrush}"
+                                   Text="⌕" />
+                        <TextBox x:Name="FindTextBox"
+                                 Grid.Column="1"
+                                 MinWidth="260"
+                                 BorderThickness="0"
+                                 Background="Transparent"
+                                 Foreground="{DynamicResource HistoryPopupForegroundBrush}"
+                                 FontFamily="Consolas"
+                                 FontSize="14"
+                                 VerticalContentAlignment="Center"
+                                 CaretBrush="{DynamicResource HistoryPopupAccentBrush}"
+                                 SelectionBrush="{DynamicResource HistoryPopupAccentBrush}"
+                                 TextChanged="FindTextBox_TextChanged"
+                                 PreviewKeyDown="FindTextBox_PreviewKeyDown" />
                     </Grid>
                 </Grid>
             </Border>

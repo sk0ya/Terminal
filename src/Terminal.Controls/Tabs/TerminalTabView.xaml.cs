@@ -746,6 +746,12 @@ public partial class TerminalTabView : UserControl
             return true;
         }
 
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.F)
+        {
+            OpenFindPanel();
+            return true;
+        }
+
         return false;
     }
 
