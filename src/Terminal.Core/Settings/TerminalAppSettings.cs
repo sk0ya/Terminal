@@ -5,6 +5,10 @@ namespace Terminal.Settings;
 
 public sealed class TerminalAppSettings
 {
+    public const int DefaultScrollbackLimit = 10000;
+    public const int MinScrollbackLimit = 100;
+    public const int MaxScrollbackLimit = 1_000_000;
+
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         WriteIndented = true
@@ -26,6 +30,16 @@ public sealed class TerminalAppSettings
     public string BackdropType { get; set; } = "none";
     public bool EnableFontLigatures { get; set; } = false;
 
+    /// <summary>
+    /// Maximum number of scrollback lines a terminal buffer keeps. Applied to
+    /// buffers created after the change (new tabs / restarted sessions).
+    /// </summary>
+    public int ScrollbackLimit { get; set; } = DefaultScrollbackLimit;
+
+    /// <summary>Clamps a scrollback limit to the supported range.</summary>
+    public static int ClampScrollbackLimit(int value)
+        => Math.Clamp(value, MinScrollbackLimit, MaxScrollbackLimit);
+
     public static TerminalAppSettings Load()
     {
         string path = GetSettingsPath();
@@ -44,6 +58,7 @@ public sealed class TerminalAppSettings
             }
 
             settings.TabStripPlacement = TerminalTabStripPlacementCatalog.Normalize(settings.TabStripPlacement);
+            settings.ScrollbackLimit = ClampScrollbackLimit(settings.ScrollbackLimit);
 
             return settings;
         }

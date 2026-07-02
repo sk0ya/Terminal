@@ -29,6 +29,10 @@ public partial class TerminalTabView
 
     private string _activeCommandLine = string.Empty;
     private string _activeWorkingDirectory = Environment.CurrentDirectory;
+
+    // Maximum scrollback lines for terminal buffers created after the change
+    // (the buffer's own limit is readonly, so it applies from the next session).
+    private int _scrollbackLimit = TerminalAppSettings.DefaultScrollbackLimit;
     private bool _suppressProfileSelectionChanged;
     private bool _suppressCommandTextChanged;
     private bool _suppressWorkingDirectoryTextChanged;
@@ -125,6 +129,7 @@ public partial class TerminalTabView
         SetSelectedProfile(settings.SelectedProfileId, commandLine);
         _terminalBuffer.AmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide;
         TerminalOutput.FontLigaturesEnabled = settings.EnableFontLigatures;
+        _scrollbackLimit = TerminalAppSettings.ClampScrollbackLimit(settings.ScrollbackLimit);
         IsStatusBarVisible = settings.ShowStatusBar;
         ShellIntegrationInjectionEnabled = settings.EnableShellIntegrationInjection;
     }
@@ -143,7 +148,8 @@ public partial class TerminalTabView
             FontFamilyName = TerminalOutput.FontFamily.Source,
             FontSize = TerminalOutput.FontSize,
             CjkAmbiguousWidthIsWide = _terminalBuffer.AmbiguousWidthIsWide,
-            EnableFontLigatures = TerminalOutput.FontLigaturesEnabled
+            EnableFontLigatures = TerminalOutput.FontLigaturesEnabled,
+            ScrollbackLimit = _scrollbackLimit
         };
     }
 
@@ -551,6 +557,7 @@ public partial class TerminalTabView
         SetSelectedProfile(settings.SelectedProfileId, commandLine);
         _terminalBuffer.AmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide;
         TerminalOutput.FontLigaturesEnabled = settings.EnableFontLigatures;
+        _scrollbackLimit = TerminalAppSettings.ClampScrollbackLimit(settings.ScrollbackLimit);
         IsStatusBarVisible = settings.ShowStatusBar;
         ShellIntegrationInjectionEnabled = settings.EnableShellIntegrationInjection;
         UpdateWindowTitle();

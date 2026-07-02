@@ -23,6 +23,7 @@ public partial class SettingsWindow : Window
     private readonly TerminalAppSettings _currentSettings;
     private readonly DispatcherTimer _workingDirectoryApplyTimer = new();
     private readonly DispatcherTimer _fontSizeApplyTimer = new();
+    private readonly DispatcherTimer _scrollbackLimitApplyTimer = new();
     private bool _suppressProfileSelectionChanged;
     private bool _suppressCommandTextChanged;
     private bool _suppressAutoApply;
@@ -35,6 +36,8 @@ public partial class SettingsWindow : Window
         _workingDirectoryApplyTimer.Tick += WorkingDirectoryApplyTimer_Tick;
         _fontSizeApplyTimer.Interval = AutoApplyDelay;
         _fontSizeApplyTimer.Tick += FontSizeApplyTimer_Tick;
+        _scrollbackLimitApplyTimer.Interval = AutoApplyDelay;
+        _scrollbackLimitApplyTimer.Tick += ScrollbackLimitApplyTimer_Tick;
         BuildProfileCatalog();
         BuildFontFamilyCatalog();
         BuildTabStripPlacementCatalog();
@@ -84,8 +87,10 @@ public partial class SettingsWindow : Window
             SetSelectedProfile(settings.SelectedProfileId, commandLine);
             StatusBarCheckBox.IsChecked = settings.ShowStatusBar;
             FontLigaturesCheckBox.IsChecked = settings.EnableFontLigatures;
+            ScrollbackLimitTextBox.Text = TerminalAppSettings.ClampScrollbackLimit(settings.ScrollbackLimit).ToString();
             SetInputValidationState(WorkingDirectoryTextBox, isValid: true);
             SetInputValidationState(FontSizeTextBox, isValid: true);
+            SetInputValidationState(ScrollbackLimitTextBox, isValid: true);
         }
         finally
         {
@@ -208,6 +213,22 @@ public partial class SettingsWindow : Window
         CommitFontSizeSetting();
     }
 
+    private void ScrollbackLimitTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppressAutoApply)
+        {
+            return;
+        }
+
+        SetInputValidationState(ScrollbackLimitTextBox, TryNormalizeScrollbackLimit(ScrollbackLimitTextBox.Text, out _));
+        RestartTimer(_scrollbackLimitApplyTimer);
+    }
+
+    private void ScrollbackLimitTextBox_LostKeyboardFocus(object sender, System.Windows.Input.KeyboardFocusChangedEventArgs e)
+    {
+        CommitScrollbackLimitSetting();
+    }
+
     private void WorkingDirectoryApplyTimer_Tick(object? sender, EventArgs e)
     {
         CommitWorkingDirectorySetting();
@@ -216,6 +237,11 @@ public partial class SettingsWindow : Window
     private void FontSizeApplyTimer_Tick(object? sender, EventArgs e)
     {
         CommitFontSizeSetting();
+    }
+
+    private void ScrollbackLimitApplyTimer_Tick(object? sender, EventArgs e)
+    {
+        CommitScrollbackLimitSetting();
     }
 
     private void CommitCommandSettings(string profileId)
@@ -277,6 +303,26 @@ public partial class SettingsWindow : Window
         _currentSettings.FontSize = fontSize;
         SetInputValidationState(FontSizeTextBox, isValid: true);
         SetTextSilently(FontSizeTextBox, fontSize.ToString("0"));
+        PublishSettingsChanged();
+    }
+
+    private void CommitScrollbackLimitSetting()
+    {
+        _scrollbackLimitApplyTimer.Stop();
+        if (_suppressAutoApply)
+        {
+            return;
+        }
+
+        if (!TryNormalizeScrollbackLimit(ScrollbackLimitTextBox.Text, out int scrollbackLimit))
+        {
+            SetInputValidationState(ScrollbackLimitTextBox, isValid: false);
+            return;
+        }
+
+        _currentSettings.ScrollbackLimit = scrollbackLimit;
+        SetInputValidationState(ScrollbackLimitTextBox, isValid: true);
+        SetTextSilently(ScrollbackLimitTextBox, scrollbackLimit.ToString());
         PublishSettingsChanged();
     }
 
@@ -396,6 +442,18 @@ public partial class SettingsWindow : Window
         return true;
     }
 
+    private static bool TryNormalizeScrollbackLimit(string? rawValue, out int scrollbackLimit)
+    {
+        if (!int.TryParse(rawValue?.Trim(), out int parsedValue))
+        {
+            scrollbackLimit = 0;
+            return false;
+        }
+
+        scrollbackLimit = TerminalAppSettings.ClampScrollbackLimit(parsedValue);
+        return true;
+    }
+
     private static TerminalAppSettings CloneSettings(TerminalAppSettings settings)
     {
         return new TerminalAppSettings
@@ -414,7 +472,8 @@ public partial class SettingsWindow : Window
             SessionLogDirectory = settings.SessionLogDirectory,
             CjkAmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide,
             BackdropType = settings.BackdropType,
-            EnableFontLigatures = settings.EnableFontLigatures
+            EnableFontLigatures = settings.EnableFontLigatures,
+            ScrollbackLimit = settings.ScrollbackLimit
         };
     }
 

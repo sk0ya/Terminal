@@ -912,7 +912,7 @@ public partial class TerminalTabView : UserControl
             ReleaseTerminalMouseCapture(force: true);
             ResetInputProxyText();
             (_currentColumns, _currentRows) = CalculateTerminalSize();
-            ReplaceTerminalBuffer(new AnsiTerminalBuffer(_currentColumns, _currentRows));
+            ReplaceTerminalBuffer(new AnsiTerminalBuffer(_currentColumns, _currentRows, _scrollbackLimit));
             _cursorBlinkVisible = true;
             _prioritizeInitialOutputRender = true;
             UpdateOverlayState();

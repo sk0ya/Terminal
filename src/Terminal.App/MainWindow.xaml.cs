@@ -760,7 +760,8 @@ public partial class MainWindow : Window
             ShowStatusBar = _settings.ShowStatusBar,
             SessionLogDirectory = _settings.SessionLogDirectory,
             CjkAmbiguousWidthIsWide = tabSettings.CjkAmbiguousWidthIsWide,
-            BackdropType = _settings.BackdropType
+            BackdropType = _settings.BackdropType,
+            ScrollbackLimit = tabSettings.ScrollbackLimit
         };
     }
 
