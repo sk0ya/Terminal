@@ -29,6 +29,7 @@
 - ~~**OSC 4** — カラーパレット（16 色）の上書きとクエリ。テーマ変更やコントラスト調整に必要~~ **実装済み（`rgb:rr/gg/bb` / `#rrggbb` 形式、クエリ応答、ハードリセット時に初期化）**
 - ~~**OSC 7** — カレントディレクトリ通知。シェルが設定し、ターミナルが「同じ場所で新規タブ」に利用する標準プロトコル~~ **実装済み（Working Directory UI と連動）**
 - ~~**OSC 9** — デスクトップ通知（Windows Toast）。長時間コマンドの完了通知に活用~~ **実装済み（WPF ポップアップバナー）**
+- ~~**OSC 9;4 タスクバー進捗** — ConEmu 由来 / Windows Terminal 互換の `ESC ] 9 ; 4 ; <state> ; <progress>` によるタスクバー進捗表示~~ **実装済み（`9;4;` プレフィックスのみ進捗として分岐しデスクトップ通知と非干渉、state 0=解除/1=通常/2=エラー/3=不確定/4=一時停止(警告)、progress は 0–100 クランプ・省略/不正は 0、不正 state は無視。`AnsiTerminalBuffer.TaskbarProgressChanged` → `TerminalTabView.TaskbarProgressChanged` で中継し `MainWindow` がアクティブタブの状態を `TaskbarItemInfo`（Normal/Error/Paused/Indeterminate/None）へ反映、タブ切替時は新アクティブタブの保持状態を反映）**
 - ~~**OSC 133 / 633** — シェル統合プロトコル（プロンプト・コマンド・出力のゾーンマーキング）。コマンドナビゲーション・意味的選択の前提~~ **実装済み（A/B/C/D マーカーを ShellCommandZoneReceived イベントで通知、Ctrl+Shift+↑/↓ でコマンドナビゲーション）**
 - ~~**DCS パーサ** — `ESC P...ST` の状態機械が未実装。Sixel / DECRQSS / DECUDK などが通らない~~ **実装済み（DECRQSS 応答、不明 DCS 無視、C1 ST 対応）**
 - ~~**Sixel グラフィクス** — `DCS ...q` による画素画像インライン表示。Yazi や gnuplot などが使用~~ **実装済み（純粋な `SixelDecoder`：ラスタ属性・RGB/HLS カラー定義・ランレングス・グラフィクス CR/LF・6 画素データをデコード。画像はセル単位のフットプリントでアンカー行に配置し、スクロールバックへ追従、`TerminalSurfaceControl` がグリッド整列で描画。インライン画像基盤は iTerm 1337 と共用）**

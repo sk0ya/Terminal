@@ -160,6 +160,19 @@ public partial class TerminalTabView : UserControl
 
     public string HeaderTitle { get; private set; } = "Terminal";
 
+    /// <summary>
+    /// アプリケーションが ConEmu OSC 9;4 で報告したタスクバー進捗が変化したときに発火する
+    /// （ディスパッチャスレッド）。ホストはウィンドウの <see cref="System.Windows.Shell.TaskbarItemInfo"/>
+    /// にこの進捗を反映できる。
+    /// </summary>
+    public event EventHandler<TaskbarProgressChangedEventArgs>? TaskbarProgressChanged;
+
+    /// <summary>直近に受信したタスクバー進捗の状態。タブ切替時にホストが読み出せる。</summary>
+    public TaskbarProgressState CurrentTaskbarProgressState { get; private set; } = TaskbarProgressState.None;
+
+    /// <summary>直近に受信したタスクバー進捗率（0–100）。</summary>
+    public int CurrentTaskbarProgress { get; private set; }
+
     public TerminalTabView(string? commandLine = null, string? workingDirectory = null)
     {
         _initialCommandLine = string.IsNullOrWhiteSpace(commandLine)
@@ -201,6 +214,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ClipboardQueryRequested += TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.NotificationRequested += TerminalBuffer_NotificationRequested;
+        _terminalBuffer.TaskbarProgressChanged += TerminalBuffer_TaskbarProgressChanged;
         _terminalBuffer.ShellCommandZoneReceived += TerminalBuffer_ShellCommandZoneReceived;
         _terminalBuffer.ShellCommandLineReceived += TerminalBuffer_ShellCommandLineReceived;
         _terminalBuffer.ShellHistoryPathReceived += TerminalBuffer_ShellHistoryPathReceived;
@@ -2126,6 +2140,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ClipboardQueryRequested -= TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer.CurrentDirectoryChanged -= TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.NotificationRequested -= TerminalBuffer_NotificationRequested;
+        _terminalBuffer.TaskbarProgressChanged -= TerminalBuffer_TaskbarProgressChanged;
         _terminalBuffer.ShellCommandZoneReceived -= TerminalBuffer_ShellCommandZoneReceived;
         _terminalBuffer.ShellCommandLineReceived -= TerminalBuffer_ShellCommandLineReceived;
         _terminalBuffer.ShellHistoryPathReceived -= TerminalBuffer_ShellHistoryPathReceived;
@@ -2138,9 +2153,13 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ClipboardQueryRequested += TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.NotificationRequested += TerminalBuffer_NotificationRequested;
+        _terminalBuffer.TaskbarProgressChanged += TerminalBuffer_TaskbarProgressChanged;
         _terminalBuffer.ShellCommandZoneReceived += TerminalBuffer_ShellCommandZoneReceived;
         _terminalBuffer.ShellCommandLineReceived += TerminalBuffer_ShellCommandLineReceived;
         _terminalBuffer.ShellHistoryPathReceived += TerminalBuffer_ShellHistoryPathReceived;
+
+        // 新しいセッションはタスクバー進捗をクリアした状態から始める。
+        SetTaskbarProgress(TaskbarProgressState.None, 0);
     }
 
     private void TerminalBuffer_ShellHistoryPathReceived(object? sender, string path)
@@ -2213,6 +2232,29 @@ public partial class TerminalTabView : UserControl
         }
 
         ShowToastNotification(message);
+    }
+
+    private void TerminalBuffer_TaskbarProgressChanged(object? sender, Terminal.Buffer.TaskbarProgressEventArgs e)
+    {
+        TaskbarProgressState state = e.State switch
+        {
+            1 => TaskbarProgressState.Normal,
+            2 => TaskbarProgressState.Error,
+            3 => TaskbarProgressState.Indeterminate,
+            4 => TaskbarProgressState.Warning,
+            _ => TaskbarProgressState.None
+        };
+
+        // 不確定・解除は進捗値を持たない。
+        int progress = state is TaskbarProgressState.Indeterminate or TaskbarProgressState.None ? 0 : e.Progress;
+        SetTaskbarProgress(state, progress);
+    }
+
+    private void SetTaskbarProgress(TaskbarProgressState state, int progress)
+    {
+        CurrentTaskbarProgressState = state;
+        CurrentTaskbarProgress = progress;
+        TaskbarProgressChanged?.Invoke(this, new TaskbarProgressChangedEventArgs(state, progress));
     }
 
     private void TerminalBuffer_ShellCommandZoneReceived(object? sender, ShellCommandZoneEventArgs e)

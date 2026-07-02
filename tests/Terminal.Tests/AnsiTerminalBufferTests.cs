@@ -596,6 +596,113 @@ public sealed class AnsiTerminalBufferTests
         Assert.Equal("PS C:\\Projects\\Terminal>", buffer.GetScreenLineText(1).TrimEnd());
     }
 
+    [Theory]
+    [InlineData("4;1;50", 1, 50)]
+    [InlineData("4;2;75", 2, 75)]
+    [InlineData("4;4;10", 4, 10)]
+    [InlineData("4;0;", 0, 0)]
+    public void Osc9Point4EmitsTaskbarProgressStateAndValue(string payload, int expectedState, int expectedProgress)
+    {
+        var buffer = new AnsiTerminalBuffer(80, 10);
+        TaskbarProgressEventArgs? received = null;
+        buffer.TaskbarProgressChanged += (_, e) => received = e;
+
+        buffer.Process("]9;" + payload + "");
+
+        Assert.NotNull(received);
+        Assert.Equal(expectedState, received!.State);
+        Assert.Equal(expectedProgress, received.Progress);
+    }
+
+    [Fact]
+    public void Osc9Point4IndeterminateReportsStateThree()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 10);
+        TaskbarProgressEventArgs? received = null;
+        buffer.TaskbarProgressChanged += (_, e) => received = e;
+
+        buffer.Process("]9;4;3;");
+
+        Assert.NotNull(received);
+        Assert.Equal(3, received!.State);
+    }
+
+    [Fact]
+    public void Osc9Point4ClampsProgressAboveHundred()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 10);
+        TaskbarProgressEventArgs? received = null;
+        buffer.TaskbarProgressChanged += (_, e) => received = e;
+
+        buffer.Process("]9;4;1;250");
+
+        Assert.NotNull(received);
+        Assert.Equal(100, received!.Progress);
+    }
+
+    [Theory]
+    [InlineData("4;1")]
+    [InlineData("4;1;")]
+    [InlineData("4;1;abc")]
+    public void Osc9Point4TreatsMissingOrInvalidProgressAsZero(string payload)
+    {
+        var buffer = new AnsiTerminalBuffer(80, 10);
+        TaskbarProgressEventArgs? received = null;
+        buffer.TaskbarProgressChanged += (_, e) => received = e;
+
+        buffer.Process("]9;" + payload + "");
+
+        Assert.NotNull(received);
+        Assert.Equal(1, received!.State);
+        Assert.Equal(0, received.Progress);
+    }
+
+    [Theory]
+    [InlineData("4;9;50")]
+    [InlineData("4;-1;50")]
+    [InlineData("4;x;50")]
+    [InlineData("4")]
+    public void Osc9Point4IgnoresInvalidState(string payload)
+    {
+        var buffer = new AnsiTerminalBuffer(80, 10);
+        bool raised = false;
+        buffer.TaskbarProgressChanged += (_, _) => raised = true;
+
+        buffer.Process("]9;" + payload + "");
+
+        Assert.False(raised);
+    }
+
+    [Fact]
+    public void Osc9Point4DoesNotRaiseDesktopNotification()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 10);
+        bool notified = false;
+        bool progressed = false;
+        buffer.NotificationRequested += (_, _) => notified = true;
+        buffer.TaskbarProgressChanged += (_, _) => progressed = true;
+
+        buffer.Process("]9;4;1;50");
+
+        Assert.True(progressed);
+        Assert.False(notified);
+    }
+
+    [Fact]
+    public void Osc9NotificationStillRaisedForNonProgressPayload()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 10);
+        string? message = null;
+        bool progressed = false;
+        buffer.NotificationRequested += (_, m) => message = m;
+        buffer.TaskbarProgressChanged += (_, _) => progressed = true;
+
+        buffer.Process("]9;Build finished");
+
+        Assert.Equal("Build finished", message);
+        Assert.False(progressed);
+    }
+
     [Fact]
     public void C1CsiDecPrivate1049RestoresPrimaryScreen()
     {

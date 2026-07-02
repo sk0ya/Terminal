@@ -32,6 +32,17 @@ internal sealed class ShellCommandZoneEventArgs(ShellCommandZoneType zoneType, i
     public int? ExitCode { get; } = exitCode;
 }
 
+/// <summary>
+/// ConEmu 由来の OSC 9;4 タスクバー進捗シーケンスのパース結果。
+/// <see cref="State"/> は 0=解除 / 1=通常 / 2=エラー / 3=不確定 / 4=一時停止(警告)、
+/// <see cref="Progress"/> は 0–100 にクランプ済み。
+/// </summary>
+internal sealed class TaskbarProgressEventArgs(int state, int progress) : EventArgs
+{
+    public int State { get; } = state;
+    public int Progress { get; } = progress;
+}
+
 internal enum TerminalMouseTrackingMode
 {
     Off,
@@ -165,6 +176,12 @@ internal sealed class AnsiTerminalBuffer
     public event EventHandler<string>? ClipboardQueryRequested;
     public event EventHandler<string>? CurrentDirectoryChanged;
     public event EventHandler<string>? NotificationRequested;
+
+    /// <summary>
+    /// ConEmu OSC 9;4（タスクバー進捗）を受信したときに発火する。デスクトップ通知
+    /// （OSC 9;&lt;message&gt;）とは区別され、<c>9;4;</c> プレフィックスのときだけこちらが発火する。
+    /// </summary>
+    public event EventHandler<TaskbarProgressEventArgs>? TaskbarProgressChanged;
     public event EventHandler<ShellCommandZoneEventArgs>? ShellCommandZoneReceived;
 
     /// <summary>
@@ -1281,6 +1298,14 @@ internal sealed class AnsiTerminalBuffer
 
         if (command == "9")
         {
+            // ConEmu OSC 9;4 はタスクバー進捗。それ以外の OSC 9 はデスクトップ通知。
+            // Windows Terminal と同じく "4;" プレフィックスで判別する。
+            if (value == "4" || value.StartsWith("4;", StringComparison.Ordinal))
+            {
+                DispatchOscTaskbarProgress(value);
+                return;
+            }
+
             if (!string.IsNullOrEmpty(value))
             {
                 NotificationRequested?.Invoke(this, value);
@@ -1326,6 +1351,26 @@ internal sealed class AnsiTerminalBuffer
         {
             DispatchOscClipboard(value);
         }
+    }
+
+    private void DispatchOscTaskbarProgress(string value)
+    {
+        // value は "4;<state>;<progress>"（先頭の "4" は呼び出し側で判別済み）。
+        string[] parts = value.Split(';');
+        if (parts.Length < 2 || !int.TryParse(parts[1], out int state) || state is < 0 or > 4)
+        {
+            // 不正な state（未指定含む）は無視。
+            return;
+        }
+
+        int progress = 0;
+        if (parts.Length >= 3 && int.TryParse(parts[2], out int rawProgress))
+        {
+            // 省略・不正値は 0、範囲外は 0–100 にクランプ。
+            progress = Math.Clamp(rawProgress, 0, 100);
+        }
+
+        TaskbarProgressChanged?.Invoke(this, new TaskbarProgressEventArgs(state, progress));
     }
 
     private void DispatchOscPaletteChange(string value)

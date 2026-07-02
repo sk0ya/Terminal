@@ -158,6 +158,14 @@ public partial class MainWindow : Window
         _tabs.Add(tab);
         TabStrip.Items.Add(tab.ListBoxItem);
         view.HeaderTitleChanged += (_, title) => UpdateTabHeader(tab, title);
+        view.TaskbarProgressChanged += (_, e) =>
+        {
+            // 非アクティブタブの進捗はタスクバーに出さない。
+            if (ReferenceEquals(GetActiveTab()?.View, view))
+            {
+                ApplyTaskbarProgress(e.State, e.Progress);
+            }
+        };
         UpdateTabHeader(tab, view.HeaderTitle);
         TabStrip.SelectedItem = tab.ListBoxItem;
     }
@@ -355,6 +363,8 @@ public partial class MainWindow : Window
         ActiveTabHost.Content = tab.View;
         Title = $"{tab.TitleText.Text} - ConPTY Terminal";
         UpdateTabVisuals();
+        // 新しいアクティブタブが保持する進捗をタスクバーへ反映する。
+        ApplyTaskbarProgress(tab.View.CurrentTaskbarProgressState, tab.View.CurrentTaskbarProgress);
         _ = Dispatcher.BeginInvoke(tab.View.FocusTerminal, DispatcherPriority.Input);
     }
 
@@ -650,6 +660,33 @@ public partial class MainWindow : Window
     private TerminalTabItem? GetActiveTab()
     {
         return _tabs.FirstOrDefault(tab => ReferenceEquals(tab.ListBoxItem, TabStrip.SelectedItem));
+    }
+
+    // アクティブタブの OSC 9;4 進捗をウィンドウのタスクバーへ反映する。
+    private void ApplyTaskbarProgress(TaskbarProgressState state, int progress)
+    {
+        TaskbarItemInfo ??= new TaskbarItemInfo();
+        switch (state)
+        {
+            case TaskbarProgressState.Normal:
+                TaskbarItemInfo.ProgressState = TaskbarItemProgressState.Normal;
+                TaskbarItemInfo.ProgressValue = progress / 100.0;
+                break;
+            case TaskbarProgressState.Error:
+                TaskbarItemInfo.ProgressState = TaskbarItemProgressState.Error;
+                TaskbarItemInfo.ProgressValue = progress / 100.0;
+                break;
+            case TaskbarProgressState.Warning:
+                TaskbarItemInfo.ProgressState = TaskbarItemProgressState.Paused;
+                TaskbarItemInfo.ProgressValue = progress / 100.0;
+                break;
+            case TaskbarProgressState.Indeterminate:
+                TaskbarItemInfo.ProgressState = TaskbarItemProgressState.Indeterminate;
+                break;
+            default:
+                TaskbarItemInfo.ProgressState = TaskbarItemProgressState.None;
+                break;
+        }
     }
 
     private void UpdateTabHeader(TerminalTabItem tab, string title)
