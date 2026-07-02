@@ -1484,7 +1484,20 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        Clipboard.SetText(text);
+        // 画面選択のコピーは色付き（HTML/RTF）とプレーンテキストを併載する。選択セルの解決済み
+        // 前景/背景・装飾から CF_HTML と RTF を生成し、プレーンテキストと合わせて DataObject に
+        // 載せる。貼り付け先が色付き形式に対応していなければ従来どおりプレーンテキストが使われる。
+        var data = new DataObject();
+        data.SetData(DataFormats.UnicodeText, text);
+
+        StyledSelection? styled = TerminalOutput.GetStyledSelection();
+        if (styled is not null)
+        {
+            data.SetData(DataFormats.Html, ColoredClipboardWriter.BuildHtml(styled));
+            data.SetData(DataFormats.Rtf, ColoredClipboardWriter.BuildRtf(styled));
+        }
+
+        Clipboard.SetDataObject(data, copy: true);
         SetStatus("Copied selection.");
     }
 

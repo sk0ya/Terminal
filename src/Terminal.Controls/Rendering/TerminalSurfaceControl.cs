@@ -16,9 +16,11 @@ namespace Terminal.Rendering;
 
 public sealed class TerminalSurfaceControl : Control, IScrollInfo
 {
+    private static readonly Color DefaultBackgroundColor = Color.FromRgb(0x0E, 0x0C, 0x0A);
+    private static readonly Color DefaultForegroundColor = Color.FromRgb(0xE8, 0xE0, 0xD2);
     private static readonly Brush DefaultSelectionBrush = CreateFrozenBrush(Color.FromArgb(0x66, 0xE1, 0x9A, 0x4A));
-    private static readonly Brush DefaultBackgroundBrush = CreateFrozenBrush(Color.FromRgb(0x0E, 0x0C, 0x0A));
-    private static readonly Brush DefaultForegroundBrush = CreateFrozenBrush(Color.FromRgb(0xE8, 0xE0, 0xD2));
+    private static readonly Brush DefaultBackgroundBrush = CreateFrozenBrush(DefaultBackgroundColor);
+    private static readonly Brush DefaultForegroundBrush = CreateFrozenBrush(DefaultForegroundColor);
 
     private readonly Dictionary<Color, SolidColorBrush> _brushCache = [];
     // Virtualized line layouts: heavy LineLayout objects (grapheme maps, segment arrays) are built
@@ -354,6 +356,88 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         }
 
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// 現在の選択範囲を「行ごとの装飾付きラン列」（各セルの表示文字＋解決済み前景/背景 RGB＋
+    /// bold/italic/underline）として取り出す。色付きコピー（HTML/RTF）用の中間表現で、通常選択・
+    /// 矩形選択の双方に対応する。選択が無ければ <c>null</c> を返す。
+    /// </summary>
+    internal StyledSelection? GetStyledSelection()
+    {
+        TerminalTextRange? selection = NormalizeSelection(_selection);
+        if (!selection.HasValue)
+        {
+            return null;
+        }
+
+        TerminalTextRange range = selection.Value;
+        (int Left, int Right) blockColumns = _blockSelectionMode ? GetBlockColumnRange() : default;
+
+        var lines = new List<IReadOnlyList<StyledRun>>();
+        for (int lineIndex = range.Start.LineIndex; lineIndex <= range.End.LineIndex; lineIndex++)
+        {
+            LineLayout line = _lines[lineIndex];
+            int start;
+            int end;
+            if (_blockSelectionMode)
+            {
+                start = GetTextIndexForColumnHit(line, blockColumns.Left);
+                end = GetTextIndexForColumnHit(line, blockColumns.Right);
+            }
+            else
+            {
+                start = lineIndex == range.Start.LineIndex ? range.Start.TextIndex : 0;
+                end = lineIndex == range.End.LineIndex ? range.End.TextIndex : line.Text.Length;
+            }
+
+            start = Math.Clamp(start, 0, line.Text.Length);
+            end = Math.Clamp(end, start, line.Text.Length);
+            lines.Add(BuildStyledRuns(line, start, end));
+        }
+
+        Color background = (Background as SolidColorBrush)?.Color ?? DefaultBackgroundColor;
+        Color foreground = (Foreground as SolidColorBrush)?.Color ?? DefaultForegroundColor;
+        return new StyledSelection(lines, foreground, background);
+    }
+
+    // 1 行の [startTextIndex, endTextIndex) をセグメント境界で切り出し、各セグメントの解決済み
+    // スタイルを持つ装飾付きランへ変換する。line.Text は各セグメント Text の連結なので、文字
+    // オフセットを累積してテキストインデックス範囲と交差させる。
+    private static List<StyledRun> BuildStyledRuns(LineLayout line, int startTextIndex, int endTextIndex)
+    {
+        var runs = new List<StyledRun>();
+        if (endTextIndex <= startTextIndex)
+        {
+            return runs;
+        }
+
+        int charOffset = 0;
+        foreach (SegmentLayout segment in line.Segments)
+        {
+            AnsiTerminalBuffer.TerminalRenderSegmentSnapshot snapshot = segment.Snapshot;
+            int segStart = charOffset;
+            int segEnd = charOffset + snapshot.Text.Length;
+            charOffset = segEnd;
+
+            int overlapStart = Math.Max(startTextIndex, segStart);
+            int overlapEnd = Math.Min(endTextIndex, segEnd);
+            if (overlapEnd <= overlapStart)
+            {
+                continue;
+            }
+
+            string text = line.Text.Substring(overlapStart, overlapEnd - overlapStart);
+            runs.Add(new StyledRun(
+                text,
+                snapshot.Foreground,
+                snapshot.Background,
+                snapshot.Bold,
+                snapshot.Italic,
+                snapshot.UnderlineStyle != UnderlineStyle.None));
+        }
+
+        return runs;
     }
 
     public int CountMatches(string query, StringComparison comparison)
