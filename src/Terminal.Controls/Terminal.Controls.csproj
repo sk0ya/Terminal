@@ -7,7 +7,7 @@
     <UseWPF>true</UseWPF>
     <IsPackable>true</IsPackable>
     <PackageId>sk0ya.Terminal.Controls</PackageId>
-    <Version>1.0.24</Version>
+    <Version>1.0.25</Version>
     <!-- Terminal.Core is bundled into this package (see ProjectReference below),
          so its build output is folded into lib/ rather than emitted as a dependency. -->
     <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludeReferencedProjectsInPackage</TargetsForTfmSpecificBuildOutput>
