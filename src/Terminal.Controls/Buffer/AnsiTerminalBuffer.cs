@@ -139,8 +139,11 @@ internal sealed class AnsiTerminalBuffer
     private bool _synchronizedUpdateActive;
     private bool _synchronizedUpdateEndedDuringProcess;
     private bool _syntheticAlternateScreenActive;
-    private bool _useG1CharacterSet;
-    private bool _savedUseG1CharacterSet;
+    private int _glLevel; // GL invocation: 0=G0, 1=G1, 2=G2, 3=G3 (SI / SO / LS2 / LS3)
+    private int _savedGlLevel;
+    private int _singleShift = -1; // -1 = none, 2 = SS2 (G2), 3 = SS3 (G3); applies to next graphic char only
+    private bool _lineFeedNewlineMode; // LNM (ANSI mode 20): LF / VT / FF also perform a carriage return
+    private string _answerbackString = string.Empty; // Reply to ENQ (0x05); empty by default
     private bool _savedInsertMode;
     private bool _savedOriginMode;
     private bool _savedAutoWrapEnabled = true;
@@ -155,6 +158,10 @@ internal sealed class AnsiTerminalBuffer
     private TerminalCharacterSet _g1CharacterSet = TerminalCharacterSet.Ascii;
     private TerminalCharacterSet _savedG0CharacterSet = TerminalCharacterSet.Ascii;
     private TerminalCharacterSet _savedG1CharacterSet = TerminalCharacterSet.Ascii;
+    private TerminalCharacterSet _g2CharacterSet = TerminalCharacterSet.Ascii;
+    private TerminalCharacterSet _g3CharacterSet = TerminalCharacterSet.Ascii;
+    private TerminalCharacterSet _savedG2CharacterSet = TerminalCharacterSet.Ascii;
+    private TerminalCharacterSet _savedG3CharacterSet = TerminalCharacterSet.Ascii;
     private string? _currentHyperlink;
     private string? _savedHyperlink;
     private string _windowTitle = string.Empty;
@@ -617,6 +624,7 @@ internal sealed class AnsiTerminalBuffer
     private bool CanUseAsciiFastPath()
     {
         return !AsciiFastPathDisabled &&
+            _singleShift < 0 &&
             GetActiveCharacterSet() == TerminalCharacterSet.Ascii &&
             _pendingClusterText.Length == 0 &&
             !EndsWithZeroWidthJoiner(_lastPrintedClusterText);
@@ -972,8 +980,10 @@ internal sealed class AnsiTerminalBuffer
         _bracketedPasteEnabled = false;
         _focusReportingEnabled = false;
         _modifyOtherKeys = 0;
-        _useG1CharacterSet = false;
-        _savedUseG1CharacterSet = false;
+        _glLevel = 0;
+        _savedGlLevel = 0;
+        _singleShift = -1;
+        _lineFeedNewlineMode = false;
         _savedInsertMode = false;
         _savedOriginMode = false;
         _savedAutoWrapEnabled = true;
@@ -989,8 +999,12 @@ internal sealed class AnsiTerminalBuffer
         _savedPrivateModes.Clear();
         _g0CharacterSet = TerminalCharacterSet.Ascii;
         _g1CharacterSet = TerminalCharacterSet.Ascii;
+        _g2CharacterSet = TerminalCharacterSet.Ascii;
+        _g3CharacterSet = TerminalCharacterSet.Ascii;
         _savedG0CharacterSet = TerminalCharacterSet.Ascii;
         _savedG1CharacterSet = TerminalCharacterSet.Ascii;
+        _savedG2CharacterSet = TerminalCharacterSet.Ascii;
+        _savedG3CharacterSet = TerminalCharacterSet.Ascii;
         _currentHyperlink = null;
         _savedHyperlink = null;
         _pendingSyntheticAlternateScreenBackup = null;
@@ -1032,6 +1046,9 @@ internal sealed class AnsiTerminalBuffer
             case ParserState.Charset:
                 ProcessCharsetDesignation(ch);
                 break;
+            case ParserState.DecLineSize:
+                ProcessDecLineSize(ch);
+                break;
             case ParserState.DcsEntry:
                 ProcessDcsEntry(ch);
                 break;
@@ -1054,14 +1071,23 @@ internal sealed class AnsiTerminalBuffer
     {
         switch (ch)
         {
+            case '\u0005':
+                EmitInputSequence(_answerbackString);
+                return;
             case '\u0007':
                 BellReceived?.Invoke(this, EventArgs.Empty);
                 return;
             case '\u000E':
-                _useG1CharacterSet = true;
+                _glLevel = 1;
                 return;
             case '\u000F':
-                _useG1CharacterSet = false;
+                _glLevel = 0;
+                return;
+            case '\u008E':
+                _singleShift = 2;
+                return;
+            case '\u008F':
+                _singleShift = 3;
                 return;
             case '\u001b':
                 _state = ParserState.Escape;
@@ -1084,7 +1110,9 @@ internal sealed class AnsiTerminalBuffer
                 _cursorColumn = 0;
                 return;
             case '\n':
-                MoveDownAndScrollIfNeeded();
+            case '\u000b':
+            case '\u000c':
+                LineFeed();
                 return;
             case '\b':
                 _cursorColumn = Math.Max(0, _cursorColumn - 1);
@@ -1101,6 +1129,11 @@ internal sealed class AnsiTerminalBuffer
     private void ProcessRune(Rune rune)
     {
         Rune mappedRune = MapActiveRune(rune);
+        if (_singleShift >= 0)
+        {
+            _singleShift = -1;
+        }
+
         int width = GetDisplayWidth(mappedRune);
         if (width <= 0)
         {
@@ -1157,6 +1190,33 @@ internal sealed class AnsiTerminalBuffer
             case ')':
                 _charsetDesignationTarget = 1;
                 _state = ParserState.Charset;
+                return;
+            case '*':
+                _charsetDesignationTarget = 2;
+                _state = ParserState.Charset;
+                return;
+            case '+':
+                _charsetDesignationTarget = 3;
+                _state = ParserState.Charset;
+                return;
+            case '#':
+                _state = ParserState.DecLineSize;
+                return;
+            case 'n':
+                _glLevel = 2;
+                _state = ParserState.Normal;
+                return;
+            case 'o':
+                _glLevel = 3;
+                _state = ParserState.Normal;
+                return;
+            case 'N':
+                _singleShift = 2;
+                _state = ParserState.Normal;
+                return;
+            case 'O':
+                _singleShift = 3;
+                _state = ParserState.Normal;
                 return;
             case '7':
                 SaveCursorState();
@@ -1259,16 +1319,55 @@ internal sealed class AnsiTerminalBuffer
             _ => TerminalCharacterSet.Ascii
         };
 
-        if (_charsetDesignationTarget == 0)
+        switch (_charsetDesignationTarget)
         {
-            _g0CharacterSet = characterSet;
-        }
-        else
-        {
-            _g1CharacterSet = characterSet;
+            case 0:
+                _g0CharacterSet = characterSet;
+                break;
+            case 1:
+                _g1CharacterSet = characterSet;
+                break;
+            case 2:
+                _g2CharacterSet = characterSet;
+                break;
+            case 3:
+                _g3CharacterSet = characterSet;
+                break;
         }
 
         _state = ParserState.Normal;
+    }
+
+    // ESC # <ch>: DEC line-size / alignment controls.
+    private void ProcessDecLineSize(char ch)
+    {
+        // ESC # 8 = DECALN: fill the entire screen with 'E' in the default rendition and home the cursor.
+        // ESC # 3/4/5/6 = DECDHL/DECDWL/DECSWL double-height/width lines: consumed so the parameter
+        // digit is not printed; per-line size rendering is not yet applied.
+        if (ch == '8')
+        {
+            FillScreenForAlignment();
+        }
+
+        _state = ParserState.Normal;
+    }
+
+    private void FillScreenForAlignment()
+    {
+        for (int row = 0; row < _screen.Count; row++)
+        {
+            TerminalCell[] cells = _screen[row].Cells;
+            for (int column = 0; column < cells.Length; column++)
+            {
+                cells[column] = new TerminalCell("E", TerminalStyle.Default, Hyperlink: null, IsContinuation: false, Width: 1);
+            }
+
+            _screen[row].IsWrapped = false;
+        }
+
+        _cursorRow = 0;
+        _cursorColumn = 0;
+        InvalidateScreenRenderCache();
     }
 
     private void ProcessDcsEntry(char ch)
@@ -1984,9 +2083,11 @@ internal sealed class AnsiTerminalBuffer
         _savedCursorRow = _cursorRow;
         _savedCursorColumn = _cursorColumn;
         _savedStyle = _currentStyle;
-        _savedUseG1CharacterSet = _useG1CharacterSet;
+        _savedGlLevel = _glLevel;
         _savedG0CharacterSet = _g0CharacterSet;
         _savedG1CharacterSet = _g1CharacterSet;
+        _savedG2CharacterSet = _g2CharacterSet;
+        _savedG3CharacterSet = _g3CharacterSet;
         _savedInsertMode = _insertMode;
         _savedOriginMode = _originMode;
         _savedAutoWrapEnabled = _autoWrapEnabled;
@@ -1998,9 +2099,11 @@ internal sealed class AnsiTerminalBuffer
         _cursorRow = Math.Clamp(_savedCursorRow, 0, _rows - 1);
         _cursorColumn = Math.Clamp(_savedCursorColumn, 0, _columns - 1);
         _currentStyle = _savedStyle;
-        _useG1CharacterSet = _savedUseG1CharacterSet;
+        _glLevel = _savedGlLevel;
         _g0CharacterSet = _savedG0CharacterSet;
         _g1CharacterSet = _savedG1CharacterSet;
+        _g2CharacterSet = _savedG2CharacterSet;
+        _g3CharacterSet = _savedG3CharacterSet;
         _insertMode = _savedInsertMode;
         _originMode = _savedOriginMode;
         _autoWrapEnabled = _savedAutoWrapEnabled;
@@ -2028,11 +2131,11 @@ internal sealed class AnsiTerminalBuffer
 
         if (isPrivate)
         {
-            EmitInputSequence("\u001b[?1;2c");
+            EmitInputSequence("\u001b[?62;1;4;22c");
             return;
         }
 
-        EmitInputSequence("\u001b[?1;2c");
+        EmitInputSequence("\u001b[?62;1;4;22c");
     }
 
     private void DispatchDeviceStatusReport(int?[] parameters, bool isPrivate)
@@ -2229,6 +2332,9 @@ internal sealed class AnsiTerminalBuffer
                 case 4:
                     _insertMode = enabled;
                     break;
+                case 20:
+                    _lineFeedNewlineMode = enabled;
+                    break;
             }
         }
     }
@@ -2327,7 +2433,9 @@ internal sealed class AnsiTerminalBuffer
         _bracketedPasteEnabled = false;
         _focusReportingEnabled = false;
         _modifyOtherKeys = 0;
-        _useG1CharacterSet = false;
+        _glLevel = 0;
+        _singleShift = -1;
+        _lineFeedNewlineMode = false;
         _useUtf8MouseEncoding = false;
         _useSgrMouseEncoding = false;
         _useUrxvtMouseEncoding = false;
@@ -2339,6 +2447,8 @@ internal sealed class AnsiTerminalBuffer
         _pendingSyntheticAlternateScreenBackup = null;
         _g0CharacterSet = TerminalCharacterSet.Ascii;
         _g1CharacterSet = TerminalCharacterSet.Ascii;
+        _g2CharacterSet = TerminalCharacterSet.Ascii;
+        _g3CharacterSet = TerminalCharacterSet.Ascii;
         _currentHyperlink = null;
         _kittyKeyboardFlags = 0;
         _kittyKeyboardStack.Clear();
@@ -3403,6 +3513,16 @@ internal sealed class AnsiTerminalBuffer
         _cursorRow = Math.Min(_rows - 1, _cursorRow + 1);
     }
 
+    // C0 line feeds (LF / VT / FF). When LNM (mode 20) is set they also carry the cursor to column 0.
+    private void LineFeed()
+    {
+        MoveDownAndScrollIfNeeded();
+        if (_lineFeedNewlineMode)
+        {
+            _cursorColumn = 0;
+        }
+    }
+
     private int GetTopRowLimit()
     {
         return _originMode ? _scrollTop : 0;
@@ -3980,7 +4100,16 @@ internal sealed class AnsiTerminalBuffer
 
     private TerminalCharacterSet GetActiveCharacterSet()
     {
-        return _useG1CharacterSet ? _g1CharacterSet : _g0CharacterSet;
+        // A pending single shift (SS2/SS3) overrides the locking-shift level for one graphic character;
+        // it is consumed in ProcessRune after the character is mapped.
+        int level = _singleShift >= 0 ? _singleShift : _glLevel;
+        return level switch
+        {
+            1 => _g1CharacterSet,
+            2 => _g2CharacterSet,
+            3 => _g3CharacterSet,
+            _ => _g0CharacterSet
+        };
     }
 
     private static bool IsControlRune(Rune rune)
@@ -4083,6 +4212,7 @@ internal sealed class AnsiTerminalBuffer
         Osc,
         OscEscape,
         Charset,
+        DecLineSize,
         DcsEntry,
         DcsParam,
         DcsIntermediate,

@@ -242,7 +242,7 @@ public sealed class AnsiTerminalBufferTests
         buffer.Process("\u001b[c");
         buffer.Process("\u001b[>c");
 
-        Assert.Equal(new[] { "\u001b[?1;2c", "\u001b[>0;10;1c" }, emitted);
+        Assert.Equal(new[] { "\u001b[?62;1;4;22c", "\u001b[>0;10;1c" }, emitted);
     }
 
     [Fact]
@@ -2384,4 +2384,102 @@ public sealed class AnsiTerminalBufferTests
         Assert.Equal(2, buffer.VisibleLineCount);
     }
 
+    [Fact]
+    public void DecalnFillsScreenWithEAndHomesCursor()
+    {
+        var buffer = new AnsiTerminalBuffer(6, 3);
+
+        buffer.Process("\u001b[2;3H");
+        buffer.Process("\u001b#8");
+
+        string firstRow = buffer.GetScreenLineText(0);
+        Assert.NotEqual(0, firstRow.Length);
+        Assert.Equal(new string('E', firstRow.Length), firstRow);
+        Assert.Equal(new string('E', firstRow.Length), buffer.GetScreenLineText(2));
+        Assert.Equal(0, buffer.CursorRow);
+        Assert.Equal(0, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void DecDoubleWidthLineSequenceIsConsumedWithoutPrintingParameter()
+    {
+        var buffer = new AnsiTerminalBuffer(10, 3);
+
+        // ESC # 4 (DECDHL bottom half) is consumed; the parameter digit must not be printed.
+        buffer.Process("\u001b#4X");
+
+        Assert.Equal("X", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void LockingShiftTwoInvokesDesignatedG2Charset()
+    {
+        var buffer = new AnsiTerminalBuffer(10, 3);
+        string expected = new string((char)0x2500, 3); // DEC Special Graphics maps 'q' to horizontal line.
+
+        // Designate DEC Special Graphics into G2, then invoke G2 into GL with LS2 (ESC n).
+        buffer.Process("\u001b*0\u001bnqqq");
+
+        Assert.Equal(expected, buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void SingleShiftThreeAffectsOnlyTheNextCharacter()
+    {
+        var buffer = new AnsiTerminalBuffer(10, 3);
+        string expected = ((char)0x2500).ToString() + "q";
+
+        // Designate DEC Special Graphics into G3, then SS3 (ESC O) shifts only the next 'q'.
+        buffer.Process("\u001b+0\u001bOqq");
+
+        Assert.Equal(expected, buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void LineFeedNewlineModeCarriesCursorToColumnZero()
+    {
+        var withMode = new AnsiTerminalBuffer(10, 3);
+        withMode.Process("\u001b[20hA\nB");
+        Assert.Equal("B", withMode.GetScreenLineText(1).TrimEnd());
+
+        var withoutMode = new AnsiTerminalBuffer(10, 3);
+        withoutMode.Process("A\nB");
+        Assert.StartsWith(" B", withoutMode.GetScreenLineText(1));
+    }
+
+    [Fact]
+    public void VerticalTabAndFormFeedActAsLineFeed()
+    {
+        var buffer = new AnsiTerminalBuffer(10, 5);
+
+        buffer.Process("A\u000bB\u000cC");
+
+        Assert.Equal("A", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal(2, buffer.CursorRow);
+    }
+
+    [Fact]
+    public void EnquiryWithDefaultAnswerbackEmitsNothing()
+    {
+        var buffer = new AnsiTerminalBuffer(10, 3);
+        bool emitted = false;
+        buffer.InputSequenceGenerated += (_, _) => emitted = true;
+
+        buffer.Process("\u0005");
+
+        Assert.False(emitted);
+        Assert.Equal(string.Empty, buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void PrimaryDeviceAttributesAdvertisesSixelSupport()
+    {
+        var buffer = new AnsiTerminalBuffer(10, 3);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("\u001b[c");
+
+        Assert.Equal("\u001b[?62;1;4;22c", emitted);
+    }
 }

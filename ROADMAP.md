@@ -37,6 +37,12 @@
 - ~~**SGR マウスピクセルモード（1016）** — セル単位でなくピクセル座標で報告するマウスモード~~ **実装済み（DECSET 1016、SGR 暗黙有効、DECRQM 応答、ピクセル座標送信）**
 - ~~**BEL（ベル）対応** — `\a`（0x07）ベル。従来は OSC/DCS 終端としてのみ処理し通常状態では無視していた~~ **実装済み（可聴ベル＋非アクティブタブのベルインジケータ。通常状態の 0x07 で `AnsiTerminalBuffer.BellReceived` を発火（OSC/DCS 終端の 0x07 は非対象）→ `TerminalTabView` が `SystemSounds.Beep` を鳴らし `HasPendingBell` を立てて `BellRang` で中継。`MainWindow` は非アクティブタブのヘッダ先頭に「🔔 」を付与し、そのタブがアクティブになったらクリア。可聴ベルは `PlayBell` に集約し将来の設定化に備える）**
 
+- ~~**DECALN / DEC 行サイズ（`ESC #`）** — `ESC # 8`（画面整列テスト）と `ESC # 3/4/5/6`（倍高・倍幅行）~~ **実装済み（`ParserState.DecLineSize` を追加。`ESC # 8` DECALN はアクティブ画面全体を既定レンディションの 'E' で埋めカーソルをホームへ（`FillScreenForAlignment`）。`ESC # 3/4/5/6`（DECDHL/DECDWL/DECSWL）はパラメータ桁が印字されないよう消費（倍角の実描画は今後の課題）。vttest 互換性向上）**
+- ~~**G2/G3 文字セットとシフト** — `ESC * X` / `ESC + X`（G2/G3 指定）、LS2/LS3（`ESC n` / `ESC o`）、SS2/SS3（`ESC N` / `ESC O`・C1 0x8E/0x8F）~~ **実装済み（従来の bool `_useG1CharacterSet` を GL 呼び出しレベル `_glLevel`（0..3）へ一般化。単一シフト `_singleShift` は次の 1 図形文字のみに適用し `ProcessRune` で消費、SIMD ASCII 高速パスは単一シフト保留中は無効化。DECSC/DECRC・RIS・DECSTR で G0〜G3 と GL レベルを保存/復元/リセット）**
+- ~~**LNM（ANSI mode 20）** — 改行モード。設定時に LF/VT/FF が復帰も伴う~~ **実装済み（`ESC[20h/l`。C0 の LF・VT(0x0B)・FF(0x0C) を `LineFeed()` 経由に統一し、従来無視していた VT/FF も改行として扱うよう修正。NEL(`ESC E`)/IND(`ESC D`) は LNM の影響を受けず固定挙動を維持）**
+- ~~**DA での Sixel 広告** — Primary DA 応答が Sixel 対応を示さずアプリが自動検出できなかった~~ **実装済み（DA1 応答を `ESC[?1;2c` から `ESC[?62;1;4;22c` へ変更。62=VT220、1=132 列、4=Sixel、22=ANSI カラーを申告し `img2sixel` 等が Sixel を検出可能に）**
+- ~~**ENQ（0x05）アンサーバック** — 従来は通常状態で無視~~ **実装済み（`_answerbackString`（既定は空）を応答。既定では何も送出しないが仕様準拠で将来設定化可能）**
+
 ### キーボード入力
 
 - ~~**Kitty キーボードプロトコル** — `DECSET 2048` + CSI u ベースの高精度キーエンコード。Neovim 0.10+、Ghostty、WezTerm が標準採用。Shift/Ctrl+Enter 等の区別が可能になる~~ **実装済み（CSI u エンコード、フラグスタック push/pop/set/query、alt-screen 保存復元）**
