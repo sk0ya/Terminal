@@ -1,0 +1,198 @@
+using System.Collections.Generic;
+using System.Windows.Media;
+
+using Terminal.Buffer;
+using Terminal.Settings;
+
+namespace Terminal.Tests;
+
+// Covers VT/ANSI sequences added to close terminal-compatibility gaps:
+// OSC 10/11/12 set + OSC 104/110/111/112 reset, DECRQSS cursor-style query,
+// DEC private modes 8/45/1034/1036/1039, and Media Copy (CSI i).
+public sealed class TerminalVtSequenceGapTests
+{
+    [Fact]
+    public void Osc104ResetsSpecificPaletteEntryToThemeDefault()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+        Color defaultColor1 = TerminalColorTheme.Default.AnsiPalette.ToArray()[1];
+
+        buffer.Process("]4;1;rgb:00/ff/00");
+        buffer.Process("[31mA");
+        buffer.Process("]104;1");
+        buffer.Process("[31mB");
+
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.Equal(Color.FromRgb(0, 0xff, 0), snapshot.Lines[0].Segments[0].Foreground);
+        Assert.Equal(defaultColor1, snapshot.Lines[0].Segments[1].Foreground);
+    }
+
+    [Fact]
+    public void Osc104WithoutParameterResetsEntirePalette()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+        Color defaultColor2 = TerminalColorTheme.Default.AnsiPalette.ToArray()[2];
+
+        buffer.Process("]4;2;rgb:12/34/56");
+        buffer.Process("]104");
+        buffer.Process("[32mA");
+
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.Equal(defaultColor2, snapshot.Lines[0].Segments[0].Foreground);
+    }
+
+    [Fact]
+    public void Osc11SetsBackgroundAndOsc111ResetsIt()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+        buffer.Process("X");
+
+        buffer.Process("]11;rgb:01/02/03");
+        AnsiTerminalBuffer.TerminalRenderSnapshot afterSet = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.Equal(Color.FromRgb(1, 2, 3), afterSet.Lines[0].Segments[0].Background);
+
+        buffer.Process("]111");
+        AnsiTerminalBuffer.TerminalRenderSnapshot afterReset = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.Equal(TerminalColorTheme.Default.Background, afterReset.Lines[0].Segments[0].Background);
+    }
+
+    [Fact]
+    public void Osc10SetsForegroundAndOsc110ResetsIt()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+        buffer.Process("X");
+
+        buffer.Process("]10;rgb:0a/0b/0c");
+        AnsiTerminalBuffer.TerminalRenderSnapshot afterSet = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.Equal(Color.FromRgb(0x0a, 0x0b, 0x0c), afterSet.Lines[0].Segments[0].Foreground);
+
+        buffer.Process("]110");
+        AnsiTerminalBuffer.TerminalRenderSnapshot afterReset = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.Equal(TerminalColorTheme.Default.Foreground, afterReset.Lines[0].Segments[0].Foreground);
+    }
+
+    [Fact]
+    public void Osc12SetCursorColorIsReflectedInQuery()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+        buffer.Process("]12;rgb:0a/0b/0c");
+
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+        buffer.Process("]12;?");
+
+        Assert.NotNull(emitted);
+        Assert.Contains("]12;rgb:0a0a/0b0b/0c0c", emitted);
+    }
+
+    [Fact]
+    public void DecrqssReportsCurrentCursorStyle()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+        buffer.Process("[3 q"); // DECSCUSR: underline, blinking → Ps 3
+
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+        buffer.Process("P$q q\\"); // DECRQSS query of DECSCUSR
+
+        Assert.Equal("P1$r3 q\\", emitted);
+    }
+
+    [Fact]
+    public void ReverseWraparoundBackspaceWrapsToPreviousLine()
+    {
+        var buffer = new AnsiTerminalBuffer(10, 3);
+        buffer.Process("[?45h");
+        buffer.Process("\r\n"); // row 1, column 0
+        buffer.Process("\b");
+
+        Assert.Equal(0, buffer.CursorRow);
+        Assert.Equal(19, buffer.CursorColumn); // MinColumns clamps width to 20 → right edge is column 19
+    }
+
+    [Fact]
+    public void BackspaceAtLeftEdgeStaysWhenReverseWraparoundDisabled()
+    {
+        var buffer = new AnsiTerminalBuffer(10, 3);
+        buffer.Process("\r\n"); // row 1, column 0
+        buffer.Process("\b");
+
+        Assert.Equal(1, buffer.CursorRow);
+        Assert.Equal(0, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void AltSendsEscapeDefaultsOnAndTogglesWithMode1039()
+    {
+        var buffer = new AnsiTerminalBuffer(10, 3);
+        Assert.True(buffer.AltSendsEscape);
+
+        buffer.Process("[?1039l");
+        Assert.False(buffer.AltSendsEscape);
+
+        buffer.Process("[?1039h");
+        Assert.True(buffer.AltSendsEscape);
+    }
+
+    [Fact]
+    public void Mode1036AlsoControlsAltSendsEscape()
+    {
+        var buffer = new AnsiTerminalBuffer(10, 3);
+
+        buffer.Process("[?1036l");
+        Assert.False(buffer.AltSendsEscape);
+
+        buffer.Process("[?1036h");
+        Assert.True(buffer.AltSendsEscape);
+    }
+
+    [Fact]
+    public void Mode1039DecrqmReportsCurrentState()
+    {
+        var buffer = new AnsiTerminalBuffer(10, 3);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => responses.Add(text);
+
+        buffer.Process("[?1039$p");
+        buffer.Process("[?1039l");
+        buffer.Process("[?1039$p");
+
+        Assert.Contains("[?1039;1$y", responses);
+        Assert.Contains("[?1039;2$y", responses);
+    }
+
+    [Fact]
+    public void Mode45DecrqmReportsCurrentState()
+    {
+        var buffer = new AnsiTerminalBuffer(10, 3);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("[?45h");
+        buffer.Process("[?45$p");
+
+        Assert.Equal("[?45;1$y", emitted);
+    }
+
+    [Fact]
+    public void Mode8DecrqmDefaultsEnabled()
+    {
+        var buffer = new AnsiTerminalBuffer(10, 3);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("[?8$p");
+
+        Assert.Equal("[?8;1$y", emitted);
+    }
+
+    [Fact]
+    public void MediaCopyCsiIisConsumedWithoutPrinting()
+    {
+        var buffer = new AnsiTerminalBuffer(10, 3);
+        buffer.Process("[5iX");
+
+        Assert.Equal("X", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal(1, buffer.CursorColumn);
+    }
+}

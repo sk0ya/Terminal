@@ -2011,7 +2011,8 @@ public partial class TerminalTabView : UserControl
         if (prefixAltIfNeeded)
         {
             ModifierKeys modifiers = GetTerminalModifiers();
-            if ((modifiers & ModifierKeys.Alt) != 0 && (modifiers & ModifierKeys.Control) == 0)
+            if ((modifiers & ModifierKeys.Alt) != 0 && (modifiers & ModifierKeys.Control) == 0 &&
+                _terminalBuffer.AltSendsEscape)
             {
                 text = $"\u001b{text}";
             }

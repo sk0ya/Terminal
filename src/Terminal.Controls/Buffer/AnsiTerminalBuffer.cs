@@ -94,6 +94,10 @@ internal sealed class AnsiTerminalBuffer
     private Color _defaultForeground = TerminalColorTheme.Default.Foreground;
     private Color _defaultBackground = TerminalColorTheme.Default.Background;
     private Color _cursorAccent = TerminalColorTheme.Default.Cursor;
+    // Theme-provided reset targets for OSC 110/111/112 (reset dynamic fg/bg/cursor to the configured default).
+    private Color _themeForeground = TerminalColorTheme.Default.Foreground;
+    private Color _themeBackground = TerminalColorTheme.Default.Background;
+    private Color _themeCursor = TerminalColorTheme.Default.Cursor;
     private readonly Color[] _defaultAnsiPalette = TerminalColorTheme.Default.AnsiPalette.ToArray();
     private readonly Color[] _ansiPalette = TerminalColorTheme.Default.AnsiPalette.ToArray();
     private readonly int _scrollbackLimit;
@@ -143,6 +147,10 @@ internal sealed class AnsiTerminalBuffer
     private int _savedGlLevel;
     private int _singleShift = -1; // -1 = none, 2 = SS2 (G2), 3 = SS3 (G3); applies to next graphic char only
     private bool _lineFeedNewlineMode; // LNM (ANSI mode 20): LF / VT / FF also perform a carriage return
+    private bool _altSendsEscape = true; // DEC private modes 1036 / 1039: Meta/Alt prefixes an ESC on key input
+    private bool _eightBitInput; // DEC private mode 1034: interpret Meta (8-bit input). Tracked for DECRQM; no functional change on Windows
+    private bool _autoRepeatKeys = true; // DEC private mode 8 (DECARM): keyboard auto-repeat. Tracked for DECRQM; repeat is OS-driven
+    private bool _reverseWraparound; // DEC private mode 45: backspace past the left margin wraps to the previous line
     private string _answerbackString = string.Empty; // Reply to ENQ (0x05); empty by default
     private bool _savedInsertMode;
     private bool _savedOriginMode;
@@ -224,6 +232,9 @@ internal sealed class AnsiTerminalBuffer
 
     public string WindowTitle => _windowTitle;
     public bool ApplicationCursorKeysEnabled => _applicationCursorKeys;
+
+    // DEC private modes 1036/1039: when disabled, Alt/Meta key input is sent without the ESC prefix.
+    public bool AltSendsEscape => _altSendsEscape;
     public bool ApplicationKeypadEnabled => _applicationKeypad;
     public bool AlternateScrollEnabled => _alternateScrollEnabled;
     public bool BracketedPasteEnabled => _bracketedPasteEnabled;
@@ -263,6 +274,9 @@ internal sealed class AnsiTerminalBuffer
         _defaultForeground = theme.Foreground;
         _defaultBackground = theme.Background;
         _cursorAccent = theme.Cursor;
+        _themeForeground = theme.Foreground;
+        _themeBackground = theme.Background;
+        _themeCursor = theme.Cursor;
         CopyPalette(theme.AnsiPalette, _defaultAnsiPalette);
         CopyPalette(theme.AnsiPalette, _ansiPalette);
         RebuildScrollbackRenderCache();
@@ -984,6 +998,10 @@ internal sealed class AnsiTerminalBuffer
         _savedGlLevel = 0;
         _singleShift = -1;
         _lineFeedNewlineMode = false;
+        _altSendsEscape = true;
+        _eightBitInput = false;
+        _autoRepeatKeys = true;
+        _reverseWraparound = false;
         _savedInsertMode = false;
         _savedOriginMode = false;
         _savedAutoWrapEnabled = true;
@@ -1115,7 +1133,7 @@ internal sealed class AnsiTerminalBuffer
                 LineFeed();
                 return;
             case '\b':
-                _cursorColumn = Math.Max(0, _cursorColumn - 1);
+                Backspace();
                 return;
             case '\t':
                 _cursorColumn = FindNextTabStop(_cursorColumn);
@@ -1124,6 +1142,26 @@ internal sealed class AnsiTerminalBuffer
             default:
                 return;
         }
+    }
+
+    private void Backspace()
+    {
+        int leftBound = _leftRightMarginEnabled ? _leftMargin : 0;
+        if (_cursorColumn > leftBound)
+        {
+            _cursorColumn--;
+            return;
+        }
+
+        // DEC private mode 45: backspacing past the left edge wraps to the end of the previous line.
+        if (_reverseWraparound && _cursorRow > GetTopRowLimit())
+        {
+            _cursorRow--;
+            _cursorColumn = _leftRightMarginEnabled ? _rightMargin : _columns - 1;
+            return;
+        }
+
+        _cursorColumn = leftBound;
     }
 
     private void ProcessRune(Rune rune)
@@ -1512,6 +1550,10 @@ internal sealed class AnsiTerminalBuffer
             string pt = content[2..];
             switch (pt)
             {
+                case " q":
+                    // DECSCUSR (cursor style) — DCS 1 $ r Ps SP q ST
+                    EmitInputSequence($"P1$r{GetCursorStyleParameter()} q\\");
+                    break;
                 case "m":
                     EmitInputSequence("P1$r0m\\");
                     break;
@@ -1557,13 +1599,15 @@ internal sealed class AnsiTerminalBuffer
     private void DispatchOsc(string content)
     {
         int separatorIndex = content.IndexOf(';');
-        if (separatorIndex <= 0)
+        // Reset sequences (OSC 104/110/111/112) are commonly sent without any parameter and thus
+        // carry no ';', so the command may be the entire payload.
+        string command = separatorIndex >= 0 ? content[..separatorIndex] : content;
+        string value = separatorIndex >= 0 ? content[(separatorIndex + 1)..] : string.Empty;
+        if (command.Length == 0)
         {
             return;
         }
 
-        string command = content[..separatorIndex];
-        string value = content[(separatorIndex + 1)..];
         if (command is "0" or "2")
         {
             string previousTitle = _windowTitle;
@@ -1578,15 +1622,15 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
-        if (command is "10" or "11" or "12" && value == "?")
+        if (command is "10" or "11" or "12")
         {
-            Color queryColor = command switch
-            {
-                "10" => _defaultForeground,
-                "11" => _defaultBackground,
-                _ => _cursorAccent
-            };
-            EmitInputSequence($"]{command};{FormatRgbColor(queryColor)}");
+            DispatchOscDynamicColor(command, value);
+            return;
+        }
+
+        if (command is "110" or "111" or "112")
+        {
+            DispatchOscDynamicColorReset(command);
             return;
         }
 
@@ -1632,6 +1676,12 @@ internal sealed class AnsiTerminalBuffer
         if (command == "4")
         {
             DispatchOscPaletteChange(value);
+            return;
+        }
+
+        if (command == "104")
+        {
+            DispatchOscPaletteReset(value);
             return;
         }
 
@@ -1685,6 +1735,84 @@ internal sealed class AnsiTerminalBuffer
             else if (TryParseOscColorSpec(colorSpec, out Color color))
             {
                 _ansiPalette[paletteIndex] = color;
+                InvalidateScreenRenderCache();
+            }
+        }
+    }
+
+    // OSC 10 (foreground) / 11 (background) / 12 (cursor): query with "?" or set from an rgb:/# color spec.
+    private void DispatchOscDynamicColor(string command, string value)
+    {
+        if (value == "?")
+        {
+            Color queryColor = command switch
+            {
+                "10" => _defaultForeground,
+                "11" => _defaultBackground,
+                _ => _cursorAccent
+            };
+            EmitInputSequence($"]{command};{FormatRgbColor(queryColor)}");
+            return;
+        }
+
+        // A set request may carry several ';'-separated specs; only the first applies to this OSC index.
+        int specEnd = value.IndexOf(';');
+        string spec = specEnd >= 0 ? value[..specEnd] : value;
+        if (!TryParseOscColorSpec(spec, out Color parsed))
+        {
+            return;
+        }
+
+        switch (command)
+        {
+            case "10":
+                _defaultForeground = parsed;
+                break;
+            case "11":
+                _defaultBackground = parsed;
+                break;
+            default:
+                _cursorAccent = parsed;
+                break;
+        }
+
+        InvalidateScreenRenderCache();
+    }
+
+    // OSC 110 (foreground) / 111 (background) / 112 (cursor): reset the dynamic color to the theme default.
+    private void DispatchOscDynamicColorReset(string command)
+    {
+        switch (command)
+        {
+            case "110":
+                _defaultForeground = _themeForeground;
+                break;
+            case "111":
+                _defaultBackground = _themeBackground;
+                break;
+            default:
+                _cursorAccent = _themeCursor;
+                break;
+        }
+
+        InvalidateScreenRenderCache();
+    }
+
+    // OSC 104: reset one or more ANSI palette entries to the theme default. With no parameter, resets all.
+    private void DispatchOscPaletteReset(string value)
+    {
+        if (value.Length == 0)
+        {
+            Array.Copy(_defaultAnsiPalette, _ansiPalette, _defaultAnsiPalette.Length);
+            InvalidateScreenRenderCache();
+            return;
+        }
+
+        foreach (string part in value.Split(';'))
+        {
+            if (int.TryParse(part, out int paletteIndex) && paletteIndex >= 0 && paletteIndex < _ansiPalette.Length)
+            {
+                _ansiPalette[paletteIndex] = _defaultAnsiPalette[paletteIndex];
                 InvalidateScreenRenderCache();
             }
         }
@@ -1969,6 +2097,10 @@ internal sealed class AnsiTerminalBuffer
                 break;
             case 'g':
                 ClearTabStops(GetParameter(parameters, 0, 0));
+                break;
+            case 'i':
+                // Media Copy (printing, e.g. CSI 5i / CSI 4i / CSI ?5i). No printer is attached,
+                // so the sequence is explicitly consumed without side effects rather than printed.
                 break;
             case 'h':
             case 'l':
@@ -2319,6 +2451,19 @@ internal sealed class AnsiTerminalBuffer
                     }
 
                     break;
+                case 8:
+                    _autoRepeatKeys = enabled;
+                    break;
+                case 45:
+                    _reverseWraparound = enabled;
+                    break;
+                case 1034:
+                    _eightBitInput = enabled;
+                    break;
+                case 1036:
+                case 1039:
+                    _altSendsEscape = enabled;
+                    break;
             }
         }
     }
@@ -2371,6 +2516,17 @@ internal sealed class AnsiTerminalBuffer
         }
     }
 
+    // Inverse of SetCursorStyle: maps the current shape + blink state back to a DECSCUSR Ps value.
+    private int GetCursorStyleParameter()
+    {
+        return _cursorShape switch
+        {
+            TerminalCursorShape.Underline => _cursorBlinkEnabled ? 3 : 4,
+            TerminalCursorShape.Bar => _cursorBlinkEnabled ? 5 : 6,
+            _ => _cursorBlinkEnabled ? 1 : 2
+        };
+    }
+
     private void ReportPrivateModeState(int mode)
     {
         int state = mode switch
@@ -2397,6 +2553,10 @@ internal sealed class AnsiTerminalBuffer
             2004 => _bracketedPasteEnabled ? 1 : 2,
             2026 => _synchronizedUpdateActive ? 1 : 2,
             69 => _leftRightMarginEnabled ? 1 : 2,
+            8 => _autoRepeatKeys ? 1 : 2,
+            45 => _reverseWraparound ? 1 : 2,
+            1034 => _eightBitInput ? 1 : 2,
+            1036 or 1039 => _altSendsEscape ? 1 : 2,
             _ => 0
         };
         EmitInputSequence($"[?{mode};{state}$y");
@@ -2522,6 +2682,10 @@ internal sealed class AnsiTerminalBuffer
             2004 => _bracketedPasteEnabled,
             2026 => _synchronizedUpdateActive,
             69 => _leftRightMarginEnabled,
+            8 => _autoRepeatKeys,
+            45 => _reverseWraparound,
+            1034 => _eightBitInput,
+            1036 or 1039 => _altSendsEscape,
             _ => false
         };
     }
