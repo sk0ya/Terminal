@@ -1699,7 +1699,7 @@ internal sealed class AnsiTerminalBuffer
                 }
                 else if (!isSecondary)
                 {
-                    ApplySgr(ParseSgrParameters(paramText));
+                    ApplySgr(SgrInterpreter.Parse(paramText));
                 }
 
                 break;
@@ -2504,7 +2504,10 @@ internal sealed class AnsiTerminalBuffer
                     _currentStyle = _currentStyle with { Italic = true };
                     break;
                 case 4:
-                    _currentStyle = _currentStyle with { UnderlineStyle = ResolveUnderlineStyle(tokens[index]) };
+                    _currentStyle = _currentStyle with
+                    {
+                        UnderlineStyle = SgrInterpreter.ResolveUnderlineStyle(tokens[index])
+                    };
                     break;
                 case 5:
                 case 6:
@@ -2570,7 +2573,12 @@ internal sealed class AnsiTerminalBuffer
                 case 38:
                 case 48:
                 case 58:
-                    if (TryReadExtendedColor(tokens, ref index, out Color color))
+                    if (SgrInterpreter.TryReadExtendedColor(
+                            tokens,
+                            ref index,
+                            _ansiPalette,
+                            _defaultForeground,
+                            out Color color))
                     {
                         if (code == 38)
                         {
@@ -2591,113 +2599,6 @@ internal sealed class AnsiTerminalBuffer
         }
     }
 
-    private static UnderlineStyle ResolveUnderlineStyle(SgrParam token)
-    {
-        if (token.Sub is null || token.Sub.Length == 0)
-        {
-            return UnderlineStyle.Single;
-        }
-
-        return token.Sub[0] switch
-        {
-            0 => UnderlineStyle.None,
-            2 => UnderlineStyle.Double,
-            3 => UnderlineStyle.Curly,
-            4 => UnderlineStyle.Dotted,
-            5 => UnderlineStyle.Dashed,
-            _ => UnderlineStyle.Single
-        };
-    }
-
-    private bool TryReadExtendedColor(SgrParam[] tokens, ref int index, out Color color)
-    {
-        color = default;
-        SgrParam current = tokens[index];
-
-        if (current.Sub is { Length: >= 1 })
-        {
-            int mode = current.Sub[0];
-            if (mode == 5 && current.Sub.Length >= 2)
-            {
-                color = ResolveXtermColor(current.Sub[1]);
-                return true;
-            }
-
-            if (mode == 2 && current.Sub.Length >= 4)
-            {
-                color = Color.FromRgb(
-                    (byte)Math.Clamp(current.Sub[1], 0, 255),
-                    (byte)Math.Clamp(current.Sub[2], 0, 255),
-                    (byte)Math.Clamp(current.Sub[3], 0, 255));
-                return true;
-            }
-
-            return false;
-        }
-
-        if (index + 1 >= tokens.Length)
-        {
-            return false;
-        }
-
-        int legacyMode = tokens[index + 1].Code;
-        if (legacyMode == 5 && index + 2 < tokens.Length)
-        {
-            color = ResolveXtermColor(tokens[index + 2].Code);
-            index += 2;
-            return true;
-        }
-
-        if (legacyMode == 2 && index + 4 < tokens.Length)
-        {
-            color = Color.FromRgb(
-                (byte)Math.Clamp(tokens[index + 2].Code, 0, 255),
-                (byte)Math.Clamp(tokens[index + 3].Code, 0, 255),
-                (byte)Math.Clamp(tokens[index + 4].Code, 0, 255));
-            index += 4;
-            return true;
-        }
-
-        return false;
-    }
-
-    private Color ResolveXtermColor(int index)
-    {
-        if (index < 0)
-        {
-            return _defaultForeground;
-        }
-
-        if (index < _ansiPalette.Length)
-        {
-            return _ansiPalette[index];
-        }
-
-        if (index <= 231)
-        {
-            int value = index - 16;
-            int red = value / 36;
-            int green = (value / 6) % 6;
-            int blue = value % 6;
-            return Color.FromRgb(
-                ScaleCubeComponent(red),
-                ScaleCubeComponent(green),
-                ScaleCubeComponent(blue));
-        }
-
-        if (index <= 255)
-        {
-            byte shade = (byte)(8 + ((index - 232) * 10));
-            return Color.FromRgb(shade, shade, shade);
-        }
-
-        return _defaultForeground;
-    }
-
-    private static byte ScaleCubeComponent(int value)
-    {
-        return value == 0 ? (byte)0 : (byte)(55 + (value * 40));
-    }
 
     private static bool[] CreateDefaultTabStops(int columns)
     {
@@ -3937,48 +3838,6 @@ internal sealed class AnsiTerminalBuffer
         return result;
     }
 
-    private static SgrParam[] ParseSgrParameters(string paramText)
-    {
-        if (string.IsNullOrEmpty(paramText))
-        {
-            return [];
-        }
-
-        string[] tokens = paramText.Split(';');
-        var result = new SgrParam[tokens.Length];
-        for (int i = 0; i < tokens.Length; i++)
-        {
-            string token = tokens[i];
-            int colon = token.IndexOf(':');
-            if (colon >= 0)
-            {
-                int code = int.TryParse(token.AsSpan(0, colon), out int c) ? c : 0;
-                string[] subParts = token[(colon + 1)..].Split(':');
-                var nonEmpty = new List<int>(subParts.Length);
-                foreach (string part in subParts)
-                {
-                    if (part.Length > 0)
-                    {
-                        nonEmpty.Add(int.TryParse(part, out int s) ? s : 0);
-                    }
-                }
-
-                result[i] = nonEmpty.Count > 0 ? new SgrParam(code, nonEmpty.ToArray()) : new SgrParam(code);
-            }
-            else
-            {
-                result[i] = new SgrParam(int.TryParse(token, out int code) ? code : 0);
-            }
-        }
-
-        return result;
-    }
-
-    private readonly struct SgrParam(int code, int[]? sub = null)
-    {
-        public readonly int Code = code;
-        public readonly int[]? Sub = sub;
-    }
 
     private static int GetParameter(int?[] parameters, int index, int defaultValue)
     {
