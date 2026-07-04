@@ -40,6 +40,7 @@ public sealed class SessionSmokeTests
 
         await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+        session.Dispose();
     }
 
     [Fact]
@@ -73,9 +74,14 @@ public sealed class SessionSmokeTests
         using ITerminalSession session = sessionFactory();
         var output = new StringBuilder();
         var exitCodeSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        int exitEventCount = 0;
 
         session.OutputReceived += (_, text) => output.Append(text);
-        session.Exited += (_, code) => exitCodeSource.TrySetResult(code);
+        session.Exited += (_, code) =>
+        {
+            Interlocked.Increment(ref exitEventCount);
+            exitCodeSource.TrySetResult(code);
+        };
         session.Start();
 
         session.Write($"echo {expectedOutput}\r\n");
@@ -83,9 +89,11 @@ public sealed class SessionSmokeTests
 
         int exitCode = await exitCodeSource.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await Task.Delay(200);
+        await session.DisposeAsync();
 
         Assert.Equal(0, exitCode);
         Assert.Contains(expectedOutput, output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, Volatile.Read(ref exitEventCount));
     }
 
     private static async Task VerifyOneShotOutputAsync(Func<ITerminalSession> sessionFactory, string expectedOutput)
@@ -93,16 +101,23 @@ public sealed class SessionSmokeTests
         using ITerminalSession session = sessionFactory();
         var output = new StringBuilder();
         var exitCodeSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        int exitEventCount = 0;
 
         session.OutputReceived += (_, text) => output.Append(text);
-        session.Exited += (_, code) => exitCodeSource.TrySetResult(code);
+        session.Exited += (_, code) =>
+        {
+            Interlocked.Increment(ref exitEventCount);
+            exitCodeSource.TrySetResult(code);
+        };
         session.Start();
 
         int exitCode = await exitCodeSource.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await Task.Delay(200);
+        await session.DisposeAsync();
 
         Assert.Equal(0, exitCode);
         Assert.Contains(expectedOutput, output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, Volatile.Read(ref exitEventCount));
     }
 
     private static string BuildInteractiveCommandLine()

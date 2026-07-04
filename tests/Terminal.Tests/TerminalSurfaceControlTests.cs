@@ -59,6 +59,70 @@ public sealed class TerminalSurfaceControlTests
     }
 
     [Fact]
+    public void FindMatchesDoesNotChangeTheCurrentSelection()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                CreateLine("alpha beta"),
+                CreateLine("beta gamma")
+            ]));
+            Assert.True(surface.SelectMatch(0, 0, 5));
+
+            var matches = surface.FindMatches("beta", StringComparison.Ordinal);
+
+            Assert.Equal(2, matches.Count);
+            Assert.Equal("alpha", surface.GetSelectedText());
+        });
+    }
+
+    [Fact]
+    public void SelectMatchClampsColumnsAndRejectsInvalidLines()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                CreateLine("alpha")
+            ]));
+
+            Assert.True(surface.SelectMatch(0, -10, 99));
+            Assert.Equal("alpha", surface.GetSelectedText());
+            Assert.False(surface.SelectMatch(1, 0, 1));
+            Assert.Equal("alpha", surface.GetSelectedText());
+        });
+    }
+
+    [Fact]
+    public void KeyboardSelectionCrossesLineBoundariesAndCanBeCleared()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                CreateLine("ab"),
+                CreateLine("cd")
+            ]));
+
+            Assert.True(surface.MoveKeyboardCursor(System.Windows.Input.Key.Right, extend: true));
+            Assert.True(surface.MoveKeyboardCursor(System.Windows.Input.Key.Right, extend: true));
+            Assert.True(surface.MoveKeyboardCursor(System.Windows.Input.Key.Right, extend: true));
+
+            Assert.True(surface.HasSelection);
+            Assert.Equal("ab" + Environment.NewLine, surface.GetSelectedText());
+
+            surface.ClearSelection();
+
+            Assert.False(surface.HasSelection);
+            Assert.Equal(string.Empty, surface.GetSelectedText());
+        });
+    }
+
+    [Fact]
     public void SurfaceBuildsLineLayoutsLazilyAndReachesOffscreenLines()
     {
         RunSta(() =>
