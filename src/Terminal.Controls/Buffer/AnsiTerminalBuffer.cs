@@ -3341,16 +3341,7 @@ internal sealed class AnsiTerminalBuffer
 
     private static string ExtractLineText(TerminalLine line)
     {
-        var builder = new StringBuilder(line.Cells.Length);
-        foreach (TerminalCell cell in line.Cells)
-        {
-            if (!cell.IsContinuation)
-            {
-                builder.Append(cell.Text);
-            }
-        }
-
-        return builder.ToString();
+        return TerminalLineSnapshotBuilder.ExtractPlainText(line);
     }
 
     private static void AppendPlainTextLine(StringBuilder builder, TerminalLine line, ref bool isFirstLine)
@@ -3366,53 +3357,15 @@ internal sealed class AnsiTerminalBuffer
 
     private TerminalRenderLineSnapshot CreateLineSnapshot(TerminalLine line, int cursorColumn, int anchorColumn, bool showCursor)
     {
-        int visibleLength = FindVisibleLength(line, cursorColumn);
-        if (visibleLength == 0)
-        {
-            return new TerminalRenderLineSnapshot(
-                anchorColumn == 0 ? 0 : -1,
-                0,
-                Array.Empty<TerminalRenderSegmentSnapshot>());
-        }
-
-        var text = new StringBuilder();
-        var segments = new List<TerminalRenderSegmentSnapshot>();
-        ResolvedStyle? currentStyle = null;
-        int currentSegmentCellLength = 0;
-        int anchorSegmentIndex = -1;
-        for (int column = 0; column < visibleLength; column++)
-        {
-            if (anchorColumn == column)
-            {
-                FlushSegment(segments, text, currentStyle, ref currentSegmentCellLength);
-                anchorSegmentIndex = segments.Count;
-            }
-
-            TerminalCell cell = line.Cells[column];
-            if (cell.IsContinuation)
-            {
-                continue;
-            }
-
-            bool isCursor = showCursor && cursorColumn == column;
-            ResolvedStyle style = ResolveStyle(cell.Style, cell.Hyperlink, isCursor, _screenReverse);
-            if (currentStyle is null || currentStyle.Value != style)
-            {
-                FlushSegment(segments, text, currentStyle, ref currentSegmentCellLength);
-                currentStyle = style;
-            }
-
-            text.Append(cell.Text);
-            currentSegmentCellLength += Math.Max(1, cell.Width);
-        }
-
-        FlushSegment(segments, text, currentStyle, ref currentSegmentCellLength);
-        if (anchorColumn == visibleLength)
-        {
-            anchorSegmentIndex = segments.Count;
-        }
-
-        return new TerminalRenderLineSnapshot(anchorSegmentIndex, visibleLength, segments.ToArray());
+        return TerminalLineSnapshotBuilder.CreateSnapshot(
+            line,
+            cursorColumn,
+            anchorColumn,
+            showCursor,
+            _screenReverse,
+            _defaultForeground,
+            _defaultBackground,
+            _cursorAccent);
     }
 
     private void AppendLineSnapshot(InlineCollection inlines, TerminalRenderLineSnapshot lineSnapshot, ref bool isFirstLine, ref FrameworkElement? cursorAnchor)
@@ -3449,104 +3402,6 @@ internal sealed class AnsiTerminalBuffer
         }
     }
 
-    private void AppendLine(InlineCollection inlines, TerminalLine line, int cursorColumn, int anchorColumn, bool showCursor, ref bool isFirstLine, ref FrameworkElement? cursorAnchor)
-    {
-        if (!isFirstLine)
-        {
-            inlines.Add(new LineBreak());
-        }
-
-        isFirstLine = false;
-        int visibleLength = FindVisibleLength(line, cursorColumn);
-        if (visibleLength == 0)
-        {
-            if (anchorColumn == 0)
-            {
-                InsertCursorAnchor(inlines, ref cursorAnchor);
-            }
-
-            return;
-        }
-
-        var text = new StringBuilder();
-        ResolvedStyle? currentStyle = null;
-        for (int column = 0; column < visibleLength; column++)
-        {
-            if (anchorColumn == column)
-            {
-                FlushRun(inlines, text, currentStyle);
-                InsertCursorAnchor(inlines, ref cursorAnchor);
-            }
-
-            TerminalCell cell = line.Cells[column];
-            if (cell.IsContinuation)
-            {
-                continue;
-            }
-
-            bool isCursor = showCursor && cursorColumn == column;
-            ResolvedStyle style = ResolveStyle(cell.Style, cell.Hyperlink, isCursor, _screenReverse);
-            if (currentStyle is null || currentStyle.Value != style)
-            {
-                FlushRun(inlines, text, currentStyle);
-                currentStyle = style;
-            }
-
-            text.Append(cell.Text);
-        }
-
-        FlushRun(inlines, text, currentStyle);
-        if (anchorColumn == visibleLength)
-        {
-            InsertCursorAnchor(inlines, ref cursorAnchor);
-        }
-    }
-
-    private static int FindVisibleLength(TerminalLine line, int cursorColumn)
-    {
-        for (int column = line.Cells.Length - 1; column >= 0; column--)
-        {
-            TerminalCell cell = line.Cells[column];
-            if (column == cursorColumn ||
-                cell.IsContinuation ||
-                cell.Text != " " ||
-                cell.Style != TerminalStyle.Default ||
-                cell.Hyperlink is not null)
-            {
-                return column + 1;
-            }
-        }
-
-        return cursorColumn >= 0 ? cursorColumn + 1 : 0;
-    }
-
-    private static void FlushSegment(
-        List<TerminalRenderSegmentSnapshot> segments,
-        StringBuilder text,
-        ResolvedStyle? style,
-        ref int cellLength)
-    {
-        if (text.Length == 0 || style is null)
-        {
-            return;
-        }
-
-        segments.Add(new TerminalRenderSegmentSnapshot(
-            text.ToString(),
-            cellLength,
-            style.Value.Foreground,
-            style.Value.Background,
-            style.Value.Bold,
-            style.Value.Italic,
-            style.Value.UnderlineStyle,
-            style.Value.UnderlineColor,
-            style.Value.Strikethrough,
-            style.Value.Overline,
-            style.Value.Hyperlink,
-            style.Value.Blink));
-        text.Clear();
-        cellLength = 0;
-    }
 
     internal static void AppendSegment(InlineCollection inlines, TerminalRenderSegmentSnapshot segment)
     {
@@ -3625,38 +3480,6 @@ internal sealed class AnsiTerminalBuffer
         decorations.Add(new TextDecoration(TextDecorationLocation.Underline, pen, 0, TextDecorationUnit.FontRecommended, TextDecorationUnit.FontRecommended));
     }
 
-    private static void FlushRun(InlineCollection inlines, StringBuilder text, ResolvedStyle? style)
-    {
-        if (text.Length == 0 || style is null)
-        {
-            return;
-        }
-
-        var run = new Run(text.ToString());
-        run.FontWeight = style.Value.Bold ? FontWeights.SemiBold : FontWeights.Regular;
-        if (style.Value.Italic) run.FontStyle = FontStyles.Italic;
-
-        if (style.Value.Hyperlink is not null &&
-            Uri.TryCreate(style.Value.Hyperlink, UriKind.Absolute, out Uri? navigateUri))
-        {
-            var hyperlink = new Hyperlink(run)
-            {
-                NavigateUri = navigateUri,
-                Foreground = GetBrush(style.Value.Foreground),
-                Background = GetBrush(style.Value.Background),
-            };
-            ApplyTextDecorations(hyperlink, style.Value.UnderlineStyle, style.Value.UnderlineColor, style.Value.Strikethrough, style.Value.Overline);
-            inlines.Add(hyperlink);
-            text.Clear();
-            return;
-        }
-
-        ApplyTextDecorations(run, style.Value.UnderlineStyle, style.Value.UnderlineColor, style.Value.Strikethrough, style.Value.Overline);
-        run.Foreground = GetBrush(style.Value.Foreground);
-        run.Background = GetBrush(style.Value.Background);
-        inlines.Add(run);
-        text.Clear();
-    }
 
     internal static void InsertCursorAnchor(InlineCollection inlines, ref FrameworkElement? cursorAnchor)
     {
@@ -3683,50 +3506,6 @@ internal sealed class AnsiTerminalBuffer
         cursorAnchor = anchor;
     }
 
-    private ResolvedStyle ResolveStyle(TerminalStyle style, string? hyperlink, bool isCursor, bool screenReverse = false)
-    {
-        Color foreground = style.Foreground ?? _defaultForeground;
-        Color background = style.Background ?? _defaultBackground;
-
-        if (style.Inverse)
-        {
-            (foreground, background) = (background, foreground);
-        }
-
-        if (style.Dim)
-        {
-            foreground = DimColor(foreground);
-        }
-
-        if (style.Invisible && !isCursor)
-        {
-            foreground = background;
-        }
-
-        if (isCursor)
-        {
-            (foreground, background) = (background, foreground);
-            if (foreground == background)
-            {
-                background = _cursorAccent;
-                foreground = _defaultBackground;
-            }
-        }
-
-        // DECSCNM is a screen-level transform applied after all per-cell attribute resolution.
-        if (screenReverse)
-        {
-            (foreground, background) = (background, foreground);
-        }
-
-        return new ResolvedStyle(foreground, background, style.Bold, style.Italic, style.UnderlineStyle, style.UnderlineColor, style.Strikethrough, style.Overline, hyperlink, style.Blink);
-    }
-
-    private static Color DimColor(Color color) =>
-        Color.FromRgb(
-            (byte)Math.Round(color.R * 0.55),
-            (byte)Math.Round(color.G * 0.55),
-            (byte)Math.Round(color.B * 0.55));
 
     private static void CopyPalette(IReadOnlyList<Color> source, Color[] destination)
     {
@@ -3868,18 +3647,6 @@ internal sealed class AnsiTerminalBuffer
         int ModifyOtherKeys,
         int KittyKeyboardFlags,
         List<int> KittyStack);
-
-    private readonly record struct ResolvedStyle(
-        Color Foreground,
-        Color Background,
-        bool Bold,
-        bool Italic,
-        UnderlineStyle UnderlineStyle,
-        Color? UnderlineColor,
-        bool Strikethrough,
-        bool Overline,
-        string? Hyperlink,
-        bool Blink = false);
 
     internal readonly record struct TerminalRenderSnapshot(
         TerminalRenderLineSnapshot[] Lines,
