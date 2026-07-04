@@ -34,7 +34,8 @@ public partial class TerminalTabView : UserControl
     private static readonly Brush BlockCursorBrush = CreateFrozenBrush(Color.FromArgb(0xA0, 0xE3, 0xE3, 0xE3));
     private static readonly Brush AccentCursorBrush = CreateFrozenBrush(Color.FromRgb(0x5F, 0xAF, 0xFF));
 
-    private ITerminalSession? _session;
+    private readonly TerminalSessionLifecycleCoordinator _sessionLifecycle = new();
+    private ITerminalSession? _session => _sessionLifecycle.Current;
     private AnsiTerminalBuffer _terminalBuffer = new(120, 30);
     private short _currentColumns = 120;
     private short _currentRows = 30;
@@ -44,12 +45,11 @@ public partial class TerminalTabView : UserControl
     private readonly DispatcherTimer _synchronizedUpdateWatchdogTimer = new(DispatcherPriority.Background);
     private readonly DispatcherTimer _toastDismissTimer = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(4) };
     private System.Windows.Controls.Primitives.Popup? _toastPopup;
-    private readonly SemaphoreSlim _sessionLifecycleGate = new(1, 1);
     private readonly object _pendingOutputLock = new();
     private readonly StringBuilder _pendingOutput = new();
     private int _autoRecoveryAttempts;
     private bool _isRecovering;
-    private bool _isSessionTransitionActive;
+    private bool _isSessionTransitionActive => _sessionLifecycle.IsTransitionActive;
     private bool _isClosingWindow;
     private bool _isRenderingTerminal;
     private bool _documentRenderScheduled;
@@ -937,10 +937,9 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        await _sessionLifecycleGate.WaitAsync();
+        await _sessionLifecycle.BeginTransitionAsync();
         try
         {
-            _isSessionTransitionActive = true;
             UpdateUiState(_session is not null);
 
             ITerminalSession? previousSession = DetachCurrentSession();
@@ -972,7 +971,7 @@ public partial class TerminalTabView : UserControl
             ITerminalSession session = await CreateSessionAsync(commandLine, _currentColumns, _currentRows, workingDirectory);
             session.OutputReceived += OnOutputReceived;
             session.Exited += OnProcessExited;
-            _session = session;
+            _sessionLifecycle.Attach(session);
 
             try
             {
@@ -1023,9 +1022,8 @@ public partial class TerminalTabView : UserControl
         }
         finally
         {
-            _isSessionTransitionActive = false;
             UpdateUiState(_session is not null);
-            _sessionLifecycleGate.Release();
+            _sessionLifecycle.EndTransition();
         }
     }
 
@@ -1035,15 +1033,14 @@ public partial class TerminalTabView : UserControl
         ITerminalSession? expectedSession = null,
         bool forceTerminate = false)
     {
-        await _sessionLifecycleGate.WaitAsync();
+        await _sessionLifecycle.BeginTransitionAsync();
         try
         {
-            if (expectedSession is not null && !ReferenceEquals(expectedSession, _session))
+            if (!_sessionLifecycle.MatchesExpected(expectedSession))
             {
                 return;
             }
 
-            _isSessionTransitionActive = true;
             UpdateUiState(_session is not null);
 
             ITerminalSession? session = DetachCurrentSession();
@@ -1080,15 +1077,14 @@ public partial class TerminalTabView : UserControl
         }
         finally
         {
-            _isSessionTransitionActive = false;
             UpdateUiState(_session is not null);
-            _sessionLifecycleGate.Release();
+            _sessionLifecycle.EndTransition();
         }
     }
 
     private ITerminalSession? DetachCurrentSession()
     {
-        ITerminalSession? session = _session;
+        ITerminalSession? session = _sessionLifecycle.DetachCurrent();
         if (session is null)
         {
             return null;
@@ -1096,7 +1092,6 @@ public partial class TerminalTabView : UserControl
 
         session.OutputReceived -= OnOutputReceived;
         session.Exited -= OnProcessExited;
-        _session = null;
         AbortActiveAgentCommand();
         return session;
     }
@@ -1151,9 +1146,14 @@ public partial class TerminalTabView : UserControl
         return variables;
     }
 
-    private static async Task<Exception?> DisposeSessionAsync(ITerminalSession? session)
+    private async Task<Exception?> DisposeSessionAsync(ITerminalSession? session)
     {
         if (session is null)
+        {
+            return null;
+        }
+
+        if (!_sessionLifecycle.TryClaimDisposal(session))
         {
             return null;
         }
@@ -1171,7 +1171,7 @@ public partial class TerminalTabView : UserControl
 
     private void OnOutputReceived(object? sender, string text)
     {
-        if (sender is not ITerminalSession session || !ReferenceEquals(session, _session))
+        if (sender is not ITerminalSession session || !_sessionLifecycle.IsCurrent(session))
         {
             return;
         }
@@ -1196,12 +1196,17 @@ public partial class TerminalTabView : UserControl
     {
         try
         {
-            if (!ReferenceEquals(session, _session))
+            if (!_sessionLifecycle.TryClaimExit(session, out long generation))
             {
                 return;
             }
 
-            await DrainExitedSessionOutputAsync(session);
+            await DrainExitedSessionOutputAsync(session, generation);
+            if (!_sessionLifecycle.ShouldContinueExit(session, generation))
+            {
+                return;
+            }
+
             await StopTerminalAsync(
                 reportStopped: false,
                 statusOverride: $"Process exited with code {exitCode}.",
@@ -1213,11 +1218,11 @@ public partial class TerminalTabView : UserControl
         }
     }
 
-    private async Task DrainExitedSessionOutputAsync(ITerminalSession session)
+    private async Task DrainExitedSessionOutputAsync(ITerminalSession session, long generation)
     {
         for (int pass = 0; pass < ExitOutputDrainPasses; pass++)
         {
-            if (!ReferenceEquals(session, _session))
+            if (!_sessionLifecycle.ShouldContinueExit(session, generation))
             {
                 return;
             }
@@ -1226,7 +1231,7 @@ public partial class TerminalTabView : UserControl
             await Task.Delay(ExitOutputDrainInterval);
         }
 
-        if (!ReferenceEquals(session, _session))
+        if (!_sessionLifecycle.ShouldContinueExit(session, generation))
         {
             return;
         }
