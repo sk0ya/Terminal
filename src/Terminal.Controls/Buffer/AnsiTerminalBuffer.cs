@@ -96,14 +96,19 @@ internal sealed class AnsiTerminalBuffer
     private Color _themeCursor = TerminalColorTheme.Default.Cursor;
     private readonly Color[] _defaultAnsiPalette = TerminalColorTheme.Default.AnsiPalette.ToArray();
     private readonly Color[] _ansiPalette = TerminalColorTheme.Default.AnsiPalette.ToArray();
-    private readonly int _scrollbackLimit;
-    private readonly List<TerminalLine> _scrollback = [];
+    private readonly TerminalScreenStore _screenStore;
     private readonly List<TerminalRenderLineSnapshot> _scrollbackRenderCache = [];
     private readonly VtParser _parser;
     private readonly StringBuilder _pendingClusterText = new();
     private readonly Dictionary<int, bool> _savedPrivateModes = [];
 
-    private List<TerminalLine> _screen;
+    private List<TerminalLine> _screen
+    {
+        get => _screenStore.Screen;
+        set => _screenStore.ReplaceScreen(value);
+    }
+
+    private List<TerminalLine> _scrollback => _screenStore.Scrollback;
     private TerminalRenderLineSnapshot[] _screenRenderCache;
     private TerminalRenderLineSnapshot[] _combinedRenderCache = [];
     private bool[] _tabStops;
@@ -215,6 +220,7 @@ internal sealed class AnsiTerminalBuffer
 
     public AnsiTerminalBuffer(short columns, short rows, int scrollbackLimit = DefaultScrollbackLimit)
     {
+        int normalizedScrollbackLimit = Math.Max(scrollbackLimit, rows);
         _parser = new VtParser(
             ProcessControl,
             ProcessEscapeCommand,
@@ -223,10 +229,9 @@ internal sealed class AnsiTerminalBuffer
             DispatchDcs,
             ProcessCharsetDesignation,
             ProcessDecLineSize);
-        _scrollbackLimit = Math.Max(scrollbackLimit, rows);
         _columns = Math.Max(columns, (short)MinColumns);
         _rows = Math.Max(rows, (short)MinRows);
-        _screen = CreateScreen(_rows, _columns, TerminalStyle.Default);
+        _screenStore = new TerminalScreenStore(_rows, _columns, normalizedScrollbackLimit);
         _screenRenderCache = new TerminalRenderLineSnapshot[_rows];
         _tabStops = CreateDefaultTabStops(_columns);
         ResetMargins();
@@ -347,7 +352,7 @@ internal sealed class AnsiTerminalBuffer
 
         int screenStart = Math.Max(0, reflowed.Count - newRows);
         _scrollback.Clear();
-        int historyStart = Math.Max(0, screenStart - _scrollbackLimit);
+        int historyStart = Math.Max(0, screenStart - _screenStore.ScrollbackLimit);
         for (int row = historyStart; row < screenStart; row++)
         {
             _scrollback.Add(reflowed[row]);
@@ -727,19 +732,6 @@ internal sealed class AnsiTerminalBuffer
         brush.Freeze();
         BrushCache[color] = brush;
         return brush;
-    }
-
-    private void AppendScrollback(TerminalLine line)
-    {
-        _scrollback.Add(line);
-        _scrollbackRenderCache.Add(CreateLineSnapshot(line, -1, -1, showCursor: false));
-        _renderCacheDirty = true;
-        int overflow = _scrollback.Count - _scrollbackLimit;
-        if (overflow > 0)
-        {
-            _scrollback.RemoveRange(0, overflow);
-            _scrollbackRenderCache.RemoveRange(0, overflow);
-        }
     }
 
     private void RebuildScrollbackRenderCache()
@@ -2546,40 +2538,24 @@ internal sealed class AnsiTerminalBuffer
 
     private void InsertLines(int count)
     {
-        if (_cursorRow < _scrollTop || _cursorRow > _scrollBottom)
-        {
-            return;
-        }
-
-        int lineCount = Math.Min(Math.Max(count, 1), _scrollBottom - _cursorRow + 1);
-        for (int row = _scrollBottom; row >= _cursorRow + lineCount; row--)
-        {
-            _screen[row] = _screen[row - lineCount];
-        }
-
-        for (int row = 0; row < lineCount; row++)
-        {
-            _screen[_cursorRow + row] = new TerminalLine(_columns, _currentStyle);
-        }
+        _screenStore.InsertLines(
+            _cursorRow,
+            _scrollTop,
+            _scrollBottom,
+            count,
+            _columns,
+            _currentStyle);
     }
 
     private void DeleteLines(int count)
     {
-        if (_cursorRow < _scrollTop || _cursorRow > _scrollBottom)
-        {
-            return;
-        }
-
-        int lineCount = Math.Min(Math.Max(count, 1), _scrollBottom - _cursorRow + 1);
-        for (int row = _cursorRow; row <= _scrollBottom - lineCount; row++)
-        {
-            _screen[row] = _screen[row + lineCount];
-        }
-
-        for (int row = _scrollBottom - lineCount + 1; row <= _scrollBottom; row++)
-        {
-            _screen[row] = new TerminalLine(_columns, _currentStyle);
-        }
+        _screenStore.DeleteLines(
+            _cursorRow,
+            _scrollTop,
+            _scrollBottom,
+            count,
+            _columns,
+            _currentStyle);
     }
 
     private void InsertCharacters(int count)
@@ -3053,39 +3029,24 @@ internal sealed class AnsiTerminalBuffer
 
     private void ScrollUpRegion(int lines, int top, int bottom)
     {
-        int count = Math.Clamp(lines, 1, bottom - top + 1);
         bool appendToScrollback = _primaryScreenBackup is null && top == 0 && bottom == _rows - 1;
-        for (int row = 0; row < count; row++)
+        TerminalScreenMutation mutation = _screenStore.ScrollUp(
+            lines,
+            top,
+            bottom,
+            _columns,
+            _currentStyle,
+            appendToScrollback);
+        if (mutation.ScrollbackChanged)
         {
-            if (appendToScrollback)
-            {
-                AppendScrollback(CloneLine(_screen[top + row]));
-            }
-        }
-
-        for (int row = top; row <= bottom - count; row++)
-        {
-            _screen[row] = _screen[row + count];
-        }
-
-        for (int row = bottom - count + 1; row <= bottom; row++)
-        {
-            _screen[row] = new TerminalLine(_columns, _currentStyle);
+            RebuildScrollbackRenderCache();
+            _renderCacheDirty = true;
         }
     }
 
     private void ScrollDownRegion(int lines, int top, int bottom)
     {
-        int count = Math.Clamp(lines, 1, bottom - top + 1);
-        for (int row = bottom; row >= top + count; row--)
-        {
-            _screen[row] = _screen[row - count];
-        }
-
-        for (int row = top; row < top + count; row++)
-        {
-            _screen[row] = new TerminalLine(_columns, _currentStyle);
-        }
+        _screenStore.ScrollDown(lines, top, bottom, _columns, _currentStyle);
     }
 
     private int FindLastVisibleScreenRow(bool showCursor)
