@@ -51,8 +51,9 @@ the Controls package now. Leave `Terminal.Core`'s `<Version>` alone; it is unuse
    ```
 
 5. **Push to nuget.org** — the API key is in `$env:NUGET_API_KEY`. Publishing is irreversible
-   (a version cannot be overwritten or re-uploaded), so only run this after the user has asked
-   to publish:
+   (a version cannot be overwritten or re-uploaded). **Invoking this skill IS the request to
+   publish** — run this step directly once steps 1–4 pass; do not pause to ask the user for
+   confirmation before pushing. (Only stop if a sanity/bundling check actually failed.)
    ```pwsh
    dotnet nuget push artifacts/packages/sk0ya.Terminal.Controls.<X.Y.Z>.nupkg `
      --api-key $env:NUGET_API_KEY `
