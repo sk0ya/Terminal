@@ -45,16 +45,13 @@ public partial class TerminalTabView : UserControl
     private readonly DispatcherTimer _synchronizedUpdateWatchdogTimer = new(DispatcherPriority.Background);
     private readonly DispatcherTimer _toastDismissTimer = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(4) };
     private System.Windows.Controls.Primitives.Popup? _toastPopup;
-    private readonly object _pendingOutputLock = new();
-    private readonly StringBuilder _pendingOutput = new();
+    private readonly TerminalOutputBatchCoordinator _outputBatch = new();
     private int _autoRecoveryAttempts;
     private bool _isRecovering;
     private bool _isSessionTransitionActive => _sessionLifecycle.IsTransitionActive;
     private bool _isClosingWindow;
     private bool _isRenderingTerminal;
     private bool _documentRenderScheduled;
-    private bool _outputFlushScheduled;
-    private bool _prioritizeInitialOutputRender;
     private bool _followTerminalOutput = true;
     private bool _alternateScreenViewportMode;
     private bool _cursorBlinkVisible = true;
@@ -952,7 +949,7 @@ public partial class TerminalTabView : UserControl
             (_currentColumns, _currentRows) = CalculateTerminalSize();
             ReplaceTerminalBuffer(new AnsiTerminalBuffer(_currentColumns, _currentRows, _scrollbackLimit));
             _cursorBlinkVisible = true;
-            _prioritizeInitialOutputRender = true;
+            _outputBatch.SetPrioritizeNextRender(true);
             UpdateOverlayState();
             UpdateUiState(isRunning: false);
             UpdateWindowTitle();
@@ -1050,7 +1047,7 @@ public partial class TerminalTabView : UserControl
             ForceEndTransientModesAndRender();
             ReleaseTerminalMouseCapture(force: true);
             ResetInputProxyText();
-            _prioritizeInitialOutputRender = false;
+            _outputBatch.SetPrioritizeNextRender(false);
             UpdateOverlayState();
             UpdateUiState(isRunning: false);
             UpdateWindowTitle();
@@ -1291,25 +1288,9 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        bool shouldSchedule = false;
-        DispatcherPriority priority = DispatcherPriority.Normal;
-        lock (_pendingOutputLock)
+        if (_outputBatch.Enqueue(text))
         {
-            _pendingOutput.Append(text);
-            if (!_outputFlushScheduled)
-            {
-                _outputFlushScheduled = true;
-                shouldSchedule = true;
-                if (_prioritizeInitialOutputRender)
-                {
-                    priority = DispatcherPriority.Normal;
-                }
-            }
-        }
-
-        if (shouldSchedule)
-        {
-            _ = Dispatcher.BeginInvoke(FlushPendingOutput, priority);
+            _ = Dispatcher.BeginInvoke(FlushPendingOutput, DispatcherPriority.Normal);
         }
     }
 
@@ -1320,24 +1301,13 @@ public partial class TerminalTabView : UserControl
 
     private void FlushPendingOutput(bool forceEndTransientModes)
     {
-        string? nextBatch = null;
-        lock (_pendingOutputLock)
-        {
-            if (_pendingOutput.Length > 0)
-            {
-                nextBatch = _pendingOutput.ToString();
-                _pendingOutput.Clear();
-            }
-
-            _outputFlushScheduled = false;
-        }
+        string? nextBatch = _outputBatch.Drain();
 
         if (!string.IsNullOrEmpty(nextBatch))
         {
             bool endedSynchronizedUpdate = _terminalBuffer.Process(nextBatch);
             TryCompleteAgentSentinel();
-            bool prioritizeRender = _prioritizeInitialOutputRender;
-            _prioritizeInitialOutputRender = false;
+            bool prioritizeRender = _outputBatch.ConsumeRenderPriority();
             if (!_terminalBuffer.SynchronizedUpdateActive)
             {
                 StopSynchronizedUpdateWatchdog();
@@ -1354,17 +1324,7 @@ public partial class TerminalTabView : UserControl
             ForceEndTransientModesAndRender();
         }
 
-        bool shouldReschedule = false;
-        lock (_pendingOutputLock)
-        {
-            if (_pendingOutput.Length > 0 && !_outputFlushScheduled)
-            {
-                _outputFlushScheduled = true;
-                shouldReschedule = true;
-            }
-        }
-
-        if (shouldReschedule)
+        if (_outputBatch.EnsureFlushScheduled())
         {
             _ = Dispatcher.BeginInvoke(FlushPendingOutput, DispatcherPriority.Normal);
         }
@@ -1419,11 +1379,7 @@ public partial class TerminalTabView : UserControl
 
     private void ClearPendingOutput()
     {
-        lock (_pendingOutputLock)
-        {
-            _pendingOutput.Clear();
-            _outputFlushScheduled = false;
-        }
+        _outputBatch.Clear();
     }
 
     public bool SendTerminalInput(byte[] bytes)
