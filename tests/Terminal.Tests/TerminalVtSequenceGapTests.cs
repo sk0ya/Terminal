@@ -195,4 +195,86 @@ public sealed class TerminalVtSequenceGapTests
         Assert.Equal("X", buffer.GetScreenLineText(0).TrimEnd());
         Assert.Equal(1, buffer.CursorColumn);
     }
+
+    [Fact]
+    public void PrimaryDeviceAttributesOmitsSixelAttribute()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("[c");
+
+        // VT220 with 132-column (1) and ANSI color (22); Sixel (attribute 4) must be absent.
+        Assert.Equal("[?62;1;22c", emitted);
+    }
+
+    [Fact]
+    public void Sgr5MarksSegmentAsBlinkingAndSgr25ClearsIt()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+
+        buffer.Process("[5mA[25mB");
+
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        // The blink attribute breaks the run, so "A" and "B" are separate segments.
+        Assert.True(snapshot.Lines[0].Segments[0].Blink);
+        Assert.Equal("A", snapshot.Lines[0].Segments[0].Text);
+        Assert.False(snapshot.Lines[0].Segments[1].Blink);
+        Assert.Equal("B", snapshot.Lines[0].Segments[1].Text);
+    }
+
+    [Fact]
+    public void Sgr0ResetsBlinkAttribute()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+
+        buffer.Process("[5mA[0mB");
+
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.True(snapshot.Lines[0].Segments[0].Blink);
+        Assert.False(snapshot.Lines[0].Segments[1].Blink);
+    }
+
+    [Fact]
+    public void Xtwinops22And23PushAndPopWindowTitle()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+
+        buffer.Process("]2;First");
+        buffer.Process("[22t");            // push "First"
+        buffer.Process("]2;Second"); // now showing "Second"
+        Assert.Equal("Second", buffer.WindowTitle);
+
+        buffer.Process("[23t");            // pop → restore "First"
+        Assert.Equal("First", buffer.WindowTitle);
+    }
+
+    [Fact]
+    public void Xtwinops23PopWithEmptyStackLeavesTitleUnchanged()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+
+        buffer.Process("]2;OnlyTitle");
+        buffer.Process("[23t"); // pop with nothing pushed is a no-op
+
+        Assert.Equal("OnlyTitle", buffer.WindowTitle);
+    }
+
+    [Fact]
+    public void WindowTitleStackIsNestedLifo()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+
+        buffer.Process("]2;A");
+        buffer.Process("[22t");
+        buffer.Process("]2;B");
+        buffer.Process("[22t");
+        buffer.Process("]2;C");
+
+        buffer.Process("[23t");
+        Assert.Equal("B", buffer.WindowTitle);
+        buffer.Process("[23t");
+        Assert.Equal("A", buffer.WindowTitle);
+    }
 }

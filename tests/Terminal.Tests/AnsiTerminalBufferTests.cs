@@ -242,7 +242,7 @@ public sealed class AnsiTerminalBufferTests
         buffer.Process("\u001b[c");
         buffer.Process("\u001b[>c");
 
-        Assert.Equal(new[] { "\u001b[?62;1;4;22c", "\u001b[>0;10;1c" }, emitted);
+        Assert.Equal(new[] { "\u001b[?62;1;22c", "\u001b[>0;10;1c" }, emitted);
     }
 
     [Fact]
@@ -2472,14 +2472,15 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
-    public void PrimaryDeviceAttributesAdvertisesSixelSupport()
+    public void PrimaryDeviceAttributesDoesNotAdvertiseSixelSupport()
     {
+        // Sixel graphics are not rendered, so DA1 must not include attribute 4 (Sixel).
         var buffer = new AnsiTerminalBuffer(10, 3);
         string? emitted = null;
         buffer.InputSequenceGenerated += (_, text) => emitted = text;
 
         buffer.Process("\u001b[c");
 
-        Assert.Equal("\u001b[?62;1;4;22c", emitted);
+        Assert.Equal("\u001b[?62;1;22c", emitted);
     }
 }

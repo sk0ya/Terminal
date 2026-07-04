@@ -173,6 +173,8 @@ internal sealed class AnsiTerminalBuffer
     private string? _currentHyperlink;
     private string? _savedHyperlink;
     private string _windowTitle = string.Empty;
+    // XTWINOPS 22/23 window-title stack (vim / tmux save & restore the title around their session).
+    private readonly Stack<string> _windowTitleStack = new();
     private ScreenState? _pendingSyntheticAlternateScreenBackup;
     private string _lastPrintedClusterText = string.Empty;
     private int _lastPrintedClusterWidth;
@@ -1027,6 +1029,7 @@ internal sealed class AnsiTerminalBuffer
         _savedHyperlink = null;
         _pendingSyntheticAlternateScreenBackup = null;
         _windowTitle = string.Empty;
+        _windowTitleStack.Clear();
         _lastPrintedClusterText = string.Empty;
         _lastPrintedClusterWidth = 0;
         ClearPendingCluster();
@@ -2253,6 +2256,9 @@ internal sealed class AnsiTerminalBuffer
         _cursorRow = Math.Max(0, _cursorRow - 1);
     }
 
+    // DA1 reports VT220 (62) advertising 132-column (1) and ANSI color (22). Sixel (attribute 4)
+    // is intentionally omitted: Sixel graphics are not rendered, so advertising it would invite
+    // applications to emit data that is silently dropped.
     private void DispatchDeviceAttributes(bool isPrivate, bool isSecondary)
     {
         if (isSecondary)
@@ -2263,11 +2269,11 @@ internal sealed class AnsiTerminalBuffer
 
         if (isPrivate)
         {
-            EmitInputSequence("\u001b[?62;1;4;22c");
+            EmitInputSequence("\u001b[?62;1;22c");
             return;
         }
 
-        EmitInputSequence("\u001b[?62;1;4;22c");
+        EmitInputSequence("\u001b[?62;1;22c");
     }
 
     private void DispatchDeviceStatusReport(int?[] parameters, bool isPrivate)
@@ -2575,7 +2581,42 @@ internal sealed class AnsiTerminalBuffer
             case 21:
                 EmitInputSequence($"]l{_windowTitle}\\");
                 break;
+            case 22:
+                PushWindowTitle();
+                break;
+            case 23:
+                PopWindowTitle();
+                break;
         }
+    }
+
+    private const int MaxWindowTitleStackDepth = 128;
+
+    // XTWINOPS CSI 22 t: push the current window title. The icon/window sub-selector (Ps2) is
+    // ignored because only a single window title is tracked. A depth cap guards against a runaway
+    // program pushing without ever popping.
+    private void PushWindowTitle()
+    {
+        if (_windowTitleStack.Count >= MaxWindowTitleStackDepth)
+        {
+            return;
+        }
+
+        _windowTitleStack.Push(_windowTitle);
+    }
+
+    // XTWINOPS CSI 23 t: restore the most recently pushed window title. A pop with an empty stack
+    // is a no-op, matching xterm.
+    private void PopWindowTitle()
+    {
+        if (_windowTitleStack.Count == 0)
+        {
+            return;
+        }
+
+        string previousTitle = _windowTitle;
+        _windowTitle = _windowTitleStack.Pop();
+        UpdateSyntheticAlternateScreenFromTitle(previousTitle, _windowTitle);
     }
 
     private void SoftResetTerminal()
@@ -4019,7 +4060,8 @@ internal sealed class AnsiTerminalBuffer
             style.Value.UnderlineColor,
             style.Value.Strikethrough,
             style.Value.Overline,
-            style.Value.Hyperlink));
+            style.Value.Hyperlink,
+            style.Value.Blink));
         text.Clear();
         cellLength = 0;
     }
@@ -4195,7 +4237,7 @@ internal sealed class AnsiTerminalBuffer
             (foreground, background) = (background, foreground);
         }
 
-        return new ResolvedStyle(foreground, background, style.Bold, style.Italic, style.UnderlineStyle, style.UnderlineColor, style.Strikethrough, style.Overline, hyperlink);
+        return new ResolvedStyle(foreground, background, style.Bold, style.Italic, style.UnderlineStyle, style.UnderlineColor, style.Strikethrough, style.Overline, hyperlink, style.Blink);
     }
 
     private static Color DimColor(Color color) =>
@@ -4451,7 +4493,8 @@ internal sealed class AnsiTerminalBuffer
         Color? UnderlineColor,
         bool Strikethrough,
         bool Overline,
-        string? Hyperlink);
+        string? Hyperlink,
+        bool Blink = false);
 
     internal readonly record struct TerminalRenderSnapshot(
         TerminalRenderLineSnapshot[] Lines,
@@ -4494,7 +4537,8 @@ internal sealed class AnsiTerminalBuffer
         Color? UnderlineColor,
         bool Strikethrough,
         bool Overline,
-        string? Hyperlink);
+        string? Hyperlink,
+        bool Blink = false);
 
     internal readonly record struct TerminalDocumentSnapshot(
         FlowDocument Document,

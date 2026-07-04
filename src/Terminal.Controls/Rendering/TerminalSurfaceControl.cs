@@ -7,6 +7,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.TextFormatting;
+using System.Windows.Threading;
 
 using Terminal.Buffer;
 using Terminal.Tabs;
@@ -61,6 +62,12 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private double _viewportFloorHeight;
     private double _horizontalOffset;
     private double _verticalOffset;
+    // SGR 5/6 text blink: a timer toggles _blinkTextVisible on a fixed cadence and OnRender skips
+    // blinking runs on the off phase. The timer only runs while blinking runs are actually on screen
+    // (decided each paint), so a terminal with no blinking content never repaints for blink.
+    private static readonly TimeSpan BlinkInterval = TimeSpan.FromMilliseconds(500);
+    private readonly DispatcherTimer _blinkTimer;
+    private bool _blinkTextVisible = true;
 
     public event EventHandler<TerminalHyperlinkActivatedEventArgs>? HyperlinkActivated;
 
@@ -76,6 +83,49 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         FocusVisualStyle = null;
         TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
         RequestBringIntoView += OnRequestBringIntoView;
+        _blinkTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = BlinkInterval };
+        _blinkTimer.Tick += OnBlinkTimerTick;
+        Unloaded += (_, _) => StopBlinkTimer();
+    }
+
+    private void OnBlinkTimerTick(object? sender, EventArgs e)
+    {
+        _blinkTextVisible = !_blinkTextVisible;
+        InvalidateVisual();
+    }
+
+    // Called at the end of each paint with whether any blinking run is currently on screen. Starts
+    // the cadence when blink content appears and stops it (restoring visibility) when it is gone, so
+    // the timer never runs for a terminal that has no blinking text in view.
+    private void UpdateBlinkTimer(bool hasBlinkingContent)
+    {
+        if (hasBlinkingContent)
+        {
+            if (!_blinkTimer.IsEnabled)
+            {
+                _blinkTimer.Start();
+            }
+        }
+        else
+        {
+            StopBlinkTimer();
+        }
+    }
+
+    private void StopBlinkTimer()
+    {
+        if (!_blinkTimer.IsEnabled)
+        {
+            return;
+        }
+
+        _blinkTimer.Stop();
+        if (!_blinkTextVisible)
+        {
+            // Leave the surface showing the text rather than frozen on a blink-off frame.
+            _blinkTextVisible = true;
+            InvalidateVisual();
+        }
     }
 
     private static void OnRequestBringIntoView(object sender, RequestBringIntoViewEventArgs e)
@@ -762,6 +812,9 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
         if (_lines.Count == 0 || _cellSize.Width <= 0 || _cellSize.Height <= 0)
         {
+            // Nothing is painted, so no blinking run can be on screen — make sure the cadence isn't
+            // left running from a previous frame that did have blink content.
+            StopBlinkTimer();
             return;
         }
 
@@ -778,6 +831,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         _lines.TrimOutsideWindow(firstVisibleLine - visibleSpan, lastVisibleLine + visibleSpan);
 
         TerminalTextRange? selection = NormalizeSelection(_selection);
+        bool sawBlinkingContent = false;
         for (int lineIndex = firstVisibleLine; lineIndex <= lastVisibleLine; lineIndex++)
         {
             LineLayout line = _lines[lineIndex];
@@ -795,6 +849,15 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             LineDrawable drawable = _lines.GetDrawable(lineIndex, BuildLineDrawable);
             foreach (IDrawCommand command in drawable.Commands)
             {
+                if (command.Blink)
+                {
+                    sawBlinkingContent = true;
+                    if (!_blinkTextVisible)
+                    {
+                        continue;
+                    }
+                }
+
                 command.Render(drawingContext, contentLeft, top);
             }
 
@@ -803,6 +866,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 DrawHoverUnderline(drawingContext, hovered.StartColumn, hovered.EndColumn, top, contentLeft);
             }
         }
+
+        UpdateBlinkTimer(sawBlinkingContent);
     }
 
     private void DrawHoverUnderline(DrawingContext drawingContext, int startColumn, int endColumn, double top, double contentLeft)
@@ -1167,11 +1232,12 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             FontFallbackResolver? fallback = _fontFallback;
             bool ambiguousAsWide = _ambiguousAsWide;
             bool italic = segment.Snapshot.Italic;
+            bool blink = segment.Snapshot.Blink;
 
             if (fallback is null)
             {
                 commands.Add(CreateRunCommand(segText, primaryTypeface, isPrimary: true, fontWeight, foreground,
-                    decorations, segment.StartCell * _cellSize.Width));
+                    decorations, segment.StartCell * _cellSize.Width, blink));
                 continue;
             }
 
@@ -1197,7 +1263,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                     string runText = segText[runStart..elemStart];
                     Typeface tf = ResolveTypeface(runGlyph, primaryTypeface, italic);
                     commands.Add(CreateRunCommand(runText, tf, IsPrimaryGlyph(runGlyph), fontWeight, foreground,
-                        decorations, runCellX));
+                        decorations, runCellX, blink));
                     runStart = elemStart;
                     runCellX = cellX;
                     runGlyph = resolved;
@@ -1212,7 +1278,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 string runText = segText[runStart..];
                 Typeface tf = ResolveTypeface(runGlyph, primaryTypeface, italic);
                 commands.Add(CreateRunCommand(runText, tf, IsPrimaryGlyph(runGlyph), fontWeight, foreground,
-                    decorations, runCellX));
+                    decorations, runCellX, blink));
             }
         }
 
@@ -1232,12 +1298,13 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         FontWeight fontWeight,
         Brush foreground,
         TextDecorationCollection? decorations,
-        double relativeX)
+        double relativeX,
+        bool blink)
     {
         if (_fontLigaturesEnabled && isPrimary)
         {
             TextLine line = FormatLigatureRun(text, typeface, fontWeight, foreground, decorations);
-            return new TextLineCommand(line, relativeX);
+            return new TextLineCommand(line, relativeX, blink);
         }
 
         var formatted = new FormattedText(
@@ -1254,7 +1321,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             formatted.SetTextDecorations(decorations);
         }
 
-        return new FormattedTextCommand(formatted, relativeX);
+        return new FormattedTextCommand(formatted, relativeX, blink);
     }
 
     private TextLine FormatLigatureRun(
@@ -2108,17 +2175,25 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     // the current (offsetX, offsetY) to translate it into device coordinates.
     private interface IDrawCommand
     {
+        // True when the run carries the SGR 5/6 blink attribute; OnRender skips it on the blink-off
+        // phase so the text disappears and reappears on the shared cadence.
+        bool Blink { get; }
+
         void Render(DrawingContext drawingContext, double offsetX, double offsetY);
     }
 
-    private sealed class FormattedTextCommand(FormattedText text, double relativeX) : IDrawCommand
+    private sealed class FormattedTextCommand(FormattedText text, double relativeX, bool blink) : IDrawCommand
     {
+        public bool Blink => blink;
+
         public void Render(DrawingContext drawingContext, double offsetX, double offsetY)
             => drawingContext.DrawText(text, new Point(relativeX + offsetX, offsetY));
     }
 
-    private sealed class TextLineCommand(TextLine line, double relativeX) : IDrawCommand, IDisposable
+    private sealed class TextLineCommand(TextLine line, double relativeX, bool blink) : IDrawCommand, IDisposable
     {
+        public bool Blink => blink;
+
         public void Render(DrawingContext drawingContext, double offsetX, double offsetY)
             => line.Draw(drawingContext, new Point(relativeX + offsetX, offsetY), InvertAxes.None);
 
