@@ -89,8 +89,6 @@ internal sealed class AnsiTerminalBuffer
     private const int DefaultScrollbackLimit = 10000;
 
     private static readonly Dictionary<Color, SolidColorBrush> BrushCache = [];
-    private static readonly char[] CsiIntermediateCharacters = [' ', '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/'];
-
     private Color _defaultForeground = TerminalColorTheme.Default.Foreground;
     private Color _defaultBackground = TerminalColorTheme.Default.Background;
     private Color _cursorAccent = TerminalColorTheme.Default.Cursor;
@@ -222,7 +220,7 @@ internal sealed class AnsiTerminalBuffer
         _parser = new VtParser(
             ProcessControl,
             ProcessEscapeCommand,
-            DispatchCsi,
+            DecodeCsi,
             DispatchOsc,
             DispatchDcs,
             ProcessCharsetDesignation,
@@ -1586,18 +1584,20 @@ internal sealed class AnsiTerminalBuffer
         }
     }
 
-    private void DispatchCsi(char command, string rawParams)
+    private void DecodeCsi(char final, string rawParameters)
     {
-        char prefix = rawParams.Length > 0 && (rawParams[0] == '?' || rawParams[0] == '>') ? rawParams[0] : '\0';
-        bool isPrivate = prefix == '?';
-        bool isSecondary = prefix == '>';
-        string parameterSection = prefix == '\0' ? rawParams : rawParams[1..];
-        int intermediateIndex = parameterSection.IndexOfAny(CsiIntermediateCharacters);
-        string intermediate = intermediateIndex >= 0 ? parameterSection[intermediateIndex..] : string.Empty;
-        string paramText = intermediateIndex >= 0 ? parameterSection[..intermediateIndex] : parameterSection;
-        int?[] parameters = ParseParameters(paramText);
+        DispatchCsi(CsiDecoder.Decode(final, rawParameters));
+    }
 
-        switch (command)
+    private void DispatchCsi(CsiCommand command)
+    {
+        bool isPrivate = command.IsPrivate;
+        bool isSecondary = command.IsSecondary;
+        string intermediate = command.Intermediate;
+        string paramText = command.ParameterText;
+        int?[] parameters = command.Parameters;
+
+        switch (command.Final)
         {
             case '@':
                 InsertCharacters(GetParameter(parameters, 0, 1));
@@ -1684,11 +1684,11 @@ internal sealed class AnsiTerminalBuffer
             case 'l':
                 if (isPrivate)
                 {
-                    SetPrivateMode(parameters, command == 'h');
+                    SetPrivateMode(parameters, command.Final == 'h');
                 }
                 else
                 {
-                    SetMode(parameters, command == 'h');
+                    SetMode(parameters, command.Final == 'h');
                 }
 
                 break;
@@ -1769,15 +1769,19 @@ internal sealed class AnsiTerminalBuffer
                 {
                     KittyQueryFlags();
                 }
-                else if (rawParams.Length > 0 && rawParams[0] == '<')
+                else if (command.RawParameters.Length > 0 && command.RawParameters[0] == '<')
                 {
-                    KittyPopFlags(GetParameter(ParseParameters(rawParams[1..]), 0, 1));
+                    KittyPopFlags(GetParameter(
+                        CsiDecoder.ParseParameterList(command.RawParameters[1..]),
+                        0,
+                        1));
                 }
-                else if (rawParams.Length > 0 && rawParams[0] == '=')
+                else if (command.RawParameters.Length > 0 && command.RawParameters[0] == '=')
                 {
-                    string modeParams = rawParams[1..];
-                    int?[] mp = ParseParameters(modeParams);
-                    KittySetFlags(GetParameter(mp, 0, 0), GetParameter(mp, 1, 1));
+                    int?[] modeParameters = CsiDecoder.ParseParameterList(command.RawParameters[1..]);
+                    KittySetFlags(
+                        GetParameter(modeParameters, 0, 0),
+                        GetParameter(modeParameters, 1, 1));
                 }
                 else
                 {
@@ -3595,26 +3599,6 @@ internal sealed class AnsiTerminalBuffer
     private static bool IsRegionalIndicator(Rune rune)
     {
         return rune.Value is >= 0x1F1E6 and <= 0x1F1FF;
-    }
-
-    private static int?[] ParseParameters(string paramText)
-    {
-        if (string.IsNullOrEmpty(paramText))
-        {
-            return Array.Empty<int?>();
-        }
-
-        string[] parts = paramText.Split(';');
-        var result = new int?[parts.Length];
-        for (int index = 0; index < parts.Length; index++)
-        {
-            if (int.TryParse(parts[index], out int value))
-            {
-                result[index] = value;
-            }
-        }
-
-        return result;
     }
 
 
