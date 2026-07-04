@@ -7,8 +7,6 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Globalization;
-
 using Terminal.Unicode;
 using Terminal.Settings;
 using Terminal.Rendering;
@@ -1174,11 +1172,9 @@ internal sealed class AnsiTerminalBuffer
 
     private void DispatchOsc(string content)
     {
-        int separatorIndex = content.IndexOf(';');
-        // Reset sequences (OSC 104/110/111/112) are commonly sent without any parameter and thus
-        // carry no ';', so the command may be the entire payload.
-        string command = separatorIndex >= 0 ? content[..separatorIndex] : content;
-        string value = separatorIndex >= 0 ? content[(separatorIndex + 1)..] : string.Empty;
+        OscCommand oscCommand = OscDecoder.Decode(content);
+        string command = oscCommand.Command;
+        string value = oscCommand.Value;
         if (command.Length == 0)
         {
             return;
@@ -1275,22 +1271,14 @@ internal sealed class AnsiTerminalBuffer
 
     private void DispatchOscTaskbarProgress(string value)
     {
-        // value は "4;<state>;<progress>"（先頭の "4" は呼び出し側で判別済み）。
-        string[] parts = value.Split(';');
-        if (parts.Length < 2 || !int.TryParse(parts[1], out int state) || state is < 0 or > 4)
+        if (!OscDecoder.TryDecodeTaskbarProgress(value, out OscTaskbarProgress progress))
         {
-            // 不正な state（未指定含む）は無視。
             return;
         }
 
-        int progress = 0;
-        if (parts.Length >= 3 && int.TryParse(parts[2], out int rawProgress))
-        {
-            // 省略・不正値は 0、範囲外は 0–100 にクランプ。
-            progress = Math.Clamp(rawProgress, 0, 100);
-        }
-
-        TaskbarProgressChanged?.Invoke(this, new TaskbarProgressEventArgs(state, progress));
+        TaskbarProgressChanged?.Invoke(
+            this,
+            new TaskbarProgressEventArgs(progress.State, progress.Progress));
     }
 
     private void DispatchOscPaletteChange(string value)
@@ -1306,9 +1294,9 @@ internal sealed class AnsiTerminalBuffer
             string colorSpec = parts[i + 1];
             if (colorSpec == "?")
             {
-                EmitInputSequence($"]4;{paletteIndex};{FormatRgbColor(_ansiPalette[paletteIndex])}");
+                EmitInputSequence($"]4;{paletteIndex};{OscDecoder.FormatColor(_ansiPalette[paletteIndex])}");
             }
-            else if (TryParseOscColorSpec(colorSpec, out Color color))
+            else if (OscDecoder.TryParseColor(colorSpec, out Color color))
             {
                 _ansiPalette[paletteIndex] = color;
                 InvalidateScreenRenderCache();
@@ -1327,14 +1315,14 @@ internal sealed class AnsiTerminalBuffer
                 "11" => _defaultBackground,
                 _ => _cursorAccent
             };
-            EmitInputSequence($"]{command};{FormatRgbColor(queryColor)}");
+            EmitInputSequence($"]{command};{OscDecoder.FormatColor(queryColor)}");
             return;
         }
 
         // A set request may carry several ';'-separated specs; only the first applies to this OSC index.
         int specEnd = value.IndexOf(';');
         string spec = specEnd >= 0 ? value[..specEnd] : value;
-        if (!TryParseOscColorSpec(spec, out Color parsed))
+        if (!OscDecoder.TryParseColor(spec, out Color parsed))
         {
             return;
         }
@@ -1396,147 +1384,26 @@ internal sealed class AnsiTerminalBuffer
 
     private void DispatchOscShellIntegration(string value)
     {
-        int separatorIndex = value.IndexOf(';');
-        string type = separatorIndex >= 0 ? value[..separatorIndex] : value;
-        string parameters = separatorIndex >= 0 ? value[(separatorIndex + 1)..] : string.Empty;
-
-        if (type == "E")
+        OscShellPayload payload = OscDecoder.DecodeShellIntegration(value);
+        switch (payload.Kind)
         {
-            // 633;E;<command> reports the command line itself (Windows Terminal
-            // shell-integration). A trailing ;<nonce> may follow but we never emit one.
-            ShellCommandLineReceived?.Invoke(this, DecodeShellCommandLine(parameters));
-            return;
-        }
-
-        if (type == "P")
-        {
-            // 633;P;<Key>=<Value> sets a shell property. We consume HistoryPath
-            // (the encoded PSReadLine history file location) and ignore others.
-            int equals = parameters.IndexOf('=');
-            if (equals > 0 &&
-                parameters[..equals].Equals("HistoryPath", StringComparison.OrdinalIgnoreCase))
-            {
-                ShellHistoryPathReceived?.Invoke(this, DecodeShellCommandLine(parameters[(equals + 1)..]));
-            }
-
-            return;
-        }
-
-        ShellCommandZoneType? zoneType = type switch
-        {
-            "A" => ShellCommandZoneType.PromptStart,
-            "B" => ShellCommandZoneType.CommandStart,
-            "C" => ShellCommandZoneType.CommandExecuted,
-            "D" => ShellCommandZoneType.CommandDone,
-            _ => null
-        };
-
-        if (zoneType is null)
-        {
-            return;
-        }
-
-        int? exitCode = null;
-        if (zoneType == ShellCommandZoneType.CommandDone)
-        {
-            int semicolonInParams = parameters.IndexOf(';');
-            string exitCodeStr = semicolonInParams >= 0 ? parameters[..semicolonInParams] : parameters;
-            if (int.TryParse(exitCodeStr, out int code))
-            {
-                exitCode = code;
-            }
-        }
-
-        int absoluteLine = _scrollback.Count + _cursorRow;
-        ShellCommandZoneReceived?.Invoke(this, new ShellCommandZoneEventArgs(zoneType.Value, absoluteLine, exitCode));
-    }
-
-    /// <summary>
-    /// Reverses the escaping the shell-integration script applies to a command
-    /// line before transmitting it in OSC 633;E: <c>\\</c> for backslash and
-    /// <c>\xNN</c> for control characters and the <c>;</c> field separator.
-    /// </summary>
-    private static string DecodeShellCommandLine(string encoded)
-    {
-        if (encoded.IndexOf('\\') < 0)
-        {
-            return encoded;
-        }
-
-        var builder = new StringBuilder(encoded.Length);
-        for (int i = 0; i < encoded.Length; i++)
-        {
-            char c = encoded[i];
-            if (c == '\\' && i + 1 < encoded.Length)
-            {
-                char next = encoded[i + 1];
-                if (next == '\\')
+            case OscShellPayloadKind.CommandLine:
+                ShellCommandLineReceived?.Invoke(this, payload.Value!);
+                break;
+            case OscShellPayloadKind.Property:
+                if (payload.PropertyName!.Equals("HistoryPath", StringComparison.OrdinalIgnoreCase))
                 {
-                    builder.Append('\\');
-                    i++;
-                    continue;
+                    ShellHistoryPathReceived?.Invoke(this, payload.Value!);
                 }
 
-                if (next == 'x' && i + 3 < encoded.Length &&
-                    byte.TryParse(encoded.AsSpan(i + 2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out byte code))
-                {
-                    builder.Append((char)code);
-                    i += 3;
-                    continue;
-                }
-            }
-
-            builder.Append(c);
+                break;
+            case OscShellPayloadKind.Zone:
+                int absoluteLine = _scrollback.Count + _cursorRow;
+                ShellCommandZoneReceived?.Invoke(
+                    this,
+                    new ShellCommandZoneEventArgs(payload.ZoneType!.Value, absoluteLine, payload.ExitCode));
+                break;
         }
-
-        return builder.ToString();
-    }
-
-    private static bool TryParseOscColorSpec(string spec, out Color color)
-    {
-        color = default;
-        if (spec.StartsWith("rgb:", StringComparison.OrdinalIgnoreCase))
-        {
-            string[] components = spec[4..].Split('/');
-            if (components.Length != 3)
-            {
-                return false;
-            }
-
-            if (!TryParseHexColorComponent(components[0], out byte r)) return false;
-            if (!TryParseHexColorComponent(components[1], out byte g)) return false;
-            if (!TryParseHexColorComponent(components[2], out byte b)) return false;
-            color = Color.FromRgb(r, g, b);
-            return true;
-        }
-
-        if (spec.StartsWith('#') && spec.Length >= 7)
-        {
-            if (!byte.TryParse(spec.AsSpan(1, 2), System.Globalization.NumberStyles.HexNumber, null, out byte r)) return false;
-            if (!byte.TryParse(spec.AsSpan(3, 2), System.Globalization.NumberStyles.HexNumber, null, out byte g)) return false;
-            if (!byte.TryParse(spec.AsSpan(5, 2), System.Globalization.NumberStyles.HexNumber, null, out byte b)) return false;
-            color = Color.FromRgb(r, g, b);
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool TryParseHexColorComponent(string hex, out byte value)
-    {
-        int len = Math.Min(2, hex.Length);
-        if (len == 0)
-        {
-            value = 0;
-            return false;
-        }
-
-        return byte.TryParse(hex.AsSpan(0, len), System.Globalization.NumberStyles.HexNumber, null, out value);
-    }
-
-    private static string FormatRgbColor(Color color)
-    {
-        return $"rgb:{color.R:x2}{color.R:x2}/{color.G:x2}{color.G:x2}/{color.B:x2}{color.B:x2}";
     }
 
     private void DispatchOscHyperlink(string value)
