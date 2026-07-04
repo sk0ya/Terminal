@@ -1067,11 +1067,10 @@ internal sealed class AnsiTerminalBuffer
 
     private void DispatchDcs(string content)
     {
-        // DECRQSS: ESC P $ q <Pt> ST  (buffer contains "$q<Pt>")
-        if (content.StartsWith("$q", StringComparison.Ordinal))
+        DcsCommand command = DcsDecoder.Decode(content);
+        if (command.Kind == DcsCommandKind.Decrqss)
         {
-            string pt = content[2..];
-            string? status = pt switch
+            string? status = command.RequestToken switch
             {
                 " q" => $"{GetCursorStyleParameter()} q", // DECSCUSR
                 "m" => SerializeCurrentSgr(),              // SGR
@@ -1093,10 +1092,7 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
-        // Sixel: ESC P <P1>;<P2>;<P3> q <data> ST. The buffer holds "<params>q<data>"; the 'q' is
-        // the final character of the DCS introducer.
-        int introducer = content.IndexOf('q');
-        if (introducer >= 0 && IsSixelIntroducer(content, introducer))
+        if (command.Kind == DcsCommandKind.Sixel)
         {
             // Sixel graphics are not supported; the sequence is consumed and ignored.
             return;
@@ -1152,22 +1148,6 @@ internal sealed class AnsiTerminalBuffer
         }
 
         return $"{string.Join(';', parameters)}m";
-    }
-
-    private static bool IsSixelIntroducer(string content, int introducerIndex)
-    {
-        // Everything before the 'q' must be numeric Sixel parameters (digits / ';'), so a DECRQSS
-        // or other DCS that merely contains a 'q' in its payload is not mistaken for Sixel.
-        for (int index = 0; index < introducerIndex; index++)
-        {
-            char ch = content[index];
-            if (ch is not ((>= '0' and <= '9') or ';'))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private void DispatchOsc(string content)
