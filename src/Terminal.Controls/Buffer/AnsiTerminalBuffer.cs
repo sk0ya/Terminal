@@ -1035,17 +1035,7 @@ internal sealed class AnsiTerminalBuffer
 
     private void FillScreenForAlignment()
     {
-        for (int row = 0; row < _screen.Count; row++)
-        {
-            TerminalCell[] cells = _screen[row].Cells;
-            for (int column = 0; column < cells.Length; column++)
-            {
-                cells[column] = new TerminalCell("E", TerminalStyle.Default, Hyperlink: null, IsContinuation: false, Width: 1);
-            }
-
-            _screen[row].IsWrapped = false;
-        }
-
+        _screenStore.FillAlignment();
         _cursorRow = 0;
         _cursorColumn = 0;
         InvalidateScreenRenderCache();
@@ -2546,43 +2536,18 @@ internal sealed class AnsiTerminalBuffer
     private void InsertCharacters(int count)
     {
         int rightLimit = _leftRightMarginEnabled ? _rightMargin + 1 : _columns;
-        int insertCount = Math.Min(Math.Max(count, 1), rightLimit - _cursorColumn);
-        TerminalCell[] cells = _screen[_cursorRow].Cells;
-        for (int column = rightLimit - 1; column >= _cursorColumn + insertCount; column--)
-        {
-            cells[column] = cells[column - insertCount];
-        }
-
-        for (int column = _cursorColumn; column < _cursorColumn + insertCount; column++)
-        {
-            cells[column] = CreateBlankCell(_currentStyle);
-        }
+        _screenStore.InsertCharacters(_cursorRow, _cursorColumn, rightLimit, count, _currentStyle);
     }
 
     private void DeleteCharacters(int count)
     {
         int rightLimit = _leftRightMarginEnabled ? _rightMargin + 1 : _columns;
-        int deleteCount = Math.Min(Math.Max(count, 1), rightLimit - _cursorColumn);
-        TerminalCell[] cells = _screen[_cursorRow].Cells;
-        for (int column = _cursorColumn; column < rightLimit - deleteCount; column++)
-        {
-            cells[column] = cells[column + deleteCount];
-        }
-
-        for (int column = rightLimit - deleteCount; column < rightLimit; column++)
-        {
-            cells[column] = CreateBlankCell(_currentStyle);
-        }
+        _screenStore.DeleteCharacters(_cursorRow, _cursorColumn, rightLimit, count, _currentStyle);
     }
 
     private void EraseCharacters(int count)
     {
-        int eraseCount = Math.Min(Math.Max(count, 1), _columns - _cursorColumn);
-        TerminalCell[] cells = _screen[_cursorRow].Cells;
-        for (int column = _cursorColumn; column < _cursorColumn + eraseCount; column++)
-        {
-            cells[column] = CreateBlankCell(_currentStyle);
-        }
+        _screenStore.EraseCharacters(_cursorRow, _cursorColumn, count, _columns, _currentStyle);
     }
 
     private void ClearDisplay(int mode)
@@ -2632,31 +2597,20 @@ internal sealed class AnsiTerminalBuffer
         switch (mode)
         {
             case 0:
-                FillRange(_screen[_cursorRow], _cursorColumn, rightLimit);
+                _screenStore.FillRange(_cursorRow, _cursorColumn, rightLimit, _columns, _currentStyle);
                 break;
             case 1:
-                FillRange(_screen[_cursorRow], leftLimit, _cursorColumn + 1);
+                _screenStore.FillRange(_cursorRow, leftLimit, _cursorColumn + 1, _columns, _currentStyle);
                 break;
             case 2:
-                FillRange(_screen[_cursorRow], leftLimit, rightLimit);
+                _screenStore.FillRange(_cursorRow, leftLimit, rightLimit, _columns, _currentStyle);
                 break;
         }
     }
 
     private void ClearEntireLine(int row)
     {
-        FillRange(_screen[row], 0, _columns);
-        _screen[row].IsWrapped = false;
-    }
-
-    private void FillRange(TerminalLine line, int startColumn, int endExclusive)
-    {
-        int start = Math.Clamp(startColumn, 0, _columns);
-        int end = Math.Clamp(endExclusive, 0, _columns);
-        for (int column = start; column < end; column++)
-        {
-            line.Cells[column] = CreateBlankCell(_currentStyle);
-        }
+        _screenStore.FillRange(row, 0, _columns, _columns, _currentStyle, clearWrapped: true);
     }
 
     private void PutText(string text, int width)
@@ -2690,14 +2644,19 @@ internal sealed class AnsiTerminalBuffer
             }
         }
 
-        TerminalLine line = _screen[_cursorRow];
         if (_insertMode)
         {
             InsertCharacters(normalizedWidth);
         }
 
-        ClearWideOverlap(line, _cursorColumn);
-        line.Cells[_cursorColumn] = new TerminalCell(text, _currentStyle, _currentHyperlink, IsContinuation: false, Width: normalizedWidth);
+        _screenStore.PlaceCell(
+            _cursorRow,
+            _cursorColumn,
+            text,
+            normalizedWidth,
+            _columns,
+            _currentStyle,
+            _currentHyperlink);
 
         if (normalizedWidth == 2)
         {
@@ -2706,8 +2665,6 @@ internal sealed class AnsiTerminalBuffer
                 _cursorColumn = _columns;
                 return;
             }
-
-            line.Cells[_cursorColumn + 1] = new TerminalCell(string.Empty, _currentStyle, _currentHyperlink, IsContinuation: true, Width: 0);
         }
 
         _cursorColumn += normalizedWidth;
@@ -2939,21 +2896,6 @@ internal sealed class AnsiTerminalBuffer
         }
 
         return -1;
-    }
-
-    private void ClearWideOverlap(TerminalLine line, int column)
-    {
-        if (column > 0 && line.Cells[column].IsContinuation)
-        {
-            line.Cells[column - 1] = CreateBlankCell(_currentStyle);
-            line.Cells[column] = CreateBlankCell(_currentStyle);
-        }
-
-        if (column + 1 < _columns && line.Cells[column + 1].IsContinuation && !line.Cells[column].IsContinuation)
-        {
-            line.Cells[column] = CreateBlankCell(_currentStyle);
-            line.Cells[column + 1] = CreateBlankCell(_currentStyle);
-        }
     }
 
     private void MoveDownAndScrollIfNeeded()

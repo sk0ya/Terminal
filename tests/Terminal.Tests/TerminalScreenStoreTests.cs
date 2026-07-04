@@ -119,6 +119,65 @@ public sealed class TerminalScreenStoreTests
         Assert.Empty(store.Scrollback);
     }
 
+    [Fact]
+    public void PlaceCellOverWideContinuationClearsTheWholePreviousCell()
+    {
+        var store = new TerminalScreenStore(rows: 1, columns: 4, scrollbackLimit: 0);
+        store.PlaceCell(0, 1, "界", width: 2, columns: 4, TerminalStyle.Default, hyperlink: null);
+
+        store.PlaceCell(0, 2, "X", width: 1, columns: 4, TerminalStyle.Default, hyperlink: null);
+
+        Assert.Equal(" ", store.Screen[0].Cells[1].Text);
+        Assert.False(store.Screen[0].Cells[1].IsContinuation);
+        Assert.Equal("X", store.Screen[0].Cells[2].Text);
+        Assert.False(store.Screen[0].Cells[2].IsContinuation);
+    }
+
+    [Fact]
+    public void EraseCharactersUsesCurrentBlankStyle()
+    {
+        var store = new TerminalScreenStore(rows: 1, columns: 4, scrollbackLimit: 0);
+        store.Screen[0] = Line(4, "ABCD");
+        TerminalStyle eraseStyle = TerminalStyle.Default with { Bold = true };
+
+        store.EraseCharacters(row: 0, column: 1, count: 2, columns: 4, eraseStyle);
+
+        Assert.Equal("A  D", TerminalLineSnapshotBuilder.ExtractPlainText(store.Screen[0]));
+        Assert.Equal(eraseStyle, store.Screen[0].Cells[1].Style);
+        Assert.Equal(eraseStyle, store.Screen[0].Cells[2].Style);
+    }
+
+    [Fact]
+    public void FillRangeCanClearRegionWithoutClearingWrappedFlag()
+    {
+        var store = new TerminalScreenStore(rows: 1, columns: 4, scrollbackLimit: 0);
+        store.Screen[0] = Line(4, "ABCD");
+        store.Screen[0].IsWrapped = true;
+
+        store.FillRange(0, 1, 3, 4, TerminalStyle.Default);
+
+        Assert.Equal("A  D", TerminalLineSnapshotBuilder.ExtractPlainText(store.Screen[0]));
+        Assert.True(store.Screen[0].IsWrapped);
+
+        store.FillRange(0, 0, 4, 4, TerminalStyle.Default, clearWrapped: true);
+        Assert.False(store.Screen[0].IsWrapped);
+    }
+
+    [Fact]
+    public void FillAlignmentResetsEveryCellAndWrappedFlag()
+    {
+        var store = new TerminalScreenStore(rows: 2, columns: 3, scrollbackLimit: 0);
+        store.Screen[0].IsWrapped = true;
+
+        store.FillAlignment();
+
+        Assert.All(store.Screen, line =>
+        {
+            Assert.Equal("EEE", Text(line));
+            Assert.False(line.IsWrapped);
+        });
+    }
+
     private static TerminalLine Line(int columns, string text)
     {
         var line = new TerminalLine(columns, TerminalStyle.Default);

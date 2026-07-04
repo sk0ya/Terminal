@@ -184,6 +184,115 @@ internal sealed class TerminalScreenStore
         }
     }
 
+    public void InsertCharacters(int row, int column, int rightLimit, int count, TerminalStyle blankStyle)
+    {
+        int insertCount = Math.Min(Math.Max(count, 1), rightLimit - column);
+        TerminalCell[] cells = Screen[row].Cells;
+        for (int target = rightLimit - 1; target >= column + insertCount; target--)
+        {
+            cells[target] = cells[target - insertCount];
+        }
+
+        FillRange(row, column, column + insertCount, cells.Length, blankStyle);
+    }
+
+    public void DeleteCharacters(int row, int column, int rightLimit, int count, TerminalStyle blankStyle)
+    {
+        int deleteCount = Math.Min(Math.Max(count, 1), rightLimit - column);
+        TerminalCell[] cells = Screen[row].Cells;
+        for (int target = column; target < rightLimit - deleteCount; target++)
+        {
+            cells[target] = cells[target + deleteCount];
+        }
+
+        FillRange(row, rightLimit - deleteCount, rightLimit, cells.Length, blankStyle);
+    }
+
+    public void EraseCharacters(int row, int column, int count, int columns, TerminalStyle blankStyle)
+    {
+        int eraseCount = Math.Min(Math.Max(count, 1), columns - column);
+        FillRange(row, column, column + eraseCount, columns, blankStyle);
+    }
+
+    public void FillRange(
+        int row,
+        int startColumn,
+        int endExclusive,
+        int columns,
+        TerminalStyle blankStyle,
+        bool clearWrapped = false)
+    {
+        int start = Math.Clamp(startColumn, 0, columns);
+        int end = Math.Clamp(endExclusive, 0, columns);
+        for (int column = start; column < end; column++)
+        {
+            Screen[row].Cells[column] = TerminalCell.CreateBlank(blankStyle);
+        }
+
+        if (clearWrapped)
+        {
+            Screen[row].IsWrapped = false;
+        }
+    }
+
+    public void FillAlignment()
+    {
+        foreach (TerminalLine line in Screen)
+        {
+            for (int column = 0; column < line.Cells.Length; column++)
+            {
+                line.Cells[column] = new TerminalCell(
+                    "E",
+                    TerminalStyle.Default,
+                    Hyperlink: null,
+                    IsContinuation: false,
+                    Width: 1);
+            }
+
+            line.IsWrapped = false;
+        }
+    }
+
+    public void PlaceCell(
+        int row,
+        int column,
+        string text,
+        int width,
+        int columns,
+        TerminalStyle style,
+        string? hyperlink)
+    {
+        TerminalLine line = Screen[row];
+        ClearWideOverlap(line, column, columns, style);
+        line.Cells[column] = new TerminalCell(text, style, hyperlink, IsContinuation: false, Width: width);
+        if (width == 2 && column + 1 < columns)
+        {
+            line.Cells[column + 1] = new TerminalCell(
+                string.Empty,
+                style,
+                hyperlink,
+                IsContinuation: true,
+                Width: 0);
+        }
+    }
+
+    private static void ClearWideOverlap(TerminalLine line, int column, int columns, TerminalStyle blankStyle)
+    {
+        if (column > 0 && line.Cells[column].IsContinuation)
+        {
+            line.Cells[column - 1] = TerminalCell.CreateBlank(blankStyle);
+            line.Cells[column] = TerminalCell.CreateBlank(blankStyle);
+        }
+
+        if (column + 1 < columns &&
+            line.Cells[column + 1].IsContinuation &&
+            !line.Cells[column].IsContinuation)
+        {
+            line.Cells[column] = TerminalCell.CreateBlank(blankStyle);
+            line.Cells[column + 1] = TerminalCell.CreateBlank(blankStyle);
+        }
+    }
+
     private static List<TerminalLine> CreateScreen(int rows, int columns, TerminalStyle blankStyle)
     {
         var screen = new List<TerminalLine>(rows);
