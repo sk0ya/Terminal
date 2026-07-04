@@ -153,6 +153,84 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void CsiSequenceCanSpanProcessCalls()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 5);
+
+        buffer.Process("A\u001b[");
+        Assert.Equal("A", buffer.GetScreenLineText(0).TrimEnd());
+
+        buffer.Process("2;4");
+        buffer.Process("HZ");
+
+        Assert.Equal("   Z", buffer.GetScreenLineText(1).TrimEnd());
+        Assert.Equal(1, buffer.CursorRow);
+        Assert.Equal(4, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void OscSequenceCanSpanProcessCallsAndFiresOnlyWhenTerminated()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 5);
+        var commands = new List<string>();
+        buffer.ShellCommandLineReceived += (_, command) => commands.Add(command);
+
+        buffer.Process("\u001b]");
+        buffer.Process("633;E;git status\u001b");
+        Assert.Empty(commands);
+
+        buffer.Process("\\");
+
+        Assert.Equal(new[] { "git status" }, commands);
+    }
+
+    [Fact]
+    public void DcsSequenceCanSpanProcessCallsAndRecoversAfterTerminator()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 5);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, response) => responses.Add(response);
+
+        buffer.Process("\u001bP$");
+        buffer.Process("qm\u001b");
+        Assert.Empty(responses);
+
+        buffer.Process("\\X");
+
+        Assert.Equal(new[] { "\u001bP1$r0m\u001b\\" }, responses);
+        Assert.Equal("X", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void IncompleteUnknownCsiIsConsumedUntilItsFinalByteThenTextResumes()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 5);
+
+        buffer.Process("A\u001b[12");
+        Assert.Equal("A", buffer.GetScreenLineText(0).TrimEnd());
+
+        buffer.Process("zBC");
+
+        Assert.Equal("ABC", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void SplitShellIntegrationSequencesPreserveEventOrder()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 5);
+        var events = new List<string>();
+        buffer.ShellCommandLineReceived += (_, command) => events.Add($"command:{command}");
+        buffer.ShellCommandZoneReceived += (_, zone) => events.Add($"zone:{zone.ZoneType}");
+
+        buffer.Process("\u001b]633;E;dotnet test\u0007\u001b]133;");
+        Assert.Equal(new[] { "command:dotnet test" }, events);
+
+        buffer.Process("C\u0007");
+
+        Assert.Equal(new[] { "command:dotnet test", "zone:CommandExecuted" }, events);
+    }
+
+    [Fact]
     public void LongAsciiRunWrapsAcrossLinesViaFastPath()
     {
         var buffer = new AnsiTerminalBuffer(20, 6);
@@ -424,6 +502,39 @@ public sealed class AnsiTerminalBufferTests
 
         Assert.Equal("1234567890123456789", buffer.GetScreenLineText(0).TrimEnd());
         Assert.Equal("界Z", buffer.GetScreenLineText(1).TrimEnd());
+    }
+
+    [Fact]
+    public void ResizeReflowsCombiningAndWideClustersWithoutSeparatingThem()
+    {
+        var buffer = new AnsiTerminalBuffer(24, 5);
+        const string prefix = "123456789012345678";
+        buffer.Process(prefix + "a\u0301界Z");
+
+        buffer.Resize(20, 5);
+
+        Assert.Equal(prefix + "a\u0301", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("界Z", buffer.GetScreenLineText(1).TrimEnd());
+        Assert.Equal(1, buffer.CursorRow);
+        Assert.Equal(3, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void SplitAlternateScreenTransitionsPreservePrimaryContentAcrossResize()
+    {
+        var buffer = new AnsiTerminalBuffer(24, 5);
+        buffer.Process("primary\u001b[?104");
+        buffer.Process("9halternate");
+
+        Assert.True(buffer.IsAlternateScreenActive);
+        Assert.Equal("alternate", buffer.GetScreenLineText(0).TrimEnd());
+
+        buffer.Resize(20, 6);
+        buffer.Process("\u001b[?1049");
+        buffer.Process("l");
+
+        Assert.False(buffer.IsAlternateScreenActive);
+        Assert.Equal("primary", buffer.GetScreenLineText(0).TrimEnd());
     }
 
     [Fact]
