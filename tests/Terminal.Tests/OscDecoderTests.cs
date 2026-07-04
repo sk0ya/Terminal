@@ -94,4 +94,72 @@ public sealed class OscDecoderTests
     {
         Assert.False(OscDecoder.TryParseColor(raw, out _));
     }
+
+    [Theory]
+    [InlineData(";?", OscClipboardKind.Query, "c", null)]
+    [InlineData("s0;?", OscClipboardKind.Query, "s0", null)]
+    [InlineData("c;", OscClipboardKind.Set, "c", "")]
+    [InlineData("c;dGVzdA", OscClipboardKind.Set, "c", "test")]
+    public void DecodeClipboardHandlesQuerySetAndUnpaddedBase64(
+        string raw,
+        object kind,
+        string targets,
+        string? text)
+    {
+        OscClipboardPayload payload = OscDecoder.DecodeClipboard(raw);
+
+        Assert.Equal((OscClipboardKind)kind, payload.Kind);
+        Assert.Equal(targets, payload.SelectionTargets);
+        Assert.Equal(text, payload.Text);
+    }
+
+    [Theory]
+    [InlineData("missing-separator")]
+    [InlineData("c;%%%")]
+    public void DecodeClipboardReturnsInvalidForMalformedPayload(string raw)
+    {
+        Assert.Equal(OscClipboardKind.Invalid, OscDecoder.DecodeClipboard(raw).Kind);
+    }
+
+    [Fact]
+    public void DecodePaletteChangesReturnsValidInRangePairsOnly()
+    {
+        OscPaletteChange[] changes = OscDecoder.DecodePaletteChanges(
+            "1;?;2;#123456;99;?;3;bad;4",
+            paletteLength: 16);
+
+        Assert.Equal(2, changes.Length);
+        Assert.Equal(new OscPaletteChange(1, OscPaletteChangeKind.Query), changes[0]);
+        Assert.Equal(
+            new OscPaletteChange(2, OscPaletteChangeKind.Set, Color.FromRgb(0x12, 0x34, 0x56)),
+            changes[1]);
+    }
+
+    [Fact]
+    public void DecodePaletteResetDistinguishesAllFromValidIndices()
+    {
+        OscPaletteReset all = OscDecoder.DecodePaletteReset(string.Empty, paletteLength: 16);
+        OscPaletteReset selected = OscDecoder.DecodePaletteReset("1;bad;16;-1;1;3", paletteLength: 16);
+
+        Assert.True(all.ResetAll);
+        Assert.Empty(all.Indices);
+        Assert.False(selected.ResetAll);
+        Assert.Equal([1, 1, 3], selected.Indices);
+    }
+
+    [Theory]
+    [InlineData("file://localhost/C:/Users/A%20B", "C:/Users/A B")]
+    [InlineData("file:///home/user/project", "/home/user/project")]
+    [InlineData("/bare/path", "/bare/path")]
+    public void TryDecodeCurrentDirectoryConvertsFileUriAndPreservesBarePath(string raw, string expected)
+    {
+        Assert.True(OscDecoder.TryDecodeCurrentDirectory(raw, out string path));
+        Assert.Equal(expected, path);
+    }
+
+    [Fact]
+    public void TryDecodeCurrentDirectoryRejectsEmptyValue()
+    {
+        Assert.False(OscDecoder.TryDecodeCurrentDirectory(string.Empty, out _));
+    }
 }

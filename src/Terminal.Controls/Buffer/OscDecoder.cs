@@ -8,6 +8,31 @@ internal readonly record struct OscCommand(string Command, string Value);
 
 internal readonly record struct OscTaskbarProgress(int State, int Progress);
 
+internal enum OscClipboardKind
+{
+    Invalid,
+    Query,
+    Set
+}
+
+internal readonly record struct OscClipboardPayload(
+    OscClipboardKind Kind,
+    string SelectionTargets,
+    string? Text = null);
+
+internal enum OscPaletteChangeKind
+{
+    Query,
+    Set
+}
+
+internal readonly record struct OscPaletteChange(
+    int Index,
+    OscPaletteChangeKind Kind,
+    Color Color = default);
+
+internal readonly record struct OscPaletteReset(bool ResetAll, int[] Indices);
+
 internal enum OscShellPayloadKind
 {
     Unknown,
@@ -49,6 +74,108 @@ internal static class OscDecoder
         }
 
         progress = new OscTaskbarProgress(state, percentage);
+        return true;
+    }
+
+    public static OscClipboardPayload DecodeClipboard(string value)
+    {
+        int separatorIndex = value.IndexOf(';');
+        if (separatorIndex < 0)
+        {
+            return default;
+        }
+
+        string selectionTargets = value[..separatorIndex];
+        string payload = value[(separatorIndex + 1)..];
+        string normalizedTargets = string.IsNullOrEmpty(selectionTargets) ? "c" : selectionTargets;
+        if (payload == "?")
+        {
+            return new OscClipboardPayload(OscClipboardKind.Query, normalizedTargets);
+        }
+
+        if (payload.Length == 0)
+        {
+            return new OscClipboardPayload(OscClipboardKind.Set, normalizedTargets, string.Empty);
+        }
+
+        try
+        {
+            byte[] decoded = Convert.FromBase64String(NormalizeBase64(payload));
+            return new OscClipboardPayload(
+                OscClipboardKind.Set,
+                normalizedTargets,
+                Encoding.UTF8.GetString(decoded));
+        }
+        catch (FormatException)
+        {
+            return default;
+        }
+    }
+
+    public static OscPaletteChange[] DecodePaletteChanges(string value, int paletteLength)
+    {
+        string[] parts = value.Split(';');
+        var changes = new List<OscPaletteChange>();
+        for (int index = 0; index + 1 < parts.Length; index += 2)
+        {
+            if (!int.TryParse(parts[index], out int paletteIndex) ||
+                paletteIndex < 0 ||
+                paletteIndex >= paletteLength)
+            {
+                continue;
+            }
+
+            string colorSpec = parts[index + 1];
+            if (colorSpec == "?")
+            {
+                changes.Add(new OscPaletteChange(paletteIndex, OscPaletteChangeKind.Query));
+            }
+            else if (TryParseColor(colorSpec, out Color color))
+            {
+                changes.Add(new OscPaletteChange(paletteIndex, OscPaletteChangeKind.Set, color));
+            }
+        }
+
+        return changes.ToArray();
+    }
+
+    public static OscPaletteReset DecodePaletteReset(string value, int paletteLength)
+    {
+        if (value.Length == 0)
+        {
+            return new OscPaletteReset(ResetAll: true, []);
+        }
+
+        var indices = new List<int>();
+        foreach (string part in value.Split(';'))
+        {
+            if (int.TryParse(part, out int paletteIndex) &&
+                paletteIndex >= 0 &&
+                paletteIndex < paletteLength)
+            {
+                indices.Add(paletteIndex);
+            }
+        }
+
+        return new OscPaletteReset(ResetAll: false, indices.ToArray());
+    }
+
+    public static bool TryDecodeCurrentDirectory(string value, out string path)
+    {
+        path = value;
+        if (string.IsNullOrEmpty(value))
+        {
+            return false;
+        }
+
+        if (Uri.TryCreate(value, UriKind.Absolute, out Uri? directoryUri) && directoryUri.IsFile)
+        {
+            string decoded = Uri.UnescapeDataString(directoryUri.AbsolutePath);
+            path = decoded.Length >= 3 && decoded[0] == '/' && char.IsLetter(decoded[1]) && decoded[2] == ':'
+                ? decoded[1..]
+                : decoded;
+        }
+
         return true;
     }
 
@@ -194,5 +321,13 @@ internal static class OscDecoder
         }
 
         return byte.TryParse(hex.AsSpan(0, length), NumberStyles.HexNumber, null, out value);
+    }
+
+    private static string NormalizeBase64(string payload)
+    {
+        int remainder = payload.Length % 4;
+        return remainder == 0
+            ? payload
+            : payload.PadRight(payload.Length + (4 - remainder), '=');
     }
 }

@@ -1226,19 +1226,8 @@ internal sealed class AnsiTerminalBuffer
 
         if (command == "7")
         {
-            if (!string.IsNullOrEmpty(value))
+            if (OscDecoder.TryDecodeCurrentDirectory(value, out string localPath))
             {
-                string localPath = value;
-                if (Uri.TryCreate(value, UriKind.Absolute, out Uri? dirUri) && dirUri.IsFile)
-                {
-                    // Uri.LocalPath converts file://localhost/C:/foo to \\localhost\C:\foo (UNC) on Windows.
-                    // Decode AbsolutePath directly and strip the leading slash before a Windows drive letter.
-                    string decoded = Uri.UnescapeDataString(dirUri.AbsolutePath);
-                    localPath = decoded.Length >= 3 && decoded[0] == '/' && char.IsLetter(decoded[1]) && decoded[2] == ':'
-                        ? decoded[1..]
-                        : decoded;
-                }
-
                 CurrentDirectoryChanged?.Invoke(this, localPath);
             }
 
@@ -1283,22 +1272,16 @@ internal sealed class AnsiTerminalBuffer
 
     private void DispatchOscPaletteChange(string value)
     {
-        string[] parts = value.Split(';');
-        for (int i = 0; i + 1 < parts.Length; i += 2)
+        foreach (OscPaletteChange change in OscDecoder.DecodePaletteChanges(value, _ansiPalette.Length))
         {
-            if (!int.TryParse(parts[i], out int paletteIndex) || paletteIndex < 0 || paletteIndex >= _ansiPalette.Length)
+            if (change.Kind == OscPaletteChangeKind.Query)
             {
-                continue;
+                EmitInputSequence(
+                    $"]4;{change.Index};{OscDecoder.FormatColor(_ansiPalette[change.Index])}");
             }
-
-            string colorSpec = parts[i + 1];
-            if (colorSpec == "?")
+            else
             {
-                EmitInputSequence($"]4;{paletteIndex};{OscDecoder.FormatColor(_ansiPalette[paletteIndex])}");
-            }
-            else if (OscDecoder.TryParseColor(colorSpec, out Color color))
-            {
-                _ansiPalette[paletteIndex] = color;
+                _ansiPalette[change.Index] = change.Color;
                 InvalidateScreenRenderCache();
             }
         }
@@ -1365,20 +1348,18 @@ internal sealed class AnsiTerminalBuffer
     // OSC 104: reset one or more ANSI palette entries to the theme default. With no parameter, resets all.
     private void DispatchOscPaletteReset(string value)
     {
-        if (value.Length == 0)
+        OscPaletteReset reset = OscDecoder.DecodePaletteReset(value, _ansiPalette.Length);
+        if (reset.ResetAll)
         {
             Array.Copy(_defaultAnsiPalette, _ansiPalette, _defaultAnsiPalette.Length);
             InvalidateScreenRenderCache();
             return;
         }
 
-        foreach (string part in value.Split(';'))
+        foreach (int paletteIndex in reset.Indices)
         {
-            if (int.TryParse(part, out int paletteIndex) && paletteIndex >= 0 && paletteIndex < _ansiPalette.Length)
-            {
-                _ansiPalette[paletteIndex] = _defaultAnsiPalette[paletteIndex];
-                InvalidateScreenRenderCache();
-            }
+            _ansiPalette[paletteIndex] = _defaultAnsiPalette[paletteIndex];
+            InvalidateScreenRenderCache();
         }
     }
 
@@ -1420,34 +1401,16 @@ internal sealed class AnsiTerminalBuffer
 
     private void DispatchOscClipboard(string value)
     {
-        int separatorIndex = value.IndexOf(';');
-        if (separatorIndex < 0)
+        OscClipboardPayload payload = OscDecoder.DecodeClipboard(value);
+        if (payload.Kind == OscClipboardKind.Query)
         {
+            ClipboardQueryRequested?.Invoke(this, payload.SelectionTargets);
             return;
         }
 
-        string selectionTargets = value[..separatorIndex];
-        string payload = value[(separatorIndex + 1)..];
-        if (payload == "?")
+        if (payload.Kind == OscClipboardKind.Set)
         {
-            ClipboardQueryRequested?.Invoke(this, string.IsNullOrEmpty(selectionTargets) ? "c" : selectionTargets);
-            return;
-        }
-
-        if (payload.Length == 0)
-        {
-            ClipboardSetRequested?.Invoke(this, string.Empty);
-            return;
-        }
-
-        try
-        {
-            byte[] decoded = Convert.FromBase64String(NormalizeBase64(payload));
-            string text = Encoding.UTF8.GetString(decoded);
-            ClipboardSetRequested?.Invoke(this, text);
-        }
-        catch (FormatException)
-        {
+            ClipboardSetRequested?.Invoke(this, payload.Text!);
         }
     }
 
@@ -1743,14 +1706,6 @@ internal sealed class AnsiTerminalBuffer
         {
             InputSequenceGenerated?.Invoke(this, text);
         }
-    }
-
-    private static string NormalizeBase64(string payload)
-    {
-        int remainder = payload.Length % 4;
-        return remainder == 0
-            ? payload
-            : payload.PadRight(payload.Length + (4 - remainder), '=');
     }
 
     private TerminalMouseEncoding ResolveMouseEncoding()
