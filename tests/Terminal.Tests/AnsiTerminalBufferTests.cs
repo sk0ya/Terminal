@@ -2159,7 +2159,7 @@ public sealed class AnsiTerminalBufferTests
         buffer.Process("[5;20r");
         buffer.Process("P$qr\\");
 
-        Assert.Equal("P1$r1;20r\\", emitted);
+        Assert.Equal("P1$r5;20r\\", emitted);
     }
 
     [Fact]

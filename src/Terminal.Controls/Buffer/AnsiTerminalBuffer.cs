@@ -1551,22 +1551,24 @@ internal sealed class AnsiTerminalBuffer
         if (content.StartsWith("$q", StringComparison.Ordinal))
         {
             string pt = content[2..];
-            switch (pt)
+            string? status = pt switch
             {
-                case " q":
-                    // DECSCUSR (cursor style) — DCS 1 $ r Ps SP q ST
-                    EmitInputSequence($"P1$r{GetCursorStyleParameter()} q\\");
-                    break;
-                case "m":
-                    EmitInputSequence("P1$r0m\\");
-                    break;
-                case "r":
-                    EmitInputSequence($"P1$r1;{_scrollBottom + 1}r\\");
-                    break;
-                default:
-                    EmitInputSequence("P0$r\\");
-                    break;
-            }
+                " q" => $"{GetCursorStyleParameter()} q", // DECSCUSR
+                "m" => SerializeCurrentSgr(),              // SGR
+                "r" => $"{_scrollTop + 1};{_scrollBottom + 1}r", // DECSTBM
+                "s" => $"{_leftMargin + 1};{_rightMargin + 1}s", // DECSLRM
+                "\"p" => "62;1\"p",                    // DECSCL: VT220, 7-bit controls
+                "\"q" => "0\"q",                       // DECSCA: all cells erasable
+                "t" => $"{_rows}t",                       // DECSLPP
+                "$|" => $"{_columns}$|",                  // DECSCPP
+                "*|" => $"{_rows}*|",                     // DECSNLS
+                ">4m" => $">4;{_modifyOtherKeys}m",       // XTQMODKEYS for modifyOtherKeys
+                _ => null
+            };
+
+            EmitInputSequence(status is null
+                ? "P0$r\\"
+                : $"P1$r{status}\\");
 
             return;
         }
@@ -1581,6 +1583,55 @@ internal sealed class AnsiTerminalBuffer
         }
 
         // All other DCS sequences (DECUDK, etc.) are silently ignored.
+    }
+
+    private string SerializeCurrentSgr()
+    {
+        if (_currentStyle == TerminalStyle.Default)
+        {
+            return "0m";
+        }
+
+        // Start with a reset so the response describes the complete rendition rather than a delta.
+        // Color origin (ANSI/256/RGB) is not retained in TerminalStyle, so emit exact RGB values.
+        var parameters = new List<string> { "0" };
+        if (_currentStyle.Bold) parameters.Add("1");
+        if (_currentStyle.Dim) parameters.Add("2");
+        if (_currentStyle.Italic) parameters.Add("3");
+        if (_currentStyle.UnderlineStyle != UnderlineStyle.None)
+        {
+            parameters.Add(_currentStyle.UnderlineStyle switch
+            {
+                UnderlineStyle.Single => "4",
+                UnderlineStyle.Double => "4:2",
+                UnderlineStyle.Curly => "4:3",
+                UnderlineStyle.Dotted => "4:4",
+                UnderlineStyle.Dashed => "4:5",
+                _ => "4"
+            });
+        }
+
+        if (_currentStyle.Blink) parameters.Add("5");
+        if (_currentStyle.Inverse) parameters.Add("7");
+        if (_currentStyle.Invisible) parameters.Add("8");
+        if (_currentStyle.Strikethrough) parameters.Add("9");
+        if (_currentStyle.Overline) parameters.Add("53");
+        if (_currentStyle.Foreground is Color foreground)
+        {
+            parameters.Add($"38;2;{foreground.R};{foreground.G};{foreground.B}");
+        }
+
+        if (_currentStyle.Background is Color background)
+        {
+            parameters.Add($"48;2;{background.R};{background.G};{background.B}");
+        }
+
+        if (_currentStyle.UnderlineColor is Color underline)
+        {
+            parameters.Add($"58;2;{underline.R};{underline.G};{underline.B}");
+        }
+
+        return $"{string.Join(';', parameters)}m";
     }
 
     private static bool IsSixelIntroducer(string content, int introducerIndex)

@@ -99,6 +99,65 @@ public sealed class TerminalVtSequenceGapTests
     }
 
     [Fact]
+    public void DecrqssReportsCompleteCurrentSgr()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        buffer.Process("[1;2;3;4:3;5;7;8;9;53;38;2;1;2;3;48;2;4;5;6;58;2;7;8;9m");
+
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+        buffer.Process("P$qm\\");
+
+        Assert.Equal("P1$r0;1;2;3;4:3;5;7;8;9;53;38;2;1;2;3;48;2;4;5;6;58;2;7;8;9m\\", emitted);
+    }
+
+    [Fact]
+    public void DecrqssReportsCurrentRegionsAndDimensions()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 12);
+        buffer.Process("[3;9r[?69h[4;30s");
+        var emitted = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => emitted.Add(text);
+
+        buffer.Process("P$qr\\P$qs\\P$qt\\P$q$|\\P$q*|\\");
+
+        Assert.Equal(
+            [
+                "P1$r3;9r\\",
+                "P1$r4;30s\\",
+                "P1$r12t\\",
+                "P1$r40$|\\",
+                "P1$r12*|\\"
+            ],
+            emitted);
+    }
+
+    [Fact]
+    public void DecrqssReportsFixedConformanceAndErasableCharacterAttributes()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        var emitted = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => emitted.Add(text);
+
+        buffer.Process("P$q\"p\\P$q\"q\\");
+
+        Assert.Equal(["P1$r62;1\"p\\", "P1$r0\"q\\"], emitted);
+    }
+
+    [Fact]
+    public void DecrqssReportsModifyOtherKeysAndRejectsUnsupportedRequests()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        buffer.Process("[>4;2m");
+        var emitted = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => emitted.Add(text);
+
+        buffer.Process("P$q>4m\\P$q*x\\");
+
+        Assert.Equal(["P1$r>4;2m\\", "P0$r\\"], emitted);
+    }
+
+    [Fact]
     public void ReverseWraparoundBackspaceWrapsToPreviousLine()
     {
         var buffer = new AnsiTerminalBuffer(10, 3);

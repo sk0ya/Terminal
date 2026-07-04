@@ -31,8 +31,8 @@
 - ~~**OSC 9** — デスクトップ通知（Windows Toast）。長時間コマンドの完了通知に活用~~ **実装済み（WPF ポップアップバナー）**
 - ~~**OSC 9;4 タスクバー進捗** — ConEmu 由来 / Windows Terminal 互換の `ESC ] 9 ; 4 ; <state> ; <progress>` によるタスクバー進捗表示~~ **実装済み（`9;4;` プレフィックスのみ進捗として分岐しデスクトップ通知と非干渉、state 0=解除/1=通常/2=エラー/3=不確定/4=一時停止(警告)、progress は 0–100 クランプ・省略/不正は 0、不正 state は無視。`AnsiTerminalBuffer.TaskbarProgressChanged` → `TerminalTabView.TaskbarProgressChanged` で中継し `MainWindow` がアクティブタブの状態を `TaskbarItemInfo`（Normal/Error/Paused/Indeterminate/None）へ反映、タブ切替時は新アクティブタブの保持状態を反映）**
 - ~~**OSC 133 / 633** — シェル統合プロトコル（プロンプト・コマンド・出力のゾーンマーキング）。コマンドナビゲーション・意味的選択の前提~~ **実装済み（A/B/C/D マーカーを ShellCommandZoneReceived イベントで通知、Ctrl+Shift+↑/↓ でコマンドナビゲーション）**
-- ~~**DCS パーサ** — `ESC P...ST` の状態機械が未実装。Sixel / DECRQSS / DECUDK などが通らない~~ **実装済み（DECRQSS 応答、不明 DCS 無視、C1 ST 対応）**
-- ~~**Sixel グラフィクス** — `DCS ...q` による画素画像インライン表示。Yazi や gnuplot などが使用~~ **実装済み（純粋な `SixelDecoder`：ラスタ属性・RGB/HLS カラー定義・ランレングス・グラフィクス CR/LF・6 画素データをデコード。画像はセル単位のフットプリントでアンカー行に配置し、スクロールバックへ追従、`TerminalSurfaceControl` がグリッド整列で描画。インライン画像基盤は iTerm 1337 と共用）**
+- ~~**DCS パーサ** — `ESC P...ST` の状態機械が未実装。Sixel / DECRQSS / DECUDK などが通らない~~ **実装済み（DECRQSS は端末が保持するSGR・カーソル形状・スクロール領域・左右マージン・画面寸法・適合レベル・文字保護属性・modifyOtherKeysの現在値に応答し、非対応問い合わせには失敗応答。不明 DCS 無視、C1 ST 対応）**
+- **Sixel グラフィクス** — **意図的に非対応**。ConPTY の入出力経路では画像データとテキスト出力の順序・同期を安定して保証できず、表示崩れの原因になるため実装しない。`DCS ... q` は画面へ文字として漏れないよう消費して無視し、DA1でもSixel対応を広告しない
 - ~~**DECCOLM（mode 3）** — 80/132 列切り替え。一部の全画面アプリが発行する~~ **実装済み（mode 3h/3l、画面クリア・カーソルホーム・スクロール領域リセット）**
 - ~~**SGR マウスピクセルモード（1016）** — セル単位でなくピクセル座標で報告するマウスモード~~ **実装済み（DECSET 1016、SGR 暗黙有効、DECRQM 応答、ピクセル座標送信）**
 - ~~**BEL（ベル）対応** — `\a`（0x07）ベル。従来は OSC/DCS 終端としてのみ処理し通常状態では無視していた~~ **実装済み（可聴ベル＋非アクティブタブのベルインジケータ。通常状態の 0x07 で `AnsiTerminalBuffer.BellReceived` を発火（OSC/DCS 終端の 0x07 は非対象）→ `TerminalTabView` が `SystemSounds.Beep` を鳴らし `HasPendingBell` を立てて `BellRang` で中継。`MainWindow` は非アクティブタブのヘッダ先頭に「🔔 」を付与し、そのタブがアクティブになったらクリア。可聴ベルは `PlayBell` に集約し将来の設定化に備える）**
@@ -40,7 +40,7 @@
 - ~~**DECALN / DEC 行サイズ（`ESC #`）** — `ESC # 8`（画面整列テスト）と `ESC # 3/4/5/6`（倍高・倍幅行）~~ **実装済み（`ParserState.DecLineSize` を追加。`ESC # 8` DECALN はアクティブ画面全体を既定レンディションの 'E' で埋めカーソルをホームへ（`FillScreenForAlignment`）。`ESC # 3/4/5/6`（DECDHL/DECDWL/DECSWL）はパラメータ桁が印字されないよう消費（倍角の実描画は今後の課題）。vttest 互換性向上）**
 - ~~**G2/G3 文字セットとシフト** — `ESC * X` / `ESC + X`（G2/G3 指定）、LS2/LS3（`ESC n` / `ESC o`）、SS2/SS3（`ESC N` / `ESC O`・C1 0x8E/0x8F）~~ **実装済み（従来の bool `_useG1CharacterSet` を GL 呼び出しレベル `_glLevel`（0..3）へ一般化。単一シフト `_singleShift` は次の 1 図形文字のみに適用し `ProcessRune` で消費、SIMD ASCII 高速パスは単一シフト保留中は無効化。DECSC/DECRC・RIS・DECSTR で G0〜G3 と GL レベルを保存/復元/リセット）**
 - ~~**LNM（ANSI mode 20）** — 改行モード。設定時に LF/VT/FF が復帰も伴う~~ **実装済み（`ESC[20h/l`。C0 の LF・VT(0x0B)・FF(0x0C) を `LineFeed()` 経由に統一し、従来無視していた VT/FF も改行として扱うよう修正。NEL(`ESC E`)/IND(`ESC D`) は LNM の影響を受けず固定挙動を維持）**
-- ~~**DA での Sixel 広告** — Primary DA 応答が Sixel 対応を示さずアプリが自動検出できなかった~~ **実装済み（DA1 応答を `ESC[?1;2c` から `ESC[?62;1;4;22c` へ変更。62=VT220、1=132 列、4=Sixel、22=ANSI カラーを申告し `img2sixel` 等が Sixel を検出可能に）**
+- **DA での Sixel 広告** — **意図的に非対応**。描画できない機能をアプリケーションへ誤広告しないため、DA1の属性4（Sixel）は返さない
 - ~~**ENQ（0x05）アンサーバック** — 従来は通常状態で無視~~ **実装済み（`_answerbackString`（既定は空）を応答。既定では何も送出しないが仕様準拠で将来設定化可能）**
 
 ### キーボード入力
@@ -83,7 +83,7 @@
 - ~~**フォントフォールバック** — 主フォントにないグリフを CJK フォントや絵文字フォントで補完~~ **実装済み（FontFallbackResolver、Segoe UI Emoji/Yu Gothic UI/Meiryo/MS Gothic/SimSun、グリフキャッシュ）**
 - ~~**GPU アクセラレーション** — DirectComposition / Direct2D を使った高フレームレート描画。大量テキスト更新時のドロップフレーム解消~~ **実装済み（WPF は既定で GPU 合成のため、真因の「毎フレーム全可視行の `FormattedText` 再シェイプ」という CPU コストを解消。`TerminalSurfaceControl` が行ごとにシェイプ済み描画物（`FormattedText`/`TextLine`）をキャッシュし再描画で再利用。キャッシュは `VirtualLineLayouts` のエントリに同梱して行内容変化・可視外で退避、フォントメトリクス/リガチャ変更で無効化。`CachedLineDrawableCount` テストフック。※真の Direct2D/D3DImage 自前描画はスコープ外）**
 - ~~**Mica / Acrylic 背景** — Windows 11 ウィンドウ素材 API を使った半透明背景エフェクト~~ **実装済み（DWMWA_SYSTEMBACKDROP_TYPE、none/mica/acrylic/mica-alt 設定、DwmBackdrop.cs）**
-- ~~**インライン画像（OSC 1337 / iTerm2 プロトコル）** — Sixel と並ぶもう一方の画像表示プロトコル~~ **実装済み（`OSC 1337 ; File=args:base64`。WPF で PNG/JPEG/GIF 等をネイティブデコード、`width`/`height`（セル・`px`・`%`・`auto`）指定とアスペクト比保持、`inline=0` はダウンロード扱いで非表示、不正データは無視。Sixel と共用のインライン画像配置・描画・スクロールバック基盤を再利用）**
+- **インライン画像（OSC 1337 / iTerm2 プロトコル）** — **意図的に非対応**。Sixelと同様にConPTY経由での画像とテキストの順序・同期を保証できないため実装しない。シーケンスは画面へ漏れないよう消費して無視する
 
 ### パフォーマンス
 
