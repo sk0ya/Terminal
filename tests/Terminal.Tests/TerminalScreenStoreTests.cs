@@ -76,6 +76,49 @@ public sealed class TerminalScreenStoreTests
         Assert.Equal(["0", "1", "2", ""], store.Screen.Select(Text));
     }
 
+    [Fact]
+    public void EnterAndExitAlternateScreenRestoreClonedPrimaryCollection()
+    {
+        var store = new TerminalScreenStore(rows: 2, columns: 4, scrollbackLimit: 10);
+        store.Screen[0] = Line(4, "main");
+
+        Assert.True(store.EnterAlternateScreen(rows: 2, columns: 4));
+        store.Screen[0] = Line(4, "alt");
+        Assert.True(store.ExitAlternateScreen());
+
+        Assert.Equal("main", Text(store.Screen[0]));
+        Assert.False(store.ExitAlternateScreen());
+    }
+
+    [Fact]
+    public void PendingPrimaryScreenCanBePromotedAfterCurrentScreenChanges()
+    {
+        var store = new TerminalScreenStore(rows: 2, columns: 4, scrollbackLimit: 10);
+        store.Screen[0] = Line(4, "main");
+        store.CapturePendingPrimaryScreen();
+        store.Screen[0] = Line(4, "work");
+
+        store.PromotePendingOrCapturePrimaryScreen();
+        store.Screen[0] = Line(4, "alt");
+        Assert.True(store.ExitAlternateScreen());
+
+        Assert.Equal("main", Text(store.Screen[0]));
+    }
+
+    [Fact]
+    public void ApplyReflowAndClearScrollbackMutateOwnedCollections()
+    {
+        var store = new TerminalScreenStore(rows: 2, columns: 4, scrollbackLimit: 10);
+
+        store.ApplyReflow([Line(4, "new")], [Line(4, "old")]);
+
+        Assert.Equal(["new"], store.Screen.Select(Text));
+        Assert.Equal(["old"], store.Scrollback.Select(Text));
+
+        store.ClearScrollback();
+        Assert.Empty(store.Scrollback);
+    }
+
     private static TerminalLine Line(int columns, string text)
     {
         var line = new TerminalLine(columns, TerminalStyle.Default);

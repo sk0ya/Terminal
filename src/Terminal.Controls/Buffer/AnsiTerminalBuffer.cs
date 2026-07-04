@@ -102,11 +102,7 @@ internal sealed class AnsiTerminalBuffer
     private readonly StringBuilder _pendingClusterText = new();
     private readonly Dictionary<int, bool> _savedPrivateModes = [];
 
-    private List<TerminalLine> _screen
-    {
-        get => _screenStore.Screen;
-        set => _screenStore.ReplaceScreen(value);
-    }
+    private List<TerminalLine> _screen => _screenStore.Screen;
 
     private List<TerminalLine> _scrollback => _screenStore.Scrollback;
     private TerminalRenderLineSnapshot[] _screenRenderCache;
@@ -351,20 +347,22 @@ internal sealed class AnsiTerminalBuffer
             out int savedCursorColumn);
 
         int screenStart = Math.Max(0, reflowed.Count - newRows);
-        _scrollback.Clear();
         int historyStart = Math.Max(0, screenStart - _screenStore.ScrollbackLimit);
+        var history = new List<TerminalLine>(screenStart - historyStart);
         for (int row = historyStart; row < screenStart; row++)
         {
-            _scrollback.Add(reflowed[row]);
+            history.Add(reflowed[row]);
         }
 
-        _screen = CreateScreen(newRows, newColumns, TerminalStyle.Default);
+        List<TerminalLine> screen = CreateScreen(newRows, newColumns, TerminalStyle.Default);
         int copiedRows = reflowed.Count - screenStart;
         int targetStart = hadScrollback ? newRows - copiedRows : 0;
         for (int row = 0; row < copiedRows; row++)
         {
-            _screen[targetStart + row] = reflowed[screenStart + row];
+            screen[targetStart + row] = reflowed[screenStart + row];
         }
+
+        _screenStore.ApplyReflow(screen, history);
 
         _cursorRow = Math.Clamp(targetStart + cursorRow - screenStart, 0, newRows - 1);
         _cursorColumn = Math.Clamp(cursorColumn, 0, newColumns - 1);
@@ -388,12 +386,14 @@ internal sealed class AnsiTerminalBuffer
             out int savedCursorRow,
             out int savedCursorColumn);
 
-        _screen = CreateScreen(newRows, newColumns, TerminalStyle.Default);
+        List<TerminalLine> screen = CreateScreen(newRows, newColumns, TerminalStyle.Default);
         int copyRows = Math.Min(newRows, reflowed.Count);
         for (int row = 0; row < copyRows; row++)
         {
-            _screen[row] = reflowed[row];
+            screen[row] = reflowed[row];
         }
+
+        _screenStore.ReplaceScreen(screen);
 
         _cursorRow = Math.Clamp(cursorRow, 0, newRows - 1);
         _cursorColumn = Math.Clamp(cursorColumn, 0, newColumns - 1);
@@ -624,7 +624,7 @@ internal sealed class AnsiTerminalBuffer
 
     public void ClearScrollback()
     {
-        _scrollback.Clear();
+        _screenStore.ClearScrollback();
         _scrollbackRenderCache.Clear();
         _renderCacheDirty = true;
     }
@@ -713,14 +713,6 @@ internal sealed class AnsiTerminalBuffer
         return screen;
     }
 
-    private static TerminalLine CloneLine(TerminalLine line)
-    {
-        var clone = new TerminalLine(line.Cells.Length, TerminalStyle.Default);
-        Array.Copy(line.Cells, clone.Cells, line.Cells.Length);
-        clone.IsWrapped = line.IsWrapped;
-        return clone;
-    }
-
     internal static SolidColorBrush GetBrush(Color color)
     {
         if (BrushCache.TryGetValue(color, out SolidColorBrush? existing))
@@ -789,8 +781,9 @@ internal sealed class AnsiTerminalBuffer
     private void ResetTerminal()
     {
         ClearScrollback();
-        _screen = CreateScreen(_rows, _columns, TerminalStyle.Default);
+        _screenStore.ReplaceScreen(CreateScreen(_rows, _columns, TerminalStyle.Default));
         _primaryScreenBackup = null;
+        _screenStore.ResetAlternateState();
         _cursorRow = 0;
         _cursorColumn = 0;
         _savedCursorRow = 0;
@@ -841,6 +834,7 @@ internal sealed class AnsiTerminalBuffer
         _currentHyperlink = null;
         _savedHyperlink = null;
         _pendingSyntheticAlternateScreenBackup = null;
+        _screenStore.ClearPendingPrimaryScreen();
         _windowTitle = string.Empty;
         _windowTitleStack.Clear();
         _lastPrintedClusterText = string.Empty;
@@ -2019,6 +2013,7 @@ internal sealed class AnsiTerminalBuffer
         _synchronizedUpdateActive = false;
         _leftRightMarginEnabled = false;
         _pendingSyntheticAlternateScreenBackup = null;
+        _screenStore.ClearPendingPrimaryScreen();
         _g0CharacterSet = TerminalCharacterSet.Ascii;
         _g1CharacterSet = TerminalCharacterSet.Ascii;
         _g2CharacterSet = TerminalCharacterSet.Ascii;
@@ -2140,8 +2135,7 @@ internal sealed class AnsiTerminalBuffer
         _pendingSyntheticAlternateScreenBackup = null;
         _syntheticAlternateScreenActive = false;
         _primaryScreenBackup = CaptureScreenState();
-
-        _screen = CreateScreen(_rows, _columns, TerminalStyle.Default);
+        _screenStore.EnterAlternateScreen(_rows, _columns);
         _cursorRow = 0;
         _cursorColumn = 0;
         _savedCursorRow = 0;
@@ -2165,7 +2159,7 @@ internal sealed class AnsiTerminalBuffer
         int targetColumns = _columns;
         ScreenState backup = _primaryScreenBackup;
 
-        _screen = CloneScreen(backup.Screen);
+        _screenStore.ExitAlternateScreen();
         _tabStops = (bool[])backup.TabStops.Clone();
         _rows = backup.Rows;
         _columns = backup.Columns;
@@ -2205,12 +2199,12 @@ internal sealed class AnsiTerminalBuffer
         }
 
         _pendingSyntheticAlternateScreenBackup = CaptureScreenState();
+        _screenStore.CapturePendingPrimaryScreen();
     }
 
     private ScreenState CaptureScreenState()
     {
         return new ScreenState(
-            CloneScreen(_screen),
             (bool[])_tabStops.Clone(),
             _rows,
             _columns,
@@ -2245,6 +2239,7 @@ internal sealed class AnsiTerminalBuffer
         if (!nextTitleIsClaude)
         {
             _pendingSyntheticAlternateScreenBackup = null;
+            _screenStore.ClearPendingPrimaryScreen();
             return;
         }
 
@@ -2254,6 +2249,7 @@ internal sealed class AnsiTerminalBuffer
         }
 
         _primaryScreenBackup = _pendingSyntheticAlternateScreenBackup ?? CaptureScreenState();
+        _screenStore.PromotePendingOrCapturePrimaryScreen();
         _pendingSyntheticAlternateScreenBackup = null;
         _syntheticAlternateScreenActive = true;
         InvalidateScreenRenderCache();
@@ -2263,17 +2259,6 @@ internal sealed class AnsiTerminalBuffer
     {
         return title.Equals("claude", StringComparison.OrdinalIgnoreCase) ||
             title.Contains("Claude Code", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static List<TerminalLine> CloneScreen(List<TerminalLine> source)
-    {
-        var clone = new List<TerminalLine>(source.Count);
-        foreach (TerminalLine line in source)
-        {
-            clone.Add(CloneLine(line));
-        }
-
-        return clone;
     }
 
     private void ApplySgr(SgrParam[] tokens)
@@ -2499,13 +2484,13 @@ internal sealed class AnsiTerminalBuffer
     {
         int targetColumns = enable132 ? 132 : 80;
         _columns = Math.Max(targetColumns, MinColumns);
-        _screen = TerminalReflowCalculator.ResizeScreenBuffer(
+        _screenStore.ReplaceScreen(TerminalReflowCalculator.ResizeScreenBuffer(
             _screen,
             _rows,
             _screen[0].Cells.Length,
             _rows,
             _columns,
-            preserveBottomRows: false);
+            preserveBottomRows: false));
         _tabStops = CreateDefaultTabStops(_columns);
         _cursorRow = 0;
         _cursorColumn = 0;
@@ -3377,7 +3362,6 @@ internal sealed class AnsiTerminalBuffer
     }
 
     private sealed record ScreenState(
-        List<TerminalLine> Screen,
         bool[] TabStops,
         int Rows,
         int Columns,

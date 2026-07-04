@@ -5,6 +5,8 @@ internal readonly record struct TerminalScreenMutation(bool ScrollbackChanged);
 internal sealed class TerminalScreenStore
 {
     private readonly int _scrollbackLimit;
+    private List<TerminalLine>? _primaryScreenBackup;
+    private List<TerminalLine>? _pendingPrimaryScreenBackup;
 
     public TerminalScreenStore(int rows, int columns, int scrollbackLimit)
     {
@@ -19,6 +21,73 @@ internal sealed class TerminalScreenStore
     public void ReplaceScreen(List<TerminalLine> screen)
     {
         Screen = screen;
+    }
+
+    public void ApplyReflow(List<TerminalLine> screen, IEnumerable<TerminalLine> scrollback)
+    {
+        Screen = screen;
+        Scrollback.Clear();
+        Scrollback.AddRange(scrollback);
+    }
+
+    public void ClearScrollback()
+    {
+        Scrollback.Clear();
+    }
+
+    public bool EnterAlternateScreen(int rows, int columns)
+    {
+        if (_primaryScreenBackup is not null)
+        {
+            return false;
+        }
+
+        _pendingPrimaryScreenBackup = null;
+        _primaryScreenBackup = CloneScreen(Screen);
+        Screen = CreateScreen(rows, columns, TerminalStyle.Default);
+        return true;
+    }
+
+    public bool ExitAlternateScreen()
+    {
+        if (_primaryScreenBackup is null)
+        {
+            return false;
+        }
+
+        Screen = CloneScreen(_primaryScreenBackup);
+        _primaryScreenBackup = null;
+        return true;
+    }
+
+    public void CapturePendingPrimaryScreen()
+    {
+        if (_primaryScreenBackup is null)
+        {
+            _pendingPrimaryScreenBackup = CloneScreen(Screen);
+        }
+    }
+
+    public void ClearPendingPrimaryScreen()
+    {
+        _pendingPrimaryScreenBackup = null;
+    }
+
+    public void ResetAlternateState()
+    {
+        _primaryScreenBackup = null;
+        _pendingPrimaryScreenBackup = null;
+    }
+
+    public void PromotePendingOrCapturePrimaryScreen()
+    {
+        if (_primaryScreenBackup is not null)
+        {
+            return;
+        }
+
+        _primaryScreenBackup = _pendingPrimaryScreenBackup ?? CloneScreen(Screen);
+        _pendingPrimaryScreenBackup = null;
     }
 
     public int AppendScrollback(TerminalLine line)
@@ -132,5 +201,10 @@ internal sealed class TerminalScreenStore
         Array.Copy(line.Cells, clone.Cells, line.Cells.Length);
         clone.IsWrapped = line.IsWrapped;
         return clone;
+    }
+
+    private static List<TerminalLine> CloneScreen(IEnumerable<TerminalLine> source)
+    {
+        return source.Select(CloneLine).ToList();
     }
 }
