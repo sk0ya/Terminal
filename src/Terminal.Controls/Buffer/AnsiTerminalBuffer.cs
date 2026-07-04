@@ -103,9 +103,7 @@ internal sealed class AnsiTerminalBuffer
     private readonly int _scrollbackLimit;
     private readonly List<TerminalLine> _scrollback = [];
     private readonly List<TerminalRenderLineSnapshot> _scrollbackRenderCache = [];
-    private readonly StringBuilder _csiBuffer = new();
-    private readonly StringBuilder _oscBuffer = new();
-    private readonly StringBuilder _dcsBuffer = new();
+    private readonly VtParser _parser;
     private readonly StringBuilder _pendingClusterText = new();
     private readonly Dictionary<int, bool> _savedPrivateModes = [];
 
@@ -125,12 +123,10 @@ internal sealed class AnsiTerminalBuffer
     private int _leftMargin;
     private int _rightMargin;
     private bool _leftRightMarginEnabled;
-    private ParserState _state;
     private TerminalStyle _currentStyle = TerminalStyle.Default;
     private TerminalStyle _savedStyle = TerminalStyle.Default;
     private bool _cursorVisible = true;
     private bool _cursorBlinkEnabled = true;
-    private int _charsetDesignationTarget;
     private bool _applicationCursorKeys;
     private bool _applicationKeypad;
     private bool _insertMode;
@@ -223,6 +219,14 @@ internal sealed class AnsiTerminalBuffer
 
     public AnsiTerminalBuffer(short columns, short rows, int scrollbackLimit = DefaultScrollbackLimit)
     {
+        _parser = new VtParser(
+            ProcessControl,
+            ProcessEscapeCommand,
+            DispatchCsi,
+            DispatchOsc,
+            DispatchDcs,
+            ProcessCharsetDesignation,
+            ProcessDecLineSize);
         _scrollbackLimit = Math.Max(scrollbackLimit, rows);
         _columns = Math.Max(columns, (short)MinColumns);
         _rows = Math.Max(rows, (short)MinRows);
@@ -585,7 +589,7 @@ internal sealed class AnsiTerminalBuffer
             // SIMD for a run of such characters and write them in one batch. This skips the
             // per-character rune decode, width lookup, grapheme-cluster state machine, and per-cell
             // string allocation that dominate CPU when a program streams plain text (e.g. cat).
-            if (_state == ParserState.Normal && CanUseAsciiFastPath())
+            if (_parser.IsNormal && CanUseAsciiFastPath())
             {
                 int runLength = ScanPrintableAsciiRun(text.AsSpan(index));
                 if (runLength > 0)
@@ -596,7 +600,7 @@ internal sealed class AnsiTerminalBuffer
                 }
             }
 
-            if (_state == ParserState.Normal &&
+            if (_parser.IsNormal &&
                 Rune.TryGetRuneAt(text, index, out Rune rune) &&
                 !IsControlRune(rune))
             {
@@ -606,7 +610,7 @@ internal sealed class AnsiTerminalBuffer
             }
 
             FlushPendingCluster();
-            ProcessChar(text[index]);
+            _parser.Process(text[index]);
             index++;
         }
 
@@ -986,7 +990,6 @@ internal sealed class AnsiTerminalBuffer
         _cursorVisible = true;
         _cursorBlinkEnabled = true;
         _cursorShape = TerminalCursorShape.Block;
-        _charsetDesignationTarget = 0;
         _applicationCursorKeys = false;
         _applicationKeypad = false;
         _insertMode = false;
@@ -1033,10 +1036,7 @@ internal sealed class AnsiTerminalBuffer
         _lastPrintedClusterText = string.Empty;
         _lastPrintedClusterWidth = 0;
         ClearPendingCluster();
-        _state = ParserState.Normal;
-        _csiBuffer.Clear();
-        _oscBuffer.Clear();
-        _dcsBuffer.Clear();
+        _parser.Reset();
         Array.Copy(_defaultAnsiPalette, _ansiPalette, _defaultAnsiPalette.Length);
         _kittyKeyboardFlags = 0;
         _kittyKeyboardStack.Clear();
@@ -1045,105 +1045,42 @@ internal sealed class AnsiTerminalBuffer
         ResetScreenRenderCache();
     }
 
-    private void ProcessChar(char ch)
-    {
-        switch (_state)
-        {
-            case ParserState.Normal:
-                ProcessNormal(ch);
-                break;
-            case ParserState.Escape:
-                ProcessEscape(ch);
-                break;
-            case ParserState.Csi:
-                ProcessCsi(ch);
-                break;
-            case ParserState.Osc:
-                ProcessOsc(ch);
-                break;
-            case ParserState.OscEscape:
-                ProcessOscEscape(ch);
-                break;
-            case ParserState.Charset:
-                ProcessCharsetDesignation(ch);
-                break;
-            case ParserState.DecLineSize:
-                ProcessDecLineSize(ch);
-                break;
-            case ParserState.DcsEntry:
-                ProcessDcsEntry(ch);
-                break;
-            case ParserState.DcsParam:
-                ProcessDcsParam(ch);
-                break;
-            case ParserState.DcsIntermediate:
-                ProcessDcsIntermediate(ch);
-                break;
-            case ParserState.DcsPassthrough:
-                ProcessDcsPassthrough(ch);
-                break;
-            case ParserState.DcsPassthroughEscape:
-                ProcessDcsPassthroughEscape(ch);
-                break;
-        }
-    }
-
-    private void ProcessNormal(char ch)
+    private void ProcessControl(char ch)
     {
         switch (ch)
         {
             case '\u0005':
                 EmitInputSequence(_answerbackString);
-                return;
+                break;
             case '\u0007':
                 BellReceived?.Invoke(this, EventArgs.Empty);
-                return;
+                break;
             case '\u000E':
                 _glLevel = 1;
-                return;
+                break;
             case '\u000F':
                 _glLevel = 0;
-                return;
+                break;
             case '\u008E':
                 _singleShift = 2;
-                return;
+                break;
             case '\u008F':
                 _singleShift = 3;
-                return;
-            case '\u001b':
-                _state = ParserState.Escape;
-                return;
-            case '\u009b':
-                _csiBuffer.Clear();
-                _state = ParserState.Csi;
-                return;
-            case '\u009d':
-                _oscBuffer.Clear();
-                _state = ParserState.Osc;
-                return;
-            case '\u009f':
-                _dcsBuffer.Clear();
-                _state = ParserState.DcsEntry;
-                return;
-            case '\u009c':
-                return;
+                break;
             case '\r':
                 _cursorColumn = 0;
-                return;
+                break;
             case '\n':
             case '\u000b':
             case '\u000c':
                 LineFeed();
-                return;
+                break;
             case '\b':
                 Backspace();
-                return;
+                break;
             case '\t':
                 _cursorColumn = FindNextTabStop(_cursorColumn);
-
-                return;
-            default:
-                return;
+                break;
         }
     }
 
@@ -1208,151 +1145,54 @@ internal sealed class AnsiTerminalBuffer
         StartPendingCluster(mappedRune, width);
     }
 
-    private void ProcessEscape(char ch)
+    private void ProcessEscapeCommand(char ch)
     {
         switch (ch)
         {
-            case 'P':
-                _dcsBuffer.Clear();
-                _state = ParserState.DcsEntry;
-                return;
-            case '[':
-                _csiBuffer.Clear();
-                _state = ParserState.Csi;
-                return;
-            case ']':
-                _oscBuffer.Clear();
-                _state = ParserState.Osc;
-                return;
-            case '(':
-                _charsetDesignationTarget = 0;
-                _state = ParserState.Charset;
-                return;
-            case ')':
-                _charsetDesignationTarget = 1;
-                _state = ParserState.Charset;
-                return;
-            case '*':
-                _charsetDesignationTarget = 2;
-                _state = ParserState.Charset;
-                return;
-            case '+':
-                _charsetDesignationTarget = 3;
-                _state = ParserState.Charset;
-                return;
-            case '#':
-                _state = ParserState.DecLineSize;
-                return;
             case 'n':
                 _glLevel = 2;
-                _state = ParserState.Normal;
-                return;
+                break;
             case 'o':
                 _glLevel = 3;
-                _state = ParserState.Normal;
-                return;
+                break;
             case 'N':
                 _singleShift = 2;
-                _state = ParserState.Normal;
-                return;
+                break;
             case 'O':
                 _singleShift = 3;
-                _state = ParserState.Normal;
-                return;
+                break;
             case '7':
                 SaveCursorState();
-                _state = ParserState.Normal;
-                return;
+                break;
             case '8':
                 RestoreCursorState();
-                _state = ParserState.Normal;
-                return;
+                break;
             case 'D':
                 MoveDownAndScrollIfNeeded();
-                _state = ParserState.Normal;
-                return;
+                break;
             case 'E':
                 MoveDownAndScrollIfNeeded();
                 _cursorColumn = 0;
-                _state = ParserState.Normal;
-                return;
+                break;
             case 'M':
                 ReverseIndex();
-                _state = ParserState.Normal;
-                return;
+                break;
             case 'H':
                 SetTabStopAtCursor();
-                _state = ParserState.Normal;
-                return;
+                break;
             case '=':
                 _applicationKeypad = true;
-                _state = ParserState.Normal;
-                return;
+                break;
             case '>':
                 _applicationKeypad = false;
-                _state = ParserState.Normal;
-                return;
+                break;
             case 'c':
                 ResetTerminal();
-                _state = ParserState.Normal;
-                return;
-            default:
-                _state = ParserState.Normal;
-                return;
+                break;
         }
     }
 
-    private void ProcessCsi(char ch)
-    {
-        if (ch >= '@' && ch <= '~')
-        {
-            DispatchCsi(ch, _csiBuffer.ToString());
-            _state = ParserState.Normal;
-            return;
-        }
-
-        _csiBuffer.Append(ch);
-    }
-
-    private void ProcessOsc(char ch)
-    {
-        if (ch == '\a')
-        {
-            DispatchOsc(_oscBuffer.ToString());
-            _state = ParserState.Normal;
-            return;
-        }
-
-        if (ch == '\u009c')
-        {
-            DispatchOsc(_oscBuffer.ToString());
-            _state = ParserState.Normal;
-            return;
-        }
-
-        if (ch == '\u001b')
-        {
-            _state = ParserState.OscEscape;
-            return;
-        }
-
-        _oscBuffer.Append(ch);
-    }
-
-    private void ProcessOscEscape(char ch)
-    {
-        if (ch == '\\')
-        {
-            DispatchOsc(_oscBuffer.ToString());
-            _state = ParserState.Normal;
-            return;
-        }
-
-        _state = ParserState.Escape;
-        ProcessEscape(ch);
-    }
-
-    private void ProcessCharsetDesignation(char ch)
+    private void ProcessCharsetDesignation(int target, char ch)
     {
         TerminalCharacterSet characterSet = ch switch
         {
@@ -1360,7 +1200,7 @@ internal sealed class AnsiTerminalBuffer
             _ => TerminalCharacterSet.Ascii
         };
 
-        switch (_charsetDesignationTarget)
+        switch (target)
         {
             case 0:
                 _g0CharacterSet = characterSet;
@@ -1375,13 +1215,11 @@ internal sealed class AnsiTerminalBuffer
                 _g3CharacterSet = characterSet;
                 break;
         }
-
-        _state = ParserState.Normal;
     }
 
-    // ESC # <ch>: DEC line-size / alignment controls.
     private void ProcessDecLineSize(char ch)
     {
+        // ESC # <ch>: DEC line-size / alignment controls.
         // ESC # 8 = DECALN: fill the entire screen with 'E' in the default rendition and home the cursor.
         // ESC # 3/4/5/6 = DECDHL/DECDWL/DECSWL double-height/width lines: consumed so the parameter
         // digit is not printed; per-line size rendering is not yet applied.
@@ -1389,8 +1227,6 @@ internal sealed class AnsiTerminalBuffer
         {
             FillScreenForAlignment();
         }
-
-        _state = ParserState.Normal;
     }
 
     private void FillScreenForAlignment()
@@ -1409,140 +1245,6 @@ internal sealed class AnsiTerminalBuffer
         _cursorRow = 0;
         _cursorColumn = 0;
         InvalidateScreenRenderCache();
-    }
-
-    private void ProcessDcsEntry(char ch)
-    {
-        if (ch == '')
-        {
-            DispatchDcs(_dcsBuffer.ToString());
-            _state = ParserState.Normal;
-            return;
-        }
-
-        if (ch == '')
-        {
-            _state = ParserState.DcsPassthroughEscape;
-            return;
-        }
-
-        if (ch >= 0x20 && ch <= 0x2F)
-        {
-            _dcsBuffer.Append(ch);
-            _state = ParserState.DcsIntermediate;
-            return;
-        }
-
-        if (ch >= 0x30 && ch <= 0x3F)
-        {
-            _dcsBuffer.Append(ch);
-            _state = ParserState.DcsParam;
-            return;
-        }
-
-        if (ch >= 0x40 && ch <= 0x7E)
-        {
-            _dcsBuffer.Append(ch);
-            _state = ParserState.DcsPassthrough;
-            return;
-        }
-    }
-
-    private void ProcessDcsParam(char ch)
-    {
-        if (ch == '')
-        {
-            DispatchDcs(_dcsBuffer.ToString());
-            _state = ParserState.Normal;
-            return;
-        }
-
-        if (ch == '')
-        {
-            _state = ParserState.DcsPassthroughEscape;
-            return;
-        }
-
-        if (ch >= 0x30 && ch <= 0x3F)
-        {
-            _dcsBuffer.Append(ch);
-            return;
-        }
-
-        if (ch >= 0x20 && ch <= 0x2F)
-        {
-            _dcsBuffer.Append(ch);
-            _state = ParserState.DcsIntermediate;
-            return;
-        }
-
-        if (ch >= 0x40 && ch <= 0x7E)
-        {
-            _dcsBuffer.Append(ch);
-            _state = ParserState.DcsPassthrough;
-            return;
-        }
-    }
-
-    private void ProcessDcsIntermediate(char ch)
-    {
-        if (ch == '')
-        {
-            DispatchDcs(_dcsBuffer.ToString());
-            _state = ParserState.Normal;
-            return;
-        }
-
-        if (ch == '')
-        {
-            _state = ParserState.DcsPassthroughEscape;
-            return;
-        }
-
-        if (ch >= 0x20 && ch <= 0x2F)
-        {
-            _dcsBuffer.Append(ch);
-            return;
-        }
-
-        if (ch >= 0x40 && ch <= 0x7E)
-        {
-            _dcsBuffer.Append(ch);
-            _state = ParserState.DcsPassthrough;
-            return;
-        }
-    }
-
-    private void ProcessDcsPassthrough(char ch)
-    {
-        if (ch == '')
-        {
-            DispatchDcs(_dcsBuffer.ToString());
-            _state = ParserState.Normal;
-            return;
-        }
-
-        if (ch == '')
-        {
-            _state = ParserState.DcsPassthroughEscape;
-            return;
-        }
-
-        _dcsBuffer.Append(ch);
-    }
-
-    private void ProcessDcsPassthroughEscape(char ch)
-    {
-        if (ch == '\\')
-        {
-            DispatchDcs(_dcsBuffer.ToString());
-            _state = ParserState.Normal;
-            return;
-        }
-
-        _dcsBuffer.Append('');
-        _dcsBuffer.Append(ch);
-        _state = ParserState.DcsPassthrough;
     }
 
     private void DispatchDcs(string content)
@@ -2099,13 +1801,13 @@ internal sealed class AnsiTerminalBuffer
                 _cursorColumn = 0;
                 break;
             case 'G':
-            {
-                int colParam = GetParameter(parameters, 0, 1) - 1;
-                int minCol = _leftRightMarginEnabled ? _leftMargin : 0;
-                int maxCol = _leftRightMarginEnabled ? _rightMargin : _columns - 1;
-                _cursorColumn = Math.Clamp(colParam, minCol, maxCol);
-                break;
-            }
+                {
+                    int colParam = GetParameter(parameters, 0, 1) - 1;
+                    int minCol = _leftRightMarginEnabled ? _leftMargin : 0;
+                    int maxCol = _leftRightMarginEnabled ? _rightMargin : _columns - 1;
+                    _cursorColumn = Math.Clamp(colParam, minCol, maxCol);
+                    break;
+                }
             case 'H':
             case 'f':
                 SetCursorPosition(GetParameter(parameters, 0, 1), GetParameter(parameters, 1, 1));
@@ -4459,22 +4161,6 @@ internal sealed class AnsiTerminalBuffer
 
         int? value = parameters[index];
         return !value.HasValue || value.Value == 0 ? defaultValue : value.Value;
-    }
-
-    private enum ParserState
-    {
-        Normal,
-        Escape,
-        Csi,
-        Osc,
-        OscEscape,
-        Charset,
-        DecLineSize,
-        DcsEntry,
-        DcsParam,
-        DcsIntermediate,
-        DcsPassthrough,
-        DcsPassthroughEscape
     }
 
     private sealed class TerminalLine
