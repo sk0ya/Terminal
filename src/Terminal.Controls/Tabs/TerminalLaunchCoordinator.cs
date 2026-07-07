@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 
 using Terminal.Settings;
@@ -156,6 +157,27 @@ internal sealed class TerminalLaunchCoordinator
 
     public void UpdateActiveWorkingDirectory(string workingDirectory) =>
         ActiveWorkingDirectory = workingDirectory;
+
+    public bool TryUpdateActiveWorkingDirectory(
+        string path,
+        string currentWorkingDirectory,
+        Func<string, string> getFullPath,
+        [NotNullWhen(true)] out string? canonicalPath)
+    {
+        try
+        {
+            canonicalPath = getFullPath(path);
+        }
+        catch
+        {
+            canonicalPath = null;
+            return false;
+        }
+
+        UpdateActiveWorkingDirectory(canonicalPath);
+        UpdateWorkingDirectory(canonicalPath, currentWorkingDirectory);
+        return true;
+    }
 
     private static string EffectiveCommandLine(string? value, string defaultCommandLine) =>
         string.IsNullOrWhiteSpace(value) ? defaultCommandLine : value.Trim();

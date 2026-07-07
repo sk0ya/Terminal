@@ -2029,18 +2029,15 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        string canonicalPath;
-        try
-        {
-            canonicalPath = Path.GetFullPath(path);
-        }
-        catch
+        if (!_launchState.TryUpdateActiveWorkingDirectory(
+                path,
+                Environment.CurrentDirectory,
+                Path.GetFullPath,
+                out string? canonicalPath))
         {
             return;
         }
 
-        _launchState.UpdateActiveWorkingDirectory(canonicalPath);
-        _launchState.UpdateWorkingDirectory(canonicalPath, Environment.CurrentDirectory);
         _suppressWorkingDirectoryTextChanged = true;
         WorkingDirectoryTextBox.Text = canonicalPath;
         _suppressWorkingDirectoryTextChanged = false;

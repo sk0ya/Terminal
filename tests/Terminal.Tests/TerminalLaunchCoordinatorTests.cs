@@ -135,6 +135,45 @@ public sealed class TerminalLaunchCoordinatorTests
     }
 
     [Fact]
+    public void ShellDirectoryUpdateCanonicalizesAndUpdatesActiveAndEditableState()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.Activate("tool.exe", "C:\\old");
+
+        bool updated = coordinator.TryUpdateActiveWorkingDirectory(
+            ".\\child",
+            "C:\\current",
+            path => path == ".\\child" ? "C:\\work\\child" : throw new InvalidOperationException(),
+            out string? canonicalPath);
+
+        Assert.True(updated);
+        Assert.Equal("C:\\work\\child", canonicalPath);
+        Assert.Equal("C:\\work\\child", coordinator.ActiveWorkingDirectory);
+        Assert.Equal("C:\\work\\child", coordinator.WorkingDirectory);
+        Assert.Equal("C:\\work\\child", coordinator.GetEffectiveWorkingDirectory("C:\\other"));
+    }
+
+    [Fact]
+    public void InvalidShellDirectoryUpdatePreservesExistingState()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.Apply("custom", "tool.exe", "C:\\editable", "C:\\current");
+        coordinator.Activate("tool.exe", "C:\\active");
+
+        bool updated = coordinator.TryUpdateActiveWorkingDirectory(
+            "invalid",
+            "C:\\current",
+            _ => throw new ArgumentException("invalid path"),
+            out string? canonicalPath);
+
+        Assert.False(updated);
+        Assert.Null(canonicalPath);
+        Assert.Equal("C:\\active", coordinator.ActiveWorkingDirectory);
+        Assert.Equal("C:\\editable", coordinator.WorkingDirectory);
+        Assert.Equal("C:\\editable", coordinator.GetEffectiveWorkingDirectory("C:\\other"));
+    }
+
+    [Fact]
     public void IdleEnterResolvesStartAndEvaluatesKeyOnce()
     {
         int calls = 0;
