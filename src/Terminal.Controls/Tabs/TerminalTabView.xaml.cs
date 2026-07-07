@@ -65,6 +65,7 @@ public partial class TerminalTabView : UserControl
     private readonly string _initialWorkingDirectory;
     private bool _hasStartedInitialSession;
     private readonly TerminalCommandNavigationCoordinator _commandNavigation = new();
+    private readonly TerminalTaskbarProgressCoordinator _taskbarProgress = new();
 
     // Command lines reported via OSC 633;E, most-recent last. Backs the Ctrl+R
     // history overlay and the public CommandHistory API. Capped to keep memory bounded.
@@ -162,10 +163,10 @@ public partial class TerminalTabView : UserControl
     public event EventHandler<TaskbarProgressChangedEventArgs>? TaskbarProgressChanged;
 
     /// <summary>直近に受信したタスクバー進捗の状態。タブ切替時にホストが読み出せる。</summary>
-    public TaskbarProgressState CurrentTaskbarProgressState { get; private set; } = TaskbarProgressState.None;
+    public TaskbarProgressState CurrentTaskbarProgressState => _taskbarProgress.Current.State;
 
     /// <summary>直近に受信したタスクバー進捗率（0–100）。</summary>
-    public int CurrentTaskbarProgress { get; private set; }
+    public int CurrentTaskbarProgress => _taskbarProgress.Current.Progress;
 
     /// <summary>
     /// アプリケーションが BEL（0x07）を出力したときにディスパッチャスレッドで発火する。
@@ -1980,7 +1981,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ShellHistoryPathReceived += TerminalBuffer_ShellHistoryPathReceived;
 
         // 新しいセッションはタスクバー進捗をクリアした状態から始める。
-        SetTaskbarProgress(TaskbarProgressState.None, 0);
+        SetTaskbarProgress(_taskbarProgress.Clear());
     }
 
     private void TerminalBuffer_ShellHistoryPathReceived(object? sender, string path)
@@ -2058,25 +2059,14 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalBuffer_TaskbarProgressChanged(object? sender, Terminal.Buffer.TaskbarProgressEventArgs e)
     {
-        TaskbarProgressState state = e.State switch
-        {
-            1 => TaskbarProgressState.Normal,
-            2 => TaskbarProgressState.Error,
-            3 => TaskbarProgressState.Indeterminate,
-            4 => TaskbarProgressState.Warning,
-            _ => TaskbarProgressState.None
-        };
-
-        // 不確定・解除は進捗値を持たない。
-        int progress = state is TaskbarProgressState.Indeterminate or TaskbarProgressState.None ? 0 : e.Progress;
-        SetTaskbarProgress(state, progress);
+        SetTaskbarProgress(_taskbarProgress.ApplyOscProgress(e.State, e.Progress));
     }
 
-    private void SetTaskbarProgress(TaskbarProgressState state, int progress)
+    private void SetTaskbarProgress(TerminalTaskbarProgress progress)
     {
-        CurrentTaskbarProgressState = state;
-        CurrentTaskbarProgress = progress;
-        TaskbarProgressChanged?.Invoke(this, new TaskbarProgressChangedEventArgs(state, progress));
+        TaskbarProgressChanged?.Invoke(
+            this,
+            new TaskbarProgressChangedEventArgs(progress.State, progress.Progress));
     }
 
     private void TerminalBuffer_BellReceived(object? sender, EventArgs e)
