@@ -35,6 +35,7 @@ public partial class TerminalTabView : UserControl
     private static readonly Brush AccentCursorBrush = CreateFrozenBrush(Color.FromRgb(0x5F, 0xAF, 0xFF));
 
     private readonly TerminalSessionOrchestrator _sessionOrchestrator = new();
+    private readonly TerminalKeyboardCoordinator _keyboardState = new();
     private ITerminalSession? _session => _sessionOrchestrator.Current;
     private AnsiTerminalBuffer _terminalBuffer = new(120, 30);
     private short _currentColumns = 120;
@@ -597,154 +598,129 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalOutput_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (_session is null)
-        {
-            return;
-        }
-
-        if (TryHandleClipboardShortcut(e))
-        {
-            e.Handled = true;
-            return;
-        }
-
-        if (TryHandleShiftArrowSelection(e))
-        {
-            e.Handled = true;
-            return;
-        }
-
-        if (IsImeInputInProgress(e))
-        {
-            return;
-        }
-
-        if (TryHandleEnterKey(e))
-        {
-            e.Handled = true;
-            return;
-        }
-
-        _ = FlushInputProxyText();
-
-        if (TryHandleControlShortcut(e) || TryHandleApplicationKeypad(e) || TryHandleSpecialKey(e))
-        {
-            e.Handled = true;
-        }
-    }
-
-    private bool TryHandleShiftArrowSelection(KeyEventArgs e)
-    {
-        if ((Keyboard.Modifiers & ModifierKeys.Shift) == 0 || (Keyboard.Modifiers & ModifierKeys.Control) != 0)
-        {
-            return false;
-        }
-
-        Key key = GetEffectiveKey(e);
-        if (key is not (Key.Up or Key.Down or Key.Left or Key.Right))
-        {
-            return false;
-        }
-
-        return TerminalOutput.MoveKeyboardCursor(key, extend: true);
+        TerminalKeyboardAction action = _keyboardState.Resolve(BuildKeyboardRequest(e, TerminalKeyboardSource.Output));
+        e.Handled = ExecuteKeyboardAction(action, e);
     }
 
     private void TerminalInputProxy_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (_session is null)
-        {
-            return;
-        }
-
-        Key key = GetEffectiveKey(e);
-        TerminalEnterAction enterAction = TerminalEnterActionResolver.ResolveForProxy(
-            key,
-            HasPendingProxyText());
-        if (TryHandleClipboardShortcut(e))
-        {
-            e.Handled = true;
-            return;
-        }
-
-        if (enterAction == TerminalEnterAction.FlushPendingProxyText)
-        {
-            QueuePendingProxyTextFlushAfterImeConfirm();
-            return;
-        }
-
-        if (enterAction == TerminalEnterAction.SendToTerminal)
-        {
-            if (TryHandleEnterKey(e))
-            {
-                e.Handled = true;
-            }
-
-            return;
-        }
-
-        if (HasPendingProxyText())
-        {
-            return;
-        }
-
-        if (IsImeInputInProgress(e))
-        {
-            return;
-        }
-
-        if (TryHandleControlShortcut(e) || TryHandleApplicationKeypad(e) || TryHandleSpecialKey(e))
-        {
-            e.Handled = true;
-        }
+        TerminalKeyboardAction action = _keyboardState.Resolve(BuildKeyboardRequest(e, TerminalKeyboardSource.Proxy));
+        e.Handled = ExecuteKeyboardAction(action, e);
     }
 
-    private bool TryHandleClipboardShortcut(KeyEventArgs e)
+    private TerminalKeyboardRequest BuildKeyboardRequest(KeyEventArgs e, TerminalKeyboardSource source)
     {
-        ModifierKeys modifiers = Keyboard.Modifiers;
-        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.C)
-        {
-            CopySelectionToClipboard();
-            return true;
-        }
-
-        if (modifiers == ModifierKeys.Control && e.Key == Key.Insert)
-        {
-            CopySelectionToClipboard();
-            return true;
-        }
-
-        if ((modifiers == ModifierKeys.Control && e.Key == Key.V) ||
-            (modifiers == ModifierKeys.Shift && e.Key == Key.Insert) ||
-            (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.V))
-        {
-            PasteFromClipboard();
-            return true;
-        }
-
-        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.Up)
-        {
-            return TryScrollToAdjacentCommandLine(upward: true);
-        }
-
-        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.Down)
-        {
-            return TryScrollToAdjacentCommandLine(upward: false);
-        }
-
-        if (modifiers == ModifierKeys.Control && e.Key == Key.R)
-        {
-            OpenHistoryPanel();
-            return true;
-        }
-
-        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.F)
-        {
-            OpenFindPanel();
-            return true;
-        }
-
-        return false;
+        Key key = GetEffectiveKey(e);
+        ModifierKeys terminalModifiers = GetTerminalModifiers();
+        bool supportsInput = SupportsTerminalInput();
+        string? controlSequence = supportsInput && (terminalModifiers & ModifierKeys.Control) != 0
+            ? TerminalKeyChordTranslator.TranslateCtrlChord(key, terminalModifiers, _terminalBuffer.ModifyOtherKeysLevel)
+            : null;
+        string? enterSequence = key == Key.Enter
+            ? TerminalKeyChordTranslator.TranslateEnterKey(
+                terminalModifiers,
+                _terminalBuffer.ApplicationCursorKeysEnabled,
+                supportsInput,
+                _terminalBuffer.ModifyOtherKeysLevel,
+                _terminalBuffer.KittyKeyboardFlags)
+            : null;
+        bool specialRequiresInput = key is not Key.Back and not Key.Tab and not Key.Escape;
+        string? specialSequence = key != Key.Enter && (!specialRequiresInput || supportsInput)
+            ? TerminalKeyChordTranslator.TranslateSpecialKey(
+                key,
+                terminalModifiers,
+                _terminalBuffer.ApplicationCursorKeysEnabled,
+                _terminalBuffer.ModifyOtherKeysLevel,
+                _terminalBuffer.KittyKeyboardFlags)
+            : null;
+        return new(
+            source,
+            MapKeyboardKey(key),
+            MapKeyboardKey(e.Key),
+            MapKeyboardModifiers(Keyboard.Modifiers),
+            MapKeyboardModifiers(terminalModifiers),
+            _session is not null,
+            HasPendingProxyText(),
+            IsImeInputInProgress(e),
+            supportsInput,
+            _terminalBuffer.ApplicationKeypadEnabled,
+            controlSequence,
+            enterSequence,
+            specialSequence);
     }
+
+    private bool ExecuteKeyboardAction(TerminalKeyboardAction action, KeyEventArgs e)
+    {
+        bool hasDeferredFallback = action.Kind is TerminalKeyboardActionKind.ScrollPreviousCommand or
+            TerminalKeyboardActionKind.ScrollNextCommand;
+        if (action.FlushProxyFirst && !hasDeferredFallback)
+        {
+            _ = FlushInputProxyText();
+        }
+
+        return action.Kind switch
+        {
+            TerminalKeyboardActionKind.Copy => Execute(CopySelectionToClipboard),
+            TerminalKeyboardActionKind.Paste => Execute(PasteFromClipboard),
+            TerminalKeyboardActionKind.ScrollPreviousCommand => ExecuteScrollAction(action, upward: true),
+            TerminalKeyboardActionKind.ScrollNextCommand => ExecuteScrollAction(action, upward: false),
+            TerminalKeyboardActionKind.OpenHistory => Execute(OpenHistoryPanel),
+            TerminalKeyboardActionKind.OpenFind => Execute(OpenFindPanel),
+            TerminalKeyboardActionKind.LocalSelection => TerminalOutput.MoveKeyboardCursor(GetEffectiveKey(e), extend: true),
+            TerminalKeyboardActionKind.QueueProxyFlush => Execute(QueuePendingProxyTextFlushAfterImeConfirm, handled: false),
+            TerminalKeyboardActionKind.Interrupt => Execute(SendInterrupt),
+            TerminalKeyboardActionKind.SendText => action.Text is not null && SendTerminalInput(action.Text),
+            _ => false
+        };
+    }
+
+    private bool ExecuteScrollAction(TerminalKeyboardAction action, bool upward)
+    {
+        if (TryScrollToAdjacentCommandLine(upward))
+        {
+            return true;
+        }
+
+        if (action.FlushProxyFirst)
+        {
+            _ = FlushInputProxyText();
+        }
+
+        return action.Text is not null && SendTerminalInput(action.Text);
+    }
+
+    private static bool Execute(Action action, bool handled = true)
+    {
+        action();
+        return handled;
+    }
+
+    private static TerminalKeyboardModifiers MapKeyboardModifiers(ModifierKeys modifiers)
+    {
+        TerminalKeyboardModifiers result = TerminalKeyboardModifiers.None;
+        if ((modifiers & ModifierKeys.Shift) != 0) result |= TerminalKeyboardModifiers.Shift;
+        if ((modifiers & ModifierKeys.Control) != 0) result |= TerminalKeyboardModifiers.Control;
+        if ((modifiers & ModifierKeys.Alt) != 0) result |= TerminalKeyboardModifiers.Alt;
+        if ((modifiers & ModifierKeys.Windows) != 0) result |= TerminalKeyboardModifiers.Windows;
+        return result;
+    }
+
+    private static TerminalKeyboardKey MapKeyboardKey(Key key) => key switch
+    {
+        Key.Enter => TerminalKeyboardKey.Enter, Key.C => TerminalKeyboardKey.C,
+        Key.V => TerminalKeyboardKey.V, Key.R => TerminalKeyboardKey.R, Key.F => TerminalKeyboardKey.F,
+        Key.Insert => TerminalKeyboardKey.Insert, Key.Up => TerminalKeyboardKey.Up,
+        Key.Down => TerminalKeyboardKey.Down, Key.Left => TerminalKeyboardKey.Left,
+        Key.Right => TerminalKeyboardKey.Right, Key.NumPad0 => TerminalKeyboardKey.NumPad0,
+        Key.NumPad1 => TerminalKeyboardKey.NumPad1, Key.NumPad2 => TerminalKeyboardKey.NumPad2,
+        Key.NumPad3 => TerminalKeyboardKey.NumPad3, Key.NumPad4 => TerminalKeyboardKey.NumPad4,
+        Key.NumPad5 => TerminalKeyboardKey.NumPad5, Key.NumPad6 => TerminalKeyboardKey.NumPad6,
+        Key.NumPad7 => TerminalKeyboardKey.NumPad7, Key.NumPad8 => TerminalKeyboardKey.NumPad8,
+        Key.NumPad9 => TerminalKeyboardKey.NumPad9, Key.Multiply => TerminalKeyboardKey.Multiply,
+        Key.Add => TerminalKeyboardKey.Add, Key.Separator => TerminalKeyboardKey.Separator,
+        Key.Subtract => TerminalKeyboardKey.Subtract, Key.Decimal => TerminalKeyboardKey.Decimal,
+        Key.Divide => TerminalKeyboardKey.Divide, _ => TerminalKeyboardKey.Other
+    };
 
     private bool IsImeInputInProgress(KeyEventArgs e)
     {
@@ -759,109 +735,6 @@ public partial class TerminalTabView : UserControl
             key == Key.ImeNonConvert ||
             key == Key.ImeAccept ||
             key == Key.ImeModeChange;
-    }
-
-    private bool TryHandleControlShortcut(KeyEventArgs e)
-    {
-        if (!SupportsTerminalInput())
-        {
-            return false;
-        }
-
-        ModifierKeys modifiers = GetTerminalModifiers();
-        if ((modifiers & ModifierKeys.Control) == 0)
-        {
-            return false;
-        }
-
-        Key key = GetEffectiveKey(e);
-        string? chord = TerminalKeyChordTranslator.TranslateCtrlChord(key, modifiers, _terminalBuffer.ModifyOtherKeysLevel);
-        if (chord is null)
-        {
-            return false;
-        }
-
-        if (key == Key.C && modifiers == ModifierKeys.Control)
-        {
-            SendInterrupt();
-            return true;
-        }
-
-        return SendTerminalInput(chord);
-    }
-
-    private bool TryHandleSpecialKey(KeyEventArgs e)
-    {
-        Key key = GetEffectiveKey(e);
-        if (key == Key.Enter)
-        {
-            return false;
-        }
-
-        ModifierKeys modifiers = GetTerminalModifiers();
-        bool requiresTerminalInput = key is not Key.Back and not Key.Tab and not Key.Escape;
-        if (requiresTerminalInput && !SupportsTerminalInput())
-        {
-            return false;
-        }
-
-        string? sequence = TerminalKeyChordTranslator.TranslateSpecialKey(
-            key,
-            modifiers,
-            _terminalBuffer.ApplicationCursorKeysEnabled,
-            _terminalBuffer.ModifyOtherKeysLevel,
-            _terminalBuffer.KittyKeyboardFlags);
-
-        return sequence is not null && SendTerminalInput(sequence);
-    }
-
-    private bool TryHandleEnterKey(KeyEventArgs e)
-    {
-        if (GetEffectiveKey(e) != Key.Enter)
-        {
-            return false;
-        }
-
-        string? sequence = TerminalKeyChordTranslator.TranslateEnterKey(
-            GetTerminalModifiers(),
-            _terminalBuffer.ApplicationCursorKeysEnabled,
-            SupportsTerminalInput(),
-            _terminalBuffer.ModifyOtherKeysLevel,
-            _terminalBuffer.KittyKeyboardFlags);
-
-        return sequence is not null && SendTerminalInput(sequence);
-    }
-
-    private bool TryHandleApplicationKeypad(KeyEventArgs e)
-    {
-        if (!SupportsTerminalInput() || !_terminalBuffer.ApplicationKeypadEnabled || Keyboard.Modifiers != ModifierKeys.None)
-        {
-            return false;
-        }
-
-        Key key = GetEffectiveKey(e);
-        string? sequence = key switch
-        {
-            Key.NumPad0 => "\u001bOp",
-            Key.NumPad1 => "\u001bOq",
-            Key.NumPad2 => "\u001bOr",
-            Key.NumPad3 => "\u001bOs",
-            Key.NumPad4 => "\u001bOt",
-            Key.NumPad5 => "\u001bOu",
-            Key.NumPad6 => "\u001bOv",
-            Key.NumPad7 => "\u001bOw",
-            Key.NumPad8 => "\u001bOx",
-            Key.NumPad9 => "\u001bOy",
-            Key.Multiply => "\u001bOj",
-            Key.Add => "\u001bOk",
-            Key.Separator => "\u001bOl",
-            Key.Subtract => "\u001bOm",
-            Key.Decimal => "\u001bOn",
-            Key.Divide => "\u001bOo",
-            _ => null
-        };
-
-        return sequence is not null && SendTerminalInput(sequence);
     }
 
     private void OnTerminalOutputSizeChanged(object sender, SizeChangedEventArgs e)
