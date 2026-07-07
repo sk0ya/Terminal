@@ -187,6 +187,85 @@ public sealed class TerminalLaunchCoordinatorTests
     }
 
     [Fact]
+    public void TranscriptFileNameUsesWindowTitleWithoutEvaluatingCommandFallback()
+    {
+        var coordinator = CreateCoordinator();
+        int clockCalls = 0;
+
+        string fileName = coordinator.BuildTranscriptFileName(
+            " Terminal Title ",
+            () => throw new InvalidOperationException("fallback must not be evaluated"),
+            () =>
+            {
+                clockCalls++;
+                return new DateTime(2026, 7, 8, 9, 10, 11);
+            });
+
+        Assert.Equal("20260708-091011-Terminal Title.txt", fileName);
+        Assert.Equal(1, clockCalls);
+    }
+
+    [Fact]
+    public void TranscriptFileNameUsesActiveCommandBeforeProfileFallback()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.Activate("tool.exe --run", "C:\\work");
+
+        string fileName = coordinator.BuildTranscriptFileName(
+            " ",
+            () => throw new InvalidOperationException("profile fallback must not be evaluated"),
+            () => new DateTime(2026, 7, 8, 9, 10, 11));
+
+        Assert.Equal("20260708-091011-tool.exe --run.txt", fileName);
+    }
+
+    [Fact]
+    public void TranscriptFileNameSanitizesFallbackAndUsesTerminalForBlankBasis()
+    {
+        var coordinator = CreateCoordinator();
+        int fallbackCalls = 0;
+        DateTime timestamp = new(2026, 7, 8, 9, 10, 11);
+
+        string invalidName = string.Concat(Path.GetInvalidFileNameChars());
+        string sanitized = coordinator.BuildTranscriptFileName(
+            null,
+            () =>
+            {
+                fallbackCalls++;
+                return $"  shell{invalidName}  ";
+            },
+            () => timestamp);
+        string blank = coordinator.BuildTranscriptFileName(null, () => "   ", () => timestamp);
+
+        Assert.Equal($"20260708-091011-shell{new string('-', invalidName.Length)}.txt", sanitized);
+        Assert.Equal("20260708-091011-terminal.txt", blank);
+        Assert.Equal(1, fallbackCalls);
+    }
+
+    [Fact]
+    public void TranscriptFileNameRejectsNullFallbackBeforeEvaluatingClockOrState()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.Activate("tool.exe", "C:\\work");
+
+        Assert.Throws<ArgumentNullException>(() => coordinator.BuildTranscriptFileName(
+            "Terminal Title",
+            null!,
+            () => throw new InvalidOperationException("clock must not be evaluated")));
+    }
+
+    [Fact]
+    public void TranscriptFileNameRejectsNullClockBeforeEvaluatingFallback()
+    {
+        var coordinator = CreateCoordinator();
+
+        Assert.Throws<ArgumentNullException>(() => coordinator.BuildTranscriptFileName(
+            null,
+            () => throw new InvalidOperationException("fallback must not be evaluated"),
+            null!));
+    }
+
+    [Fact]
     public void ShellDirectoryUpdateCanonicalizesAndUpdatesActiveAndEditableState()
     {
         var coordinator = CreateCoordinator();

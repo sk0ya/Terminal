@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
+using System.Text;
 
 using Terminal.Settings;
 
@@ -117,6 +118,23 @@ internal sealed class TerminalLaunchCoordinator
             : ActiveCommandLine;
     }
 
+    public string BuildTranscriptFileName(
+        string? windowTitle,
+        Func<string> fallbackCommandLineFactory,
+        Func<DateTime> getCurrentTime)
+    {
+        ArgumentNullException.ThrowIfNull(fallbackCommandLineFactory);
+        ArgumentNullException.ThrowIfNull(getCurrentTime);
+
+        string basis = windowTitle ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(basis))
+        {
+            basis = GetActiveCommandLineOr(fallbackCommandLineFactory);
+        }
+
+        return $"{getCurrentTime():yyyyMMdd-HHmmss}-{SanitizeFileName(basis)}.txt";
+    }
+
     public bool TryBuildLaunchRequest(
         string? commandLine,
         string? workingDirectory,
@@ -195,4 +213,16 @@ internal sealed class TerminalLaunchCoordinator
 
     private static string EffectiveWorkingDirectory(string? value, string currentWorkingDirectory) =>
         string.IsNullOrWhiteSpace(value) ? currentWorkingDirectory : value.Trim();
+
+    private static string SanitizeFileName(string name)
+    {
+        var builder = new StringBuilder(name.Length);
+        foreach (char ch in name)
+        {
+            builder.Append(Path.GetInvalidFileNameChars().Contains(ch) ? '-' : ch);
+        }
+
+        string sanitized = builder.ToString().Trim();
+        return string.IsNullOrWhiteSpace(sanitized) ? "terminal" : sanitized;
+    }
 }

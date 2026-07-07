@@ -979,7 +979,10 @@ public partial class TerminalTabView
         var dialog = new SaveFileDialog
         {
             Filter = "Text files (*.txt)|*.txt|All files (*.*)|*.*",
-            FileName = BuildTranscriptFileName()
+            FileName = _launchState.BuildTranscriptFileName(
+                _terminalBuffer.WindowTitle,
+                () => GetSelectedProfile().DisplayName,
+                () => DateTime.Now)
         };
 
         if (dialog.ShowDialog() != true)
@@ -991,26 +994,4 @@ public partial class TerminalTabView
         SetStatus($"Saved transcript: {dialog.FileName}");
     }
 
-    private string BuildTranscriptFileName()
-    {
-        string basis = _terminalBuffer.WindowTitle;
-        if (string.IsNullOrWhiteSpace(basis))
-        {
-            basis = _launchState.GetActiveCommandLineOr(() => GetSelectedProfile().DisplayName);
-        }
-
-        return $"{DateTime.Now:yyyyMMdd-HHmmss}-{SanitizeFileName(basis)}.txt";
-    }
-
-    private static string SanitizeFileName(string name)
-    {
-        var builder = new StringBuilder(name.Length);
-        foreach (char ch in name)
-        {
-            builder.Append(Path.GetInvalidFileNameChars().Contains(ch) ? '-' : ch);
-        }
-
-        string sanitized = builder.ToString().Trim();
-        return string.IsNullOrWhiteSpace(sanitized) ? "terminal" : sanitized;
-    }
 }
