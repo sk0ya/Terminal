@@ -209,7 +209,7 @@ public partial class TerminalTabView
             : _session.Capabilities.DisplayName;
         ViewportValueText.Text = $"{_currentColumns}x{_currentRows}";
         ScrollbackValueText.Text = $"{_terminalBuffer.ScrollbackLineCount} sb / {_terminalBuffer.VisibleLineCount} vis";
-        FollowValueText.Text = _followTerminalOutput ? "Follow" : "Pinned";
+        FollowValueText.Text = _viewportState.FollowOutput ? "Follow" : "Pinned";
         FontSizeValueText.Text = $"{TerminalOutput.FontSize:0}px";
 
         string workingDirectory = _session is null

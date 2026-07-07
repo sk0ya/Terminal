@@ -52,8 +52,7 @@ public partial class TerminalTabView : UserControl
     private bool _isSessionTransitionActive => _sessionOrchestrator.IsTransitionActive;
     private bool _isClosingWindow;
     private bool _isRenderingTerminal => _renderCoordinator.IsRendering;
-    private bool _followTerminalOutput = true;
-    private bool _alternateScreenViewportMode;
+    private readonly TerminalViewportCoordinator _viewportState = new(AutoFollowThreshold);
     private bool _cursorBlinkVisible = true;
     private readonly TerminalImeInputCoordinator _imeInput = new();
     private bool _terminalMouseCaptureActive;
@@ -1887,9 +1886,10 @@ public partial class TerminalTabView : UserControl
         // ExtentHeight/ViewportHeight are only refreshed on its next layout pass (after the
         // InvalidateScrollInfo queued here). Using the stale ScrollViewer extent would scroll
         // to the previous bottom and fail to follow newly appended output.
-        double targetOffset = ResolveRestoredVerticalOffset(
+        // Derive the follow state from this decision instead of re-reading the ScrollViewer,
+        // whose offset/extent are stale until the deferred scroll lands.
+        double targetOffset = _viewportState.ResolveRestoredVerticalOffset(
             isAlternateScreenActive,
-            _followTerminalOutput,
             preservedDistanceFromBottom,
             TerminalOutput.ExtentHeight,
             TerminalOutput.ViewportHeight);
@@ -1899,57 +1899,24 @@ public partial class TerminalTabView : UserControl
             TerminalScrollHost.ScrollToHorizontalOffset(0);
         }
 
-        // Derive the follow state from the restore decision instead of re-reading the
-        // ScrollViewer, whose offset/extent are still stale until the deferred scroll lands.
-        _followTerminalOutput = isAlternateScreenActive
-            || _followTerminalOutput
-            || preservedDistanceFromBottom <= AutoFollowThreshold;
         UpdateTerminalChrome();
         return targetOffset;
     }
 
-    internal static double ResolveRestoredVerticalOffset(
-        bool isAlternateScreenActive,
-        bool followTerminalOutput,
-        double preservedDistanceFromBottom,
-        double extentHeight,
-        double viewportHeight)
-    {
-        if (isAlternateScreenActive)
-        {
-            return 0;
-        }
-
-        double maxOffset = Math.Max(0, extentHeight - viewportHeight);
-        if (followTerminalOutput || preservedDistanceFromBottom <= AutoFollowThreshold)
-        {
-            return maxOffset;
-        }
-
-        return Math.Max(0, maxOffset - preservedDistanceFromBottom);
-    }
-
     private void UpdateFollowOutputState()
     {
-        if (_terminalBuffer.IsAlternateScreenActive)
-        {
-            _followTerminalOutput = true;
-            UpdateTerminalChrome();
-            return;
-        }
-
-        _followTerminalOutput = GetDistanceFromBottom() <= AutoFollowThreshold;
+        _viewportState.UpdateFollowState(
+            _terminalBuffer.IsAlternateScreenActive,
+            GetDistanceFromBottom());
         UpdateTerminalChrome();
     }
 
     private void ApplyAlternateScreenViewportMode(bool isAlternateScreenActive)
     {
-        if (_alternateScreenViewportMode == isAlternateScreenActive)
+        if (!_viewportState.SetAlternateScreenMode(isAlternateScreenActive))
         {
             return;
         }
-
-        _alternateScreenViewportMode = isAlternateScreenActive;
         ScrollBarVisibility visibility = isAlternateScreenActive
             ? ScrollBarVisibility.Disabled
             : ScrollBarVisibility.Auto;
@@ -2222,7 +2189,7 @@ public partial class TerminalTabView : UserControl
         var (_, charHeight) = MeasureCharacterCell();
         double offset = absoluteLine * charHeight;
         TerminalScrollHost.ScrollToVerticalOffset(offset);
-        _followTerminalOutput = false;
+        _viewportState.StopFollowing();
         UpdateFollowOutputState();
     }
 
