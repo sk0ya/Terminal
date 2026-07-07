@@ -693,6 +693,8 @@ public sealed class TerminalSessionOrchestratorTests
 
     private sealed class FakeSession : ITerminalSession
     {
+        private int _stallProbeCount;
+
         public TerminalSessionCapabilities Capabilities { get; } = new(
             TerminalSessionKind.ConPty, SupportsResize: true, SupportsTerminalInput: true);
         public Exception? StartError { get; init; }
@@ -704,7 +706,7 @@ public sealed class TerminalSessionOrchestratorTests
         public int StartCount { get; private set; }
         public int DisposeCount { get; private set; }
         public int ForceUnlockCount { get; private set; }
-        public int StallProbeCount { get; private set; }
+        public int StallProbeCount => Volatile.Read(ref _stallProbeCount);
         public TimeSpan LastInitialOutputTimeout { get; private set; }
         public TimeSpan LastIdleOutputTimeout { get; private set; }
         public event EventHandler<string>? OutputReceived { add { } remove { } }
@@ -731,7 +733,7 @@ public sealed class TerminalSessionOrchestratorTests
         }
         public bool IsOutputStalled(TimeSpan initialOutputTimeout, TimeSpan idleOutputTimeout)
         {
-            StallProbeCount++;
+            Interlocked.Increment(ref _stallProbeCount);
             LastInitialOutputTimeout = initialOutputTimeout;
             LastIdleOutputTimeout = idleOutputTimeout;
             StallProbeAction?.Invoke();
