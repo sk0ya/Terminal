@@ -172,6 +172,85 @@ public sealed class TerminalFindCoordinatorTests
         Assert.False(action.Handled);
     }
 
+    [Theory]
+    [InlineData((int)TerminalFindKey.F3)]
+    [InlineData((int)TerminalFindKey.Escape)]
+    public void ResolveWindowKeyLeavesFindKeysUnhandledWhenClosed(int keyValue)
+    {
+        TerminalFindKeyAction action = TerminalFindCoordinator.ResolveWindowKey(
+            (TerminalFindKey)keyValue,
+            TerminalFindKeyModifiers.Shift | TerminalFindKeyModifiers.Alt,
+            isOpen: false);
+
+        Assert.Equal(TerminalFindKeyActionKind.None, action.Kind);
+        Assert.False(action.Handled);
+    }
+
+    [Theory]
+    [InlineData((int)TerminalFindKeyModifiers.None)]
+    [InlineData((int)(TerminalFindKeyModifiers.Control |
+        TerminalFindKeyModifiers.Alt |
+        TerminalFindKeyModifiers.Windows))]
+    public void ResolveWindowKeyMovesForwardOnF3WithoutShift(int modifierValue)
+    {
+        TerminalFindKeyAction action = TerminalFindCoordinator.ResolveWindowKey(
+            TerminalFindKey.F3,
+            (TerminalFindKeyModifiers)modifierValue,
+            isOpen: true);
+
+        Assert.Equal(TerminalFindKeyActionKind.Move, action.Kind);
+        Assert.True(action.Forward);
+        Assert.True(action.Handled);
+    }
+
+    [Theory]
+    [InlineData((int)TerminalFindKeyModifiers.Shift)]
+    [InlineData((int)(TerminalFindKeyModifiers.Shift |
+        TerminalFindKeyModifiers.Control |
+        TerminalFindKeyModifiers.Alt |
+        TerminalFindKeyModifiers.Windows))]
+    public void ResolveWindowKeyMovesBackwardOnF3WithShift(int modifierValue)
+    {
+        TerminalFindKeyAction action = TerminalFindCoordinator.ResolveWindowKey(
+            TerminalFindKey.F3,
+            (TerminalFindKeyModifiers)modifierValue,
+            isOpen: true);
+
+        Assert.Equal(TerminalFindKeyActionKind.Move, action.Kind);
+        Assert.False(action.Forward);
+        Assert.True(action.Handled);
+    }
+
+    [Fact]
+    public void ResolveWindowKeyClosesOnEscapeWithAnyModifiers()
+    {
+        TerminalFindKeyAction action = TerminalFindCoordinator.ResolveWindowKey(
+            TerminalFindKey.Escape,
+            TerminalFindKeyModifiers.Shift |
+            TerminalFindKeyModifiers.Control |
+            TerminalFindKeyModifiers.Alt |
+            TerminalFindKeyModifiers.Windows,
+            isOpen: true);
+
+        Assert.Equal(TerminalFindKeyActionKind.Close, action.Kind);
+        Assert.True(action.Handled);
+    }
+
+    [Theory]
+    [InlineData((int)TerminalFindKey.Enter, (int)TerminalFindKeyModifiers.None)]
+    [InlineData((int)TerminalFindKey.C, (int)TerminalFindKeyModifiers.Alt)]
+    [InlineData((int)TerminalFindKey.Other, (int)TerminalFindKeyModifiers.None)]
+    public void ResolveWindowKeyLeavesOtherOpenPopupInputUnhandled(int keyValue, int modifierValue)
+    {
+        TerminalFindKeyAction action = TerminalFindCoordinator.ResolveWindowKey(
+            (TerminalFindKey)keyValue,
+            (TerminalFindKeyModifiers)modifierValue,
+            isOpen: true);
+
+        Assert.Equal(TerminalFindKeyActionKind.None, action.Kind);
+        Assert.False(action.Handled);
+    }
+
     private static IReadOnlyList<TerminalMatch> Matches(params (int Line, int Column)[] positions) =>
         positions.Select(position => new TerminalMatch(
             position.Line,

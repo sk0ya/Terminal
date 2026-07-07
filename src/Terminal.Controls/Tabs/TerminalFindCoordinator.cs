@@ -80,6 +80,25 @@ internal sealed class TerminalFindCoordinator
         };
     }
 
+    public static TerminalFindKeyAction ResolveWindowKey(
+        TerminalFindKey key,
+        TerminalFindKeyModifiers modifiers,
+        bool isOpen)
+    {
+        if (!isOpen)
+        {
+            return default;
+        }
+
+        bool shift = (modifiers & TerminalFindKeyModifiers.Shift) != 0;
+        return key switch
+        {
+            TerminalFindKey.F3 => new(TerminalFindKeyActionKind.Move, Forward: !shift),
+            TerminalFindKey.Escape => new(TerminalFindKeyActionKind.Close),
+            _ => default
+        };
+    }
+
     public void Open()
     {
         AnchorLine = 0;

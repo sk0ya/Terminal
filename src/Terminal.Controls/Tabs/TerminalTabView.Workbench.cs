@@ -415,16 +415,22 @@ public partial class TerminalTabView
             return;
         }
 
-        if (FindPopup.IsOpen && key == Key.F3)
+        TerminalFindKeyAction findAction = TerminalFindCoordinator.ResolveWindowKey(
+            MapFindKey(key),
+            MapFindKeyModifiers(modifiers),
+            FindPopup.IsOpen);
+        switch (findAction.Kind)
         {
-            MoveFind((modifiers & ModifierKeys.Shift) == 0);
-            e.Handled = true;
-            return;
+            case TerminalFindKeyActionKind.Move:
+                MoveFind(findAction.Forward);
+                break;
+            case TerminalFindKeyActionKind.Close:
+                CloseFindPanel();
+                break;
         }
 
-        if (FindPopup.IsOpen && key == Key.Escape)
+        if (findAction.Handled)
         {
-            CloseFindPanel();
             e.Handled = true;
         }
     }
