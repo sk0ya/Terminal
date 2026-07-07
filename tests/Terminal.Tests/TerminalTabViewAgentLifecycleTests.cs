@@ -227,8 +227,7 @@ public sealed class TerminalTabViewAgentLifecycleTests
         private static readonly FieldInfo OrchestratorField = Field("_sessionOrchestrator");
         private static readonly FieldInfo LaunchField = Field("_launchState");
         private static readonly FieldInfo BufferField = Field("_terminalBuffer");
-        private static readonly FieldInfo ActiveExecutionField = Field("_activeAgentCommand");
-        private static readonly FieldInfo ShellIntegrationField = Field("_shellIntegrationObserved");
+        private static readonly FieldInfo AgentCoordinatorField = Field("_agentCommands");
 
         public static void Attach(TerminalTabView view, FakeAgentSession session, string commandLine)
         {
@@ -242,10 +241,22 @@ public sealed class TerminalTabViewAgentLifecycleTests
             ((TerminalLaunchCoordinator)LaunchField.GetValue(view)!).Activate(commandLine, Environment.CurrentDirectory);
         }
 
-        public static void SetShellIntegration(TerminalTabView view, bool active) =>
-            ShellIntegrationField.SetValue(view, active);
+        public static void SetShellIntegration(TerminalTabView view, bool active)
+        {
+            TerminalAgentCommandCoordinator coordinator = AgentCoordinator(view);
+            if (active)
+            {
+                coordinator.OnShellZone(
+                    new ShellCommandZoneEventArgs(ShellCommandZoneType.PromptStart, 0, null),
+                    (_, _) => string.Empty);
+            }
+            else
+            {
+                coordinator.ResetSession();
+            }
+        }
 
-        public static object? ActiveExecution(TerminalTabView view) => ActiveExecutionField.GetValue(view);
+        public static object? ActiveExecution(TerminalTabView view) => AgentCoordinator(view).Current;
 
         public static int CurrentAbsoluteLine(TerminalTabView view)
         {
@@ -295,6 +306,9 @@ public sealed class TerminalTabViewAgentLifecycleTests
         private static FieldInfo Field(string name) =>
             typeof(TerminalTabView).GetField(name, InstanceFlags)
             ?? throw new MissingFieldException(typeof(TerminalTabView).FullName, name);
+
+        private static TerminalAgentCommandCoordinator AgentCoordinator(TerminalTabView view) =>
+            (TerminalAgentCommandCoordinator)AgentCoordinatorField.GetValue(view)!;
 
         private static void Invoke(TerminalTabView view, string methodName, params object?[] arguments)
         {

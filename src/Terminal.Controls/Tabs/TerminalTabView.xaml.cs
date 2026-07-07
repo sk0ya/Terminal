@@ -1953,7 +1953,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ShellCommandLineReceived -= TerminalBuffer_ShellCommandLineReceived;
         _terminalBuffer.ShellHistoryPathReceived -= TerminalBuffer_ShellHistoryPathReceived;
         _shellCommandLines.Clear();
-        _shellIntegrationObserved = false;
+        _agentCommands.ResetSession();
         // Command history intentionally survives a restart so the user keeps their history.
         _terminalBuffer = nextBuffer;
         _terminalBuffer.InputSequenceGenerated += TerminalBuffer_InputSequenceGenerated;
@@ -2083,7 +2083,6 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalBuffer_ShellCommandZoneReceived(object? sender, ShellCommandZoneEventArgs e)
     {
-        _shellIntegrationObserved = true;
         OnAgentShellCommandZone(e);
         RaiseShellCommandActivity(e);
 
