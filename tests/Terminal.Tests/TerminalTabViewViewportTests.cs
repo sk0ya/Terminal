@@ -6,6 +6,25 @@ public sealed class TerminalTabViewViewportTests
 {
     private readonly TerminalViewportCoordinator _coordinator = new(autoFollowThreshold: 2);
 
+    [Fact]
+    public void ViewportSizeStartsWithTerminalDefaults()
+    {
+        Assert.Equal(120, _coordinator.Columns);
+        Assert.Equal(30, _coordinator.Rows);
+    }
+
+    [Fact]
+    public void UpdatingViewportSizeReportsOnlyRealChangesAndOwnsLatestSize()
+    {
+        Assert.False(_coordinator.UpdateSize(120, 30));
+
+        Assert.True(_coordinator.UpdateSize(132, 41));
+        Assert.Equal(132, _coordinator.Columns);
+        Assert.Equal(41, _coordinator.Rows);
+
+        Assert.False(_coordinator.UpdateSize(132, 41));
+    }
+
     [Theory]
     [InlineData(0, 0, false)]
     [InlineData(0.0005, 0, false)]

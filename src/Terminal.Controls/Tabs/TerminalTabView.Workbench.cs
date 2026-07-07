@@ -207,7 +207,7 @@ public partial class TerminalTabView
         SessionModeValueText.Text = _session is null
             ? "Idle"
             : _session.Capabilities.DisplayName;
-        ViewportValueText.Text = $"{_currentColumns}x{_currentRows}";
+        ViewportValueText.Text = $"{_viewportState.Columns}x{_viewportState.Rows}";
         ScrollbackValueText.Text = $"{_terminalBuffer.ScrollbackLineCount} sb / {_terminalBuffer.VisibleLineCount} vis";
         FollowValueText.Text = _viewportState.FollowOutput ? "Follow" : "Pinned";
         FontSizeValueText.Text = $"{TerminalOutput.FontSize:0}px";

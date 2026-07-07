@@ -40,8 +40,6 @@ public partial class TerminalTabView : UserControl
     private readonly TerminalClipboardCoordinator _clipboardState = new();
     private ITerminalSession? _session => _sessionOrchestrator.Current;
     private AnsiTerminalBuffer _terminalBuffer = new(120, 30);
-    private short _currentColumns = 120;
-    private short _currentRows = 30;
     private readonly DispatcherTimer _sessionWatchdog = new(DispatcherPriority.Background);
     private readonly DispatcherTimer _cursorBlinkTimer = new(DispatcherPriority.Background);
     private readonly DispatcherTimer _renderThrottleTimer = new(DispatcherPriority.Background);
@@ -779,14 +777,12 @@ public partial class TerminalTabView : UserControl
     private void UpdateTerminalViewportSize()
     {
         var (columns, rows) = CalculateTerminalSize();
-        if (columns == _currentColumns && rows == _currentRows)
+        if (!_viewportState.UpdateSize(columns, rows))
         {
             UpdateTerminalChrome();
             return;
         }
 
-        _currentColumns = columns;
-        _currentRows = rows;
         _terminalBuffer.Resize(columns, rows);
         RequestDocumentRender();
 
@@ -818,7 +814,7 @@ public partial class TerminalTabView : UserControl
         {
             UpdateUiState(_session is not null);
             TerminalSessionStartResult result = await _sessionOrchestrator.StartAsync(
-                () => CreateSessionAsync(commandLine, _currentColumns, _currentRows, workingDirectory),
+                () => CreateSessionAsync(commandLine, _viewportState.Columns, _viewportState.Rows, workingDirectory),
                 WireSessionEvents,
                 UnwireSessionEvents,
                 ResetViewForSessionStart);
@@ -954,8 +950,9 @@ public partial class TerminalTabView : UserControl
         StopSynchronizedUpdateWatchdog();
         ReleaseTerminalMouseCapture(force: true);
         ResetInputProxyText();
-        (_currentColumns, _currentRows) = CalculateTerminalSize();
-        ReplaceTerminalBuffer(new AnsiTerminalBuffer(_currentColumns, _currentRows, _scrollbackLimit));
+        var (columns, rows) = CalculateTerminalSize();
+        _viewportState.UpdateSize(columns, rows);
+        ReplaceTerminalBuffer(new AnsiTerminalBuffer(columns, rows, _scrollbackLimit));
         _cursorBlinkVisible = true;
         _outputBatch.SetPrioritizeNextRender(true);
         UpdateOverlayState();
@@ -2450,8 +2447,8 @@ public partial class TerminalTabView : UserControl
         var (charWidth, charHeight) = MeasureCharacterCell();
         double x = Math.Max(0, position.X - TerminalOutput.Padding.Left);
         double y = Math.Max(0, position.Y - TerminalOutput.Padding.Top);
-        column = Math.Clamp((int)(x / charWidth) + 1, 1, _currentColumns);
-        row = Math.Clamp((int)(y / charHeight) + 1, 1, _currentRows);
+        column = Math.Clamp((int)(x / charWidth) + 1, 1, _viewportState.Columns);
+        row = Math.Clamp((int)(y / charHeight) + 1, 1, _viewportState.Rows);
         return true;
     }
 

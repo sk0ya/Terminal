@@ -1,10 +1,27 @@
 namespace Terminal.Tabs;
 
-internal sealed class TerminalViewportCoordinator(double autoFollowThreshold)
+internal sealed class TerminalViewportCoordinator(
+    double autoFollowThreshold,
+    short initialColumns = 120,
+    short initialRows = 30)
 {
     private bool _isAlternateScreenMode;
 
     public bool FollowOutput { get; private set; } = true;
+    public short Columns { get; private set; } = initialColumns;
+    public short Rows { get; private set; } = initialRows;
+
+    public bool UpdateSize(short columns, short rows)
+    {
+        if (columns == Columns && rows == Rows)
+        {
+            return false;
+        }
+
+        Columns = columns;
+        Rows = rows;
+        return true;
+    }
 
     public bool SetAlternateScreenMode(bool active)
     {
