@@ -68,8 +68,7 @@ public partial class TerminalTabView : UserControl
     // Command lines reported via OSC 633;E, most-recent last. Backs the Ctrl+R
     // history overlay and the public CommandHistory API. Capped to keep memory bounded.
     private const int CommandHistoryLimit = 5000;
-    private readonly List<string> _commandHistory = [];
-    private bool _historySeeded;
+    private readonly TerminalHistoryCoordinator _historyState = new(CommandHistoryLimit);
     private string? _shellHistoryPath;
 
     // Number of items the right-click menu ships with from XAML (Copy / Paste). Host-provided
@@ -101,7 +100,7 @@ public partial class TerminalTabView : UserControl
     /// Backs the built-in Ctrl+R history overlay; exposed so hosts can drive
     /// their own history search UI. Empty until shell integration is active.
     /// </summary>
-    public IReadOnlyList<string> CommandHistory => _commandHistory;
+    public IReadOnlyList<string> CommandHistory => _historyState.History;
 
     /// <summary>
     /// When true (default), the first time the Ctrl+R history search opens for a
@@ -121,8 +120,8 @@ public partial class TerminalTabView : UserControl
     public void LoadCommandHistory(IEnumerable<string> commands)
     {
         ArgumentNullException.ThrowIfNull(commands);
-        _historySeeded = true;
-        MergeSeedHistory([.. commands]);
+        _historyState.MarkSeeded();
+        _historyState.MergeSeedHistory([.. commands]);
         if (HistoryPopup.IsOpen)
         {
             UpdateHistoryResults();
@@ -2143,7 +2142,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ShellHistoryPathReceived -= TerminalBuffer_ShellHistoryPathReceived;
         _shellCommandLines.Clear();
         _shellIntegrationObserved = false;
-        // _commandHistory intentionally survives a restart so the user keeps their history.
+        // Command history intentionally survives a restart so the user keeps their history.
         _terminalBuffer = nextBuffer;
         _terminalBuffer.InputSequenceGenerated += TerminalBuffer_InputSequenceGenerated;
         _terminalBuffer.ClipboardSetRequested += TerminalBuffer_ClipboardSetRequested;
@@ -2296,27 +2295,9 @@ public partial class TerminalTabView : UserControl
 
     private void RecordCommandHistory(string command)
     {
-        if (string.IsNullOrWhiteSpace(command))
+        if (!_historyState.Record(command))
         {
             return;
-        }
-
-        // A repeated command moves to the most-recent position rather than duplicating.
-        int existing = _commandHistory.LastIndexOf(command);
-        if (existing >= 0)
-        {
-            if (existing == _commandHistory.Count - 1)
-            {
-                return;
-            }
-
-            _commandHistory.RemoveAt(existing);
-        }
-
-        _commandHistory.Add(command);
-        if (_commandHistory.Count > CommandHistoryLimit)
-        {
-            _commandHistory.RemoveRange(0, _commandHistory.Count - CommandHistoryLimit);
         }
 
         CommandHistoryRecorded?.Invoke(this, command);

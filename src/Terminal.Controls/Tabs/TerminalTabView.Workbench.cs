@@ -767,12 +767,11 @@ public partial class TerminalTabView
 
     private void EnsureHistorySeeded()
     {
-        if (_historySeeded)
+        if (!_historyState.TryBeginSeed())
         {
             return;
         }
 
-        _historySeeded = true;
         if (!PSReadLineHistorySeedingEnabled)
         {
             return;
@@ -787,7 +786,7 @@ public partial class TerminalTabView
         IReadOnlyList<string> past = PSReadLineHistory.Read(path);
         if (past.Count > 0)
         {
-            MergeSeedHistory(past);
+            _historyState.MergeSeedHistory(past);
         }
     }
 
@@ -832,40 +831,6 @@ public partial class TerminalTabView
         return Path.GetFileNameWithoutExtension(token);
     }
 
-    /// <summary>
-    /// Merges <paramref name="olderFirst"/> (oldest first) ahead of the commands
-    /// already recorded this session, deduplicating so the most recent
-    /// occurrence keeps its position, then trims to the history cap.
-    /// </summary>
-    private void MergeSeedHistory(IReadOnlyList<string> olderFirst)
-    {
-        var combined = new List<string>(olderFirst.Count + _commandHistory.Count);
-        combined.AddRange(olderFirst);
-        combined.AddRange(_commandHistory);
-
-        // Walk newest-to-oldest keeping the first time each command is seen, so
-        // the most recent occurrence wins; reverse back to oldest-first order.
-        var seen = new HashSet<string>();
-        _commandHistory.Clear();
-        for (int i = combined.Count - 1; i >= 0; i--)
-        {
-            string command = combined[i];
-            if (string.IsNullOrWhiteSpace(command) || !seen.Add(command))
-            {
-                continue;
-            }
-
-            _commandHistory.Add(command);
-        }
-
-        _commandHistory.Reverse();
-
-        if (_commandHistory.Count > CommandHistoryLimit)
-        {
-            _commandHistory.RemoveRange(0, _commandHistory.Count - CommandHistoryLimit);
-        }
-    }
-
     private void CloseHistoryPanel()
     {
         if (!HistoryPopup.IsOpen)
@@ -891,48 +856,23 @@ public partial class TerminalTabView
 
     private void UpdateHistoryResults()
     {
-        string query = HistorySearchBox.Text;
-        bool showAll = string.IsNullOrWhiteSpace(query);
-
-        // recency = index into _commandHistory (higher = more recent), used to
-        // break score ties and to order the unfiltered list newest-first.
-        var ranked = new List<(int score, int recency, string command, string display, IReadOnlyList<int> matches)>();
-        for (int i = 0; i < _commandHistory.Count; i++)
-        {
-            string command = _commandHistory[i];
-            string display = command.ReplaceLineEndings("⏎");
-            if (showAll)
-            {
-                ranked.Add((0, i, command, display, []));
-            }
-            else if (TryFuzzyMatch(display, query, out int score, out IReadOnlyList<int> matches))
-            {
-                ranked.Add((score, i, command, display, matches));
-            }
-        }
-
-        ranked.Sort(static (a, b) =>
-        {
-            int byScore = b.score.CompareTo(a.score);
-            return byScore != 0 ? byScore : b.recency.CompareTo(a.recency);
-        });
-
-        // fzf renders the best match at the bottom (next to the prompt), so add
-        // the ranked list in reverse: worst on top, best last.
+        _historyState.Search(HistorySearchBox.Text);
         HistoryResults.Items.Clear();
-        for (int i = ranked.Count - 1; i >= 0; i--)
+        foreach (TerminalHistoryResult result in _historyState.Results)
         {
-            (int _, int _, string command, string display, IReadOnlyList<int> matches) = ranked[i];
-            HistoryResults.Items.Add(BuildHistoryItem(command, display, matches));
+            HistoryResults.Items.Add(BuildHistoryItem(
+                result.Command,
+                result.Display,
+                result.MatchedIndices));
         }
 
-        if (HistoryResults.Items.Count > 0)
+        HistoryResults.SelectedIndex = _historyState.SelectedIndex;
+        if (_historyState.SelectedIndex >= 0)
         {
-            HistoryResults.SelectedIndex = HistoryResults.Items.Count - 1;
             HistoryResults.ScrollIntoView(HistoryResults.SelectedItem);
         }
 
-        HistoryCountText.Text = $"{ranked.Count}/{_commandHistory.Count}";
+        HistoryCountText.Text = _historyState.CountText;
     }
 
     private TextBlock BuildHistoryItem(string command, string display, IReadOnlyList<int> matchedIndices)
@@ -996,70 +936,12 @@ public partial class TerminalTabView
     /// </summary>
     internal static bool TryFuzzyMatch(string text, string query, out int score, out IReadOnlyList<int> matchedIndices)
     {
-        score = 0;
-        var indices = new List<int>(query.Length);
-        matchedIndices = indices;
-
-        int textIndex = 0;
-        int previousMatch = -2;
-        int consecutive = 0;
-
-        foreach (char rawQueryChar in query)
-        {
-            if (char.IsWhiteSpace(rawQueryChar))
-            {
-                continue;
-            }
-
-            char queryChar = char.ToLowerInvariant(rawQueryChar);
-            bool found = false;
-            for (; textIndex < text.Length; textIndex++)
-            {
-                if (char.ToLowerInvariant(text[textIndex]) != queryChar)
-                {
-                    continue;
-                }
-
-                int charScore = 1;
-                if (textIndex == previousMatch + 1)
-                {
-                    consecutive++;
-                    charScore += 5 + consecutive;
-                }
-                else
-                {
-                    consecutive = 0;
-                }
-
-                if (textIndex == 0)
-                {
-                    charScore += 8;
-                }
-                else if (IsWordBoundary(text[textIndex - 1]))
-                {
-                    charScore += 6;
-                }
-
-                indices.Add(textIndex);
-                score += charScore;
-                previousMatch = textIndex;
-                textIndex++;
-                found = true;
-                break;
-            }
-
-            if (!found)
-            {
-                score = 0;
-                return false;
-            }
-        }
-
-        return indices.Count > 0;
+        return TerminalHistoryCoordinator.TryFuzzyMatch(
+            text,
+            query,
+            out score,
+            out matchedIndices);
     }
-
-    private static bool IsWordBoundary(char c)
-        => c is ' ' or '/' or '\\' or '-' or '_' or '.' or ':' or '\t';
 
     private void HistorySearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
@@ -1108,13 +990,13 @@ public partial class TerminalTabView
 
     private void MoveHistorySelection(int delta)
     {
-        int count = HistoryResults.Items.Count;
-        if (count == 0)
+        _historyState.SelectIndex(HistoryResults.SelectedIndex);
+        int next = _historyState.MoveSelection(delta);
+        if (next < 0)
         {
             return;
         }
 
-        int next = Math.Clamp(HistoryResults.SelectedIndex + delta, 0, count - 1);
         HistoryResults.SelectedIndex = next;
         HistoryResults.ScrollIntoView(HistoryResults.SelectedItem);
     }
@@ -1126,7 +1008,9 @@ public partial class TerminalTabView
 
     private void AcceptHistorySelection()
     {
-        if (HistoryResults.SelectedItem is not FrameworkElement element || element.Tag is not string command)
+        _historyState.SelectIndex(HistoryResults.SelectedIndex);
+        string? command = _historyState.AcceptSelection();
+        if (command is null)
         {
             return;
         }
