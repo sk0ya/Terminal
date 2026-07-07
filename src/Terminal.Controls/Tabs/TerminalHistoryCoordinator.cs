@@ -92,6 +92,22 @@ internal sealed class TerminalHistoryCoordinator(int limit)
         return true;
     }
 
+    public void SeedOnce(bool enabled, Func<IReadOnlyList<string>> loadHistory)
+    {
+        ArgumentNullException.ThrowIfNull(loadHistory);
+
+        if (!TryBeginSeed() || !enabled)
+        {
+            return;
+        }
+
+        IReadOnlyList<string> past = loadHistory();
+        if (past.Count > 0)
+        {
+            MergeSeedHistory(past);
+        }
+    }
+
     public void MergeSeedHistory(IReadOnlyList<string> olderFirst)
     {
         var combined = new List<string>(olderFirst.Count + _history.Count);

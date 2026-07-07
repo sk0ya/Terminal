@@ -777,27 +777,11 @@ public partial class TerminalTabView
 
     private void EnsureHistorySeeded()
     {
-        if (!_historyState.TryBeginSeed())
+        _historyState.SeedOnce(PSReadLineHistorySeedingEnabled, () =>
         {
-            return;
-        }
-
-        if (!PSReadLineHistorySeedingEnabled)
-        {
-            return;
-        }
-
-        string? path = ResolvePSReadLineHistoryPath();
-        if (path is null)
-        {
-            return;
-        }
-
-        IReadOnlyList<string> past = PSReadLineHistory.Read(path);
-        if (past.Count > 0)
-        {
-            _historyState.MergeSeedHistory(past);
-        }
+            string? path = ResolvePSReadLineHistoryPath();
+            return path is null ? [] : PSReadLineHistory.Read(path);
+        });
     }
 
     private string? ResolvePSReadLineHistoryPath()

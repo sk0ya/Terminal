@@ -120,6 +120,88 @@ public sealed class TerminalHistoryCoordinatorTests
         Assert.True(coordinator.IsSeeded);
     }
 
+    [Fact]
+    public void SeedOnceLoadsAndMergesHistoryOnlyOnFirstAttempt()
+    {
+        var coordinator = new TerminalHistoryCoordinator(limit: 10);
+        coordinator.Record("session");
+        int loadCount = 0;
+
+        coordinator.SeedOnce(enabled: true, () =>
+        {
+            loadCount++;
+            return ["older", "session"];
+        });
+        coordinator.SeedOnce(enabled: true, () =>
+        {
+            loadCount++;
+            return ["unexpected"];
+        });
+
+        Assert.Equal(1, loadCount);
+        Assert.Equal(["older", "session"], coordinator.History);
+        Assert.True(coordinator.IsSeeded);
+    }
+
+    [Fact]
+    public void DisabledSeedAttemptIsConsumedWithoutLoadingHistory()
+    {
+        var coordinator = new TerminalHistoryCoordinator(limit: 10);
+        int loadCount = 0;
+
+        coordinator.SeedOnce(enabled: false, () =>
+        {
+            loadCount++;
+            return ["unexpected"];
+        });
+        coordinator.SeedOnce(enabled: true, () =>
+        {
+            loadCount++;
+            return ["also-unexpected"];
+        });
+
+        Assert.Equal(0, loadCount);
+        Assert.Empty(coordinator.History);
+        Assert.True(coordinator.IsSeeded);
+    }
+
+    [Fact]
+    public void LoaderFailureConsumesSeedAttemptAndPreventsRetry()
+    {
+        var coordinator = new TerminalHistoryCoordinator(limit: 10);
+        int loadCount = 0;
+
+        Assert.Throws<InvalidOperationException>(() => coordinator.SeedOnce(enabled: true, () =>
+        {
+            loadCount++;
+            throw new InvalidOperationException("read failed");
+        }));
+
+        coordinator.SeedOnce(enabled: true, () =>
+        {
+            loadCount++;
+            return ["unexpected"];
+        });
+
+        Assert.Equal(1, loadCount);
+        Assert.True(coordinator.IsSeeded);
+        Assert.Empty(coordinator.History);
+    }
+
+    [Fact]
+    public void SeedOncePreservesMergeOrderDeduplicationAndLimit()
+    {
+        var coordinator = new TerminalHistoryCoordinator(limit: 4);
+        coordinator.Record("session-a");
+        coordinator.Record("shared");
+
+        coordinator.SeedOnce(
+            enabled: true,
+            () => ["trimmed", "old-a", "shared", "old-b", "old-a"]);
+
+        Assert.Equal(["old-b", "old-a", "session-a", "shared"], coordinator.History);
+    }
+
     [Theory]
     [InlineData((int)TerminalHistoryKey.Escape, (int)TerminalHistoryKeyActionKind.Close, 0)]
     [InlineData((int)TerminalHistoryKey.Enter, (int)TerminalHistoryKeyActionKind.Accept, 0)]
