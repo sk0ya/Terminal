@@ -856,41 +856,19 @@ public partial class TerminalTabView
         }
 
         Brush highlight = TryFindResource("HistoryPopupAccentBrush") as Brush ?? Brushes.Orange;
-        var matched = new HashSet<int>(matchedIndices);
-        var segment = new StringBuilder();
-        bool segmentHighlighted = false;
-
-        void Flush()
+        foreach (TerminalHistoryDisplaySegment segment in
+                 TerminalHistoryCoordinator.BuildDisplaySegments(display, matchedIndices))
         {
-            if (segment.Length == 0)
-            {
-                return;
-            }
-
-            var run = new Run(segment.ToString());
-            if (segmentHighlighted)
+            var run = new Run(segment.Text);
+            if (segment.Highlighted)
             {
                 run.Foreground = highlight;
                 run.FontWeight = FontWeights.Bold;
             }
 
             block.Inlines.Add(run);
-            segment.Clear();
         }
 
-        for (int i = 0; i < display.Length; i++)
-        {
-            bool isMatch = matched.Contains(i);
-            if (isMatch != segmentHighlighted)
-            {
-                Flush();
-                segmentHighlighted = isMatch;
-            }
-
-            segment.Append(display[i]);
-        }
-
-        Flush();
         return block;
     }
 

@@ -42,6 +42,10 @@ internal readonly record struct TerminalHistoryResult(
     string Display,
     IReadOnlyList<int> MatchedIndices);
 
+internal readonly record struct TerminalHistoryDisplaySegment(
+    string Text,
+    bool Highlighted);
+
 internal sealed class TerminalHistoryCoordinator(int limit)
 {
     private readonly int _limit = Math.Max(0, limit);
@@ -179,6 +183,46 @@ internal sealed class TerminalHistoryCoordinator(int limit)
         SelectedIndex >= 0 && SelectedIndex < Results.Count
             ? Results[SelectedIndex].Command
             : null;
+
+    public static IReadOnlyList<TerminalHistoryDisplaySegment> BuildDisplaySegments(
+        string display,
+        IReadOnlyList<int> matchedIndices)
+    {
+        ArgumentNullException.ThrowIfNull(display);
+        ArgumentNullException.ThrowIfNull(matchedIndices);
+
+        if (matchedIndices.Count == 0)
+        {
+            return [new(display, Highlighted: false)];
+        }
+
+        if (display.Length == 0)
+        {
+            return [];
+        }
+
+        var matched = new HashSet<int>(matchedIndices);
+        var segments = new List<TerminalHistoryDisplaySegment>();
+        int segmentStart = 0;
+        bool segmentHighlighted = matched.Contains(0);
+        for (int index = 1; index < display.Length; index++)
+        {
+            bool highlighted = matched.Contains(index);
+            if (highlighted == segmentHighlighted)
+            {
+                continue;
+            }
+
+            segments.Add(new(
+                display[segmentStart..index],
+                segmentHighlighted));
+            segmentStart = index;
+            segmentHighlighted = highlighted;
+        }
+
+        segments.Add(new(display[segmentStart..], segmentHighlighted));
+        return segments;
+    }
 
     public static TerminalHistoryKeyAction ResolveKey(
         TerminalHistoryKey key,

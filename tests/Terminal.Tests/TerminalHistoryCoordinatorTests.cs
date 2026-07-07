@@ -77,6 +77,73 @@ public sealed class TerminalHistoryCoordinatorTests
     }
 
     [Fact]
+    public void DisplaySegmentsPreserveTextAndGroupAdjacentHighlightRuns()
+    {
+        IReadOnlyList<TerminalHistoryDisplaySegment> segments =
+            TerminalHistoryCoordinator.BuildDisplaySegments("git status", [0, 1, 4, 6, 7]);
+
+        Assert.Equal(
+            [
+                new TerminalHistoryDisplaySegment("gi", Highlighted: true),
+                new TerminalHistoryDisplaySegment("t ", Highlighted: false),
+                new TerminalHistoryDisplaySegment("s", Highlighted: true),
+                new TerminalHistoryDisplaySegment("t", Highlighted: false),
+                new TerminalHistoryDisplaySegment("at", Highlighted: true),
+                new TerminalHistoryDisplaySegment("us", Highlighted: false)
+            ],
+            segments);
+        Assert.Equal("git status", string.Concat(segments.Select(segment => segment.Text)));
+    }
+
+    [Fact]
+    public void DisplaySegmentsKeepUnmatchedAndEmptyDisplaysCompatible()
+    {
+        Assert.Equal(
+            [new TerminalHistoryDisplaySegment("command", Highlighted: false)],
+            TerminalHistoryCoordinator.BuildDisplaySegments("command", []));
+        Assert.Equal(
+            [new TerminalHistoryDisplaySegment(string.Empty, Highlighted: false)],
+            TerminalHistoryCoordinator.BuildDisplaySegments(string.Empty, []));
+        Assert.Empty(TerminalHistoryCoordinator.BuildDisplaySegments(string.Empty, [0]));
+    }
+
+    [Fact]
+    public void DisplaySegmentsTreatDuplicateUnorderedAndOutOfRangeIndicesAsOldViewDid()
+    {
+        Assert.Equal(
+            [
+                new TerminalHistoryDisplaySegment("a", Highlighted: false),
+                new TerminalHistoryDisplaySegment("b", Highlighted: true),
+                new TerminalHistoryDisplaySegment("c", Highlighted: false),
+                new TerminalHistoryDisplaySegment("de", Highlighted: true),
+                new TerminalHistoryDisplaySegment("f", Highlighted: false)
+            ],
+            TerminalHistoryCoordinator.BuildDisplaySegments("abcdef", [4, 1, 1, -1, 9, 3]));
+    }
+
+    [Fact]
+    public void DisplaySegmentsPreserveUtf16SurrogateAndCombiningMarkBoundaries()
+    {
+        const string display = "a\U0001F600e\u0301z";
+
+        Assert.Equal(
+            [
+                new TerminalHistoryDisplaySegment("a", Highlighted: false),
+                new TerminalHistoryDisplaySegment("\uD83D", Highlighted: true),
+                new TerminalHistoryDisplaySegment("\uDE00e\u0301z", Highlighted: false)
+            ],
+            TerminalHistoryCoordinator.BuildDisplaySegments(display, [1]));
+
+        Assert.Equal(
+            [
+                new TerminalHistoryDisplaySegment("a\U0001F600e", Highlighted: false),
+                new TerminalHistoryDisplaySegment("\u0301", Highlighted: true),
+                new TerminalHistoryDisplaySegment("z", Highlighted: false)
+            ],
+            TerminalHistoryCoordinator.BuildDisplaySegments(display, [4]));
+    }
+
+    [Fact]
     public void ExternallySelectedIndexIsUsedAsKeyboardMovementOrigin()
     {
         var coordinator = new TerminalHistoryCoordinator(limit: 10);
