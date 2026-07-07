@@ -106,6 +106,17 @@ internal sealed class TerminalLaunchCoordinator
     public string GetEffectiveWorkingDirectory(string currentWorkingDirectory) =>
         EffectiveWorkingDirectory(_workingDirectoryInput, currentWorkingDirectory);
 
+    public string GetActiveCommandLineOr(string fallbackCommandLine) =>
+        string.IsNullOrWhiteSpace(ActiveCommandLine) ? fallbackCommandLine : ActiveCommandLine;
+
+    public string GetActiveCommandLineOr(Func<string> fallbackCommandLineFactory)
+    {
+        ArgumentNullException.ThrowIfNull(fallbackCommandLineFactory);
+        return string.IsNullOrWhiteSpace(ActiveCommandLine)
+            ? fallbackCommandLineFactory()
+            : ActiveCommandLine;
+    }
+
     public bool TryBuildLaunchRequest(
         string? commandLine,
         string? workingDirectory,

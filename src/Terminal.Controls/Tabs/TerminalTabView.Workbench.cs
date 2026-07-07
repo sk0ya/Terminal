@@ -788,7 +788,7 @@ public partial class TerminalTabView
     {
         // The shell reports its exact HistorySavePath via OSC 633;P when shell
         // integration is active; that is authoritative (handles custom paths).
-        string commandLine = string.IsNullOrWhiteSpace(_launchState.ActiveCommandLine) ? _initialCommandLine : _launchState.ActiveCommandLine;
+        string commandLine = _launchState.GetActiveCommandLineOr(_initialCommandLine);
         // Otherwise only guess for PowerShell shells, probing the known defaults.
         return TerminalHistorySeedResolver.ResolvePath(
             _shellHistoryPath,
@@ -1018,9 +1018,7 @@ public partial class TerminalTabView
         string basis = _terminalBuffer.WindowTitle;
         if (string.IsNullOrWhiteSpace(basis))
         {
-            basis = string.IsNullOrWhiteSpace(_launchState.ActiveCommandLine)
-                ? GetSelectedProfile().DisplayName
-                : _launchState.ActiveCommandLine;
+            basis = _launchState.GetActiveCommandLineOr(() => GetSelectedProfile().DisplayName);
         }
 
         return $"{DateTime.Now:yyyyMMdd-HHmmss}-{SanitizeFileName(basis)}.txt";

@@ -124,14 +124,66 @@ public sealed class TerminalLaunchCoordinatorTests
     {
         var coordinator = CreateCoordinator();
 
+        Assert.Equal("fallback.exe", coordinator.GetActiveCommandLineOr("fallback.exe"));
+
         coordinator.Activate("tool.exe", "C:\\work");
         coordinator.UpdateActiveWorkingDirectory("C:\\work\\child");
         Assert.Equal("tool.exe", coordinator.ActiveCommandLine);
+        Assert.Equal("tool.exe", coordinator.GetActiveCommandLineOr("fallback.exe"));
         Assert.Equal("C:\\work\\child", coordinator.ActiveWorkingDirectory);
 
         coordinator.ClearActive("C:\\current");
         Assert.Empty(coordinator.ActiveCommandLine);
+        Assert.Equal("fallback.exe", coordinator.GetActiveCommandLineOr("fallback.exe"));
         Assert.Equal("C:\\current", coordinator.ActiveWorkingDirectory);
+    }
+
+    [Fact]
+    public void WhitespaceActiveCommandUsesFallbackWithoutNormalizingIt()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.Activate("  ", "C:\\work");
+
+        Assert.Equal(" fallback.exe ", coordinator.GetActiveCommandLineOr(" fallback.exe "));
+    }
+
+    [Fact]
+    public void ActiveCommandDoesNotEvaluateFallbackFactory()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.Activate("tool.exe", "C:\\work");
+
+        string commandLine = coordinator.GetActiveCommandLineOr(
+            () => throw new InvalidOperationException("fallback must not be evaluated"));
+
+        Assert.Equal("tool.exe", commandLine);
+    }
+
+    [Fact]
+    public void WhitespaceActiveCommandEvaluatesFallbackFactoryOnceWithoutNormalizingResult()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.Activate("  ", "C:\\work");
+        int calls = 0;
+
+        string commandLine = coordinator.GetActiveCommandLineOr(() =>
+        {
+            calls++;
+            return " fallback.exe ";
+        });
+
+        Assert.Equal(" fallback.exe ", commandLine);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void NullFallbackFactoryIsRejectedBeforeStateEvaluation()
+    {
+        var coordinator = CreateCoordinator();
+        coordinator.Activate("tool.exe", "C:\\work");
+
+        Assert.Throws<ArgumentNullException>(() =>
+            coordinator.GetActiveCommandLineOr((Func<string>)null!));
     }
 
     [Fact]

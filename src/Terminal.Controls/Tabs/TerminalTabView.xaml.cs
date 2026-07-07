@@ -2557,9 +2557,7 @@ public partial class TerminalTabView : UserControl
 
     private string GetEffectiveTabTitleCommandLine()
     {
-        return string.IsNullOrWhiteSpace(_launchState.ActiveCommandLine)
-            ? CommandTextBox.Text
-            : _launchState.ActiveCommandLine;
+        return _launchState.GetActiveCommandLineOr(CommandTextBox.Text);
     }
 
     private void SetStatus(string message)
