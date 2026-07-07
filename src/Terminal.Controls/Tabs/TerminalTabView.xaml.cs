@@ -36,6 +36,7 @@ public partial class TerminalTabView : UserControl
 
     private readonly TerminalSessionOrchestrator _sessionOrchestrator = new();
     private readonly TerminalKeyboardCoordinator _keyboardState = new();
+    private readonly TerminalMouseCoordinator _mouseState = new();
     private ITerminalSession? _session => _sessionOrchestrator.Current;
     private AnsiTerminalBuffer _terminalBuffer = new(120, 30);
     private short _currentColumns = 120;
@@ -2275,18 +2276,8 @@ public partial class TerminalTabView : UserControl
 
     private bool TrySendMouseButtonEvent(MouseButtonEventArgs e, bool pressed)
     {
-        if (_session is null || !SupportsTerminalInput() || _terminalBuffer.MouseTrackingMode == TerminalMouseTrackingMode.Off)
-        {
-            return false;
-        }
-
-        if (_terminalBuffer.MouseTrackingMode == TerminalMouseTrackingMode.X10 && !pressed)
-        {
-            return false;
-        }
-
-        int? button = pressed ? MapMouseButton(e.ChangedButton) : 3;
-        if (!button.HasValue)
+        TerminalMouseButton button = MapMouseButton(e.ChangedButton);
+        if (pressed && button == TerminalMouseButton.Unsupported)
         {
             return false;
         }
@@ -2295,7 +2286,7 @@ public partial class TerminalTabView : UserControl
         if (_terminalBuffer.MousePixelMode)
         {
             GetMousePixel(position, out int px, out int py);
-            return SendMouseSequence(button.Value, px, py, released: !pressed, motion: false, wheel: false, wheelUp: false);
+            return ExecuteMouseAction(_mouseState.ResolveButton(BuildMouseState(), button, pressed, px, py));
         }
 
         if (!TryGetMouseCell(position, out int column, out int row))
@@ -2303,37 +2294,17 @@ public partial class TerminalTabView : UserControl
             return false;
         }
 
-        return SendMouseSequence(button.Value, column, row, released: !pressed, motion: false, wheel: false, wheelUp: false);
+        return ExecuteMouseAction(_mouseState.ResolveButton(BuildMouseState(), button, pressed, column, row));
     }
 
     private bool TrySendMouseMoveEvent(MouseEventArgs e)
     {
-        if (_session is null || !SupportsTerminalInput())
-        {
-            return false;
-        }
-
-        TerminalMouseTrackingMode mode = _terminalBuffer.MouseTrackingMode;
-        if (mode is TerminalMouseTrackingMode.Off or TerminalMouseTrackingMode.X10)
-        {
-            return false;
-        }
-
-        bool hasPressedButton =
-            e.LeftButton == MouseButtonState.Pressed ||
-            e.MiddleButton == MouseButtonState.Pressed ||
-            e.RightButton == MouseButtonState.Pressed;
-        if (mode == TerminalMouseTrackingMode.ButtonEvent && !hasPressedButton)
-        {
-            return false;
-        }
-
         Point position = e.GetPosition(TerminalScrollHost);
-        int button = ResolveCurrentMouseButton(e);
+        TerminalMouseButton button = ResolveCurrentMouseButton(e);
         if (_terminalBuffer.MousePixelMode)
         {
             GetMousePixel(position, out int px, out int py);
-            return SendMouseSequence(button, px, py, released: false, motion: true, wheel: false, wheelUp: false);
+            return ExecuteMouseAction(_mouseState.ResolveMove(BuildMouseState(), button, px, py));
         }
 
         if (!TryGetMouseCell(position, out int column, out int row))
@@ -2341,27 +2312,23 @@ public partial class TerminalTabView : UserControl
             return false;
         }
 
-        return SendMouseSequence(button, column, row, released: false, motion: true, wheel: false, wheelUp: false);
+        return ExecuteMouseAction(_mouseState.ResolveMove(BuildMouseState(), button, column, row));
     }
 
     private bool TrySendMouseWheelEvent(MouseWheelEventArgs e)
     {
-        if (_session is null || !SupportsTerminalInput())
-        {
-            return false;
-        }
-
         if (_terminalBuffer.MouseTrackingMode == TerminalMouseTrackingMode.Off)
         {
-            return TrySendAlternateScrollEvent(e);
+            return ExecuteMouseAction(_mouseState.ResolveWheel(
+                BuildMouseState(), e.Delta, 1, 1, Mouse.MouseWheelDeltaForOneLine));
         }
 
         Point position = e.GetPosition(TerminalScrollHost);
-        bool wheelUp = e.Delta > 0;
         if (_terminalBuffer.MousePixelMode)
         {
             GetMousePixel(position, out int px, out int py);
-            return SendMouseSequence(0, px, py, released: false, motion: false, wheel: true, wheelUp: wheelUp);
+            return ExecuteMouseAction(_mouseState.ResolveWheel(
+                BuildMouseState(), e.Delta, px, py, Mouse.MouseWheelDeltaForOneLine));
         }
 
         if (!TryGetMouseCell(position, out int column, out int row))
@@ -2369,99 +2336,59 @@ public partial class TerminalTabView : UserControl
             return false;
         }
 
-        return SendMouseSequence(0, column, row, released: false, motion: false, wheel: true, wheelUp: wheelUp);
+        return ExecuteMouseAction(_mouseState.ResolveWheel(
+            BuildMouseState(), e.Delta, column, row, Mouse.MouseWheelDeltaForOneLine));
     }
 
-    private bool TrySendAlternateScrollEvent(MouseWheelEventArgs e)
+    private bool ExecuteMouseAction(TerminalMouseAction action)
     {
-        if (!_terminalBuffer.AlternateScrollEnabled || !_terminalBuffer.IsAlternateScreenActive)
+        if (!action.Handled)
         {
             return false;
         }
 
-        Key directionKey = e.Delta > 0 ? Key.Up : Key.Down;
-        string? sequence = TerminalKeyChordTranslator.TranslateSpecialKey(
-            directionKey,
-            ModifierKeys.None,
-            _terminalBuffer.ApplicationCursorKeysEnabled,
-            _terminalBuffer.ModifyOtherKeysLevel,
-            _terminalBuffer.KittyKeyboardFlags);
-        if (sequence is null)
+        if (action.BytePayload is not null)
         {
-            return false;
+            return SendTerminalInput(action.BytePayload);
         }
 
-        int repeats = Math.Max(1, Math.Abs(e.Delta) / Mouse.MouseWheelDeltaForOneLine);
-        var payload = new StringBuilder(sequence.Length * repeats);
-        for (int index = 0; index < repeats; index++)
-        {
-            payload.Append(sequence);
-        }
-
-        return SendTerminalInput(payload.ToString());
+        return action.TextPayload is not null && SendTerminalInput(action.TextPayload);
     }
 
-    private bool SendMouseSequence(int button, int column, int row, bool released, bool motion, bool wheel, bool wheelUp)
-    {
-        int code = button;
-        if (wheel)
-        {
-            code = wheelUp ? 64 : 65;
-        }
-        else
-        {
-            if (motion)
-            {
-                code += 32;
-            }
-
-            if (released)
-            {
-                code = 3;
-            }
-        }
-
-        code += TerminalInputEncoder.GetMouseModifierBits(GetTerminalModifiers());
-
-        bool sgrRelease = released && !motion && !wheel;
-        byte[] sequence = TerminalInputEncoder.EncodeMouseSequence(_terminalBuffer.MouseEncoding, code, column, row, sgrRelease);
-        return SendTerminalInput(sequence);
-    }
-
-    private static int? MapMouseButton(MouseButton button)
+    private static TerminalMouseButton MapMouseButton(MouseButton button)
     {
         return button switch
         {
-            MouseButton.Left => 0,
-            MouseButton.Middle => 1,
-            MouseButton.Right => 2,
-            _ => null
+            MouseButton.Left => TerminalMouseButton.Left,
+            MouseButton.Middle => TerminalMouseButton.Middle,
+            MouseButton.Right => TerminalMouseButton.Right,
+            _ => TerminalMouseButton.Unsupported
         };
     }
 
-    private static int ResolveCurrentMouseButton(MouseEventArgs e)
+    private static TerminalMouseButton ResolveCurrentMouseButton(MouseEventArgs e)
     {
         if (e.LeftButton == MouseButtonState.Pressed)
         {
-            return 0;
+            return TerminalMouseButton.Left;
         }
 
         if (e.MiddleButton == MouseButtonState.Pressed)
         {
-            return 1;
+            return TerminalMouseButton.Middle;
         }
 
         if (e.RightButton == MouseButtonState.Pressed)
         {
-            return 2;
+            return TerminalMouseButton.Right;
         }
 
-        return 3;
+        return TerminalMouseButton.None;
     }
 
     private void TryCaptureTerminalMouse()
     {
-        if (_terminalMouseCaptureActive || !SupportsMouseCapture())
+        if (_terminalMouseCaptureActive || !_mouseState.ShouldCapture(BuildMouseState()))
         {
             return;
         }
@@ -2485,7 +2412,7 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        if (!force && HasTrackedMouseButtonPressed())
+        if (!_mouseState.ShouldReleaseCapture(force, HasTrackedMouseButtonPressed()))
         {
             return;
         }
@@ -2498,13 +2425,6 @@ public partial class TerminalTabView : UserControl
         _terminalMouseCaptureActive = false;
     }
 
-    private bool SupportsMouseCapture()
-    {
-        return _session is not null &&
-            SupportsTerminalInput() &&
-            _terminalBuffer.MouseTrackingMode != TerminalMouseTrackingMode.Off;
-    }
-
     private static bool HasTrackedMouseButtonPressed()
     {
         return Mouse.LeftButton == MouseButtonState.Pressed ||
@@ -2515,6 +2435,34 @@ public partial class TerminalTabView : UserControl
     private static ModifierKeys GetTerminalModifiers()
     {
         return Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control | ModifierKeys.Alt);
+    }
+
+    private TerminalMouseState BuildMouseState() => new(
+        SupportsTerminalInput(),
+        _terminalBuffer.MouseTrackingMode,
+        _terminalBuffer.MouseEncoding,
+        _terminalBuffer.AlternateScrollEnabled,
+        _terminalBuffer.IsAlternateScreenActive,
+        BuildAlternateScrollSequence(Key.Up),
+        BuildAlternateScrollSequence(Key.Down),
+        GetTerminalMouseModifiers());
+
+    private string? BuildAlternateScrollSequence(Key key) =>
+        TerminalKeyChordTranslator.TranslateSpecialKey(
+            key,
+            ModifierKeys.None,
+            _terminalBuffer.ApplicationCursorKeysEnabled,
+            _terminalBuffer.ModifyOtherKeysLevel,
+            _terminalBuffer.KittyKeyboardFlags);
+
+    private static TerminalMouseModifiers GetTerminalMouseModifiers()
+    {
+        ModifierKeys modifiers = GetTerminalModifiers();
+        TerminalMouseModifiers result = TerminalMouseModifiers.None;
+        if (modifiers.HasFlag(ModifierKeys.Shift)) result |= TerminalMouseModifiers.Shift;
+        if (modifiers.HasFlag(ModifierKeys.Control)) result |= TerminalMouseModifiers.Control;
+        if (modifiers.HasFlag(ModifierKeys.Alt)) result |= TerminalMouseModifiers.Alt;
+        return result;
     }
 
     private bool SupportsTerminalInput()
