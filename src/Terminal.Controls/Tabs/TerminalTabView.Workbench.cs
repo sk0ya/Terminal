@@ -285,26 +285,46 @@ public partial class TerminalTabView
 
     private void FindTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        Key key = GetEffectiveKey(e);
-        switch (key)
+        TerminalFindKeyAction action = TerminalFindCoordinator.ResolveKey(
+            MapFindKey(GetEffectiveKey(e)),
+            MapFindKeyModifiers(Keyboard.Modifiers));
+        switch (action.Kind)
         {
-            case Key.Escape:
+            case TerminalFindKeyActionKind.Close:
                 CloseFindPanel();
-                e.Handled = true;
                 break;
-            case Key.Enter:
-            case Key.F3:
-                // Enter / F3 で次、Shift 併用で前の一致へ。
-                MoveFind(forward: (Keyboard.Modifiers & ModifierKeys.Shift) == 0);
-                e.Handled = true;
+            case TerminalFindKeyActionKind.Move:
+                MoveFind(action.Forward);
                 break;
-            case Key.C when (Keyboard.Modifiers & ModifierKeys.Alt) != 0:
-                // Alt+C で大文字小文字の区別をトグル。
+            case TerminalFindKeyActionKind.ToggleCaseSensitivity:
                 FindCaseSensitiveCheckBox.IsChecked = FindCaseSensitiveCheckBox.IsChecked != true;
                 RefreshFind(reseek: true);
-                e.Handled = true;
                 break;
         }
+
+        if (action.Handled)
+        {
+            e.Handled = true;
+        }
+    }
+
+    private static TerminalFindKey MapFindKey(Key key) => key switch
+    {
+        Key.Escape => TerminalFindKey.Escape,
+        Key.Enter => TerminalFindKey.Enter,
+        Key.F3 => TerminalFindKey.F3,
+        Key.C => TerminalFindKey.C,
+        _ => TerminalFindKey.Other
+    };
+
+    private static TerminalFindKeyModifiers MapFindKeyModifiers(ModifierKeys modifiers)
+    {
+        TerminalFindKeyModifiers result = TerminalFindKeyModifiers.None;
+        if ((modifiers & ModifierKeys.Shift) != 0) result |= TerminalFindKeyModifiers.Shift;
+        if ((modifiers & ModifierKeys.Alt) != 0) result |= TerminalFindKeyModifiers.Alt;
+        if ((modifiers & ModifierKeys.Control) != 0) result |= TerminalFindKeyModifiers.Control;
+        if ((modifiers & ModifierKeys.Windows) != 0) result |= TerminalFindKeyModifiers.Windows;
+        return result;
     }
 
     private void FindTextBox_TextChanged(object sender, TextChangedEventArgs e)

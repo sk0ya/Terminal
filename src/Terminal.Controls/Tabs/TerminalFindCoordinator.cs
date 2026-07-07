@@ -1,5 +1,39 @@
 namespace Terminal.Tabs;
 
+internal enum TerminalFindKey
+{
+    Other,
+    Escape,
+    Enter,
+    F3,
+    C
+}
+
+[Flags]
+internal enum TerminalFindKeyModifiers
+{
+    None = 0,
+    Shift = 1,
+    Alt = 2,
+    Control = 4,
+    Windows = 8
+}
+
+internal enum TerminalFindKeyActionKind
+{
+    None,
+    Close,
+    Move,
+    ToggleCaseSensitivity
+}
+
+internal readonly record struct TerminalFindKeyAction(
+    TerminalFindKeyActionKind Kind,
+    bool Forward = false)
+{
+    public bool Handled => Kind != TerminalFindKeyActionKind.None;
+}
+
 internal enum TerminalFindStatus
 {
     EmptyQuery,
@@ -29,6 +63,22 @@ internal sealed class TerminalFindCoordinator
         TerminalFindStatus.NoMatch => "No match",
         _ => TerminalFindNavigator.FormatPosition(CurrentIndex, Matches.Count)
     };
+
+    public static TerminalFindKeyAction ResolveKey(
+        TerminalFindKey key,
+        TerminalFindKeyModifiers modifiers)
+    {
+        bool shift = (modifiers & TerminalFindKeyModifiers.Shift) != 0;
+        bool alt = (modifiers & TerminalFindKeyModifiers.Alt) != 0;
+        return key switch
+        {
+            TerminalFindKey.Escape => new(TerminalFindKeyActionKind.Close),
+            TerminalFindKey.Enter or TerminalFindKey.F3 =>
+                new(TerminalFindKeyActionKind.Move, Forward: !shift),
+            TerminalFindKey.C when alt => new(TerminalFindKeyActionKind.ToggleCaseSensitivity),
+            _ => default
+        };
+    }
 
     public void Open()
     {

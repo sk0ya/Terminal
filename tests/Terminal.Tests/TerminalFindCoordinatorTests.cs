@@ -99,6 +99,79 @@ public sealed class TerminalFindCoordinatorTests
         Assert.Equal(-1, coordinator.CurrentIndex);
     }
 
+    [Theory]
+    [InlineData((int)TerminalFindKey.Enter)]
+    [InlineData((int)TerminalFindKey.F3)]
+    public void ResolveKeyMovesForwardWithoutShift(int keyValue)
+    {
+        TerminalFindKeyAction action = TerminalFindCoordinator.ResolveKey(
+            (TerminalFindKey)keyValue,
+            TerminalFindKeyModifiers.Control | TerminalFindKeyModifiers.Alt);
+
+        Assert.Equal(TerminalFindKeyActionKind.Move, action.Kind);
+        Assert.True(action.Forward);
+        Assert.True(action.Handled);
+    }
+
+    [Theory]
+    [InlineData((int)TerminalFindKey.Enter)]
+    [InlineData((int)TerminalFindKey.F3)]
+    public void ResolveKeyMovesBackwardWheneverShiftIsPresent(int keyValue)
+    {
+        TerminalFindKeyAction action = TerminalFindCoordinator.ResolveKey(
+            (TerminalFindKey)keyValue,
+            TerminalFindKeyModifiers.Shift |
+            TerminalFindKeyModifiers.Alt |
+            TerminalFindKeyModifiers.Control |
+            TerminalFindKeyModifiers.Windows);
+
+        Assert.Equal(TerminalFindKeyActionKind.Move, action.Kind);
+        Assert.False(action.Forward);
+        Assert.True(action.Handled);
+    }
+
+    [Fact]
+    public void ResolveKeyClosesOnEscapeRegardlessOfModifiers()
+    {
+        TerminalFindKeyAction action = TerminalFindCoordinator.ResolveKey(
+            TerminalFindKey.Escape,
+            TerminalFindKeyModifiers.Shift |
+            TerminalFindKeyModifiers.Alt |
+            TerminalFindKeyModifiers.Control |
+            TerminalFindKeyModifiers.Windows);
+
+        Assert.Equal(TerminalFindKeyActionKind.Close, action.Kind);
+        Assert.True(action.Handled);
+    }
+
+    [Fact]
+    public void ResolveKeyTogglesCaseSensitivityWhenAltIsPresentWithOtherModifiers()
+    {
+        TerminalFindKeyAction action = TerminalFindCoordinator.ResolveKey(
+            TerminalFindKey.C,
+            TerminalFindKeyModifiers.Alt |
+            TerminalFindKeyModifiers.Shift |
+            TerminalFindKeyModifiers.Control |
+            TerminalFindKeyModifiers.Windows);
+
+        Assert.Equal(TerminalFindKeyActionKind.ToggleCaseSensitivity, action.Kind);
+        Assert.True(action.Handled);
+    }
+
+    [Theory]
+    [InlineData((int)TerminalFindKey.C, (int)TerminalFindKeyModifiers.None)]
+    [InlineData((int)TerminalFindKey.C, (int)TerminalFindKeyModifiers.Shift)]
+    [InlineData((int)TerminalFindKey.Other, (int)TerminalFindKeyModifiers.Alt)]
+    public void ResolveKeyLeavesUnsupportedInputUnhandled(int keyValue, int modifierValue)
+    {
+        TerminalFindKeyAction action = TerminalFindCoordinator.ResolveKey(
+            (TerminalFindKey)keyValue,
+            (TerminalFindKeyModifiers)modifierValue);
+
+        Assert.Equal(TerminalFindKeyActionKind.None, action.Kind);
+        Assert.False(action.Handled);
+    }
+
     private static IReadOnlyList<TerminalMatch> Matches(params (int Line, int Column)[] positions) =>
         positions.Select(position => new TerminalMatch(
             position.Line,
