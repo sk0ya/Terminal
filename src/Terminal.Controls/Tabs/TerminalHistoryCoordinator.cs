@@ -1,5 +1,42 @@
 namespace Terminal.Tabs;
 
+internal enum TerminalHistoryKey
+{
+    Other,
+    Escape,
+    Enter,
+    Up,
+    Down,
+    N,
+    P,
+    R
+}
+
+[Flags]
+internal enum TerminalHistoryKeyModifiers
+{
+    None = 0,
+    Control = 1,
+    Shift = 2,
+    Alt = 4,
+    Windows = 8
+}
+
+internal enum TerminalHistoryKeyActionKind
+{
+    None,
+    Close,
+    Accept,
+    MoveSelection
+}
+
+internal readonly record struct TerminalHistoryKeyAction(
+    TerminalHistoryKeyActionKind Kind,
+    int SelectionDelta = 0)
+{
+    public bool Handled => Kind != TerminalHistoryKeyActionKind.None;
+}
+
 internal readonly record struct TerminalHistoryResult(
     string Command,
     string Display,
@@ -126,6 +163,24 @@ internal sealed class TerminalHistoryCoordinator(int limit)
         SelectedIndex >= 0 && SelectedIndex < Results.Count
             ? Results[SelectedIndex].Command
             : null;
+
+    public static TerminalHistoryKeyAction ResolveKey(
+        TerminalHistoryKey key,
+        TerminalHistoryKeyModifiers modifiers)
+    {
+        bool control = (modifiers & TerminalHistoryKeyModifiers.Control) != 0;
+        return key switch
+        {
+            TerminalHistoryKey.Escape => new(TerminalHistoryKeyActionKind.Close),
+            TerminalHistoryKey.Enter => new(TerminalHistoryKeyActionKind.Accept),
+            TerminalHistoryKey.Down => new(TerminalHistoryKeyActionKind.MoveSelection, 1),
+            TerminalHistoryKey.Up => new(TerminalHistoryKeyActionKind.MoveSelection, -1),
+            TerminalHistoryKey.N when control => new(TerminalHistoryKeyActionKind.MoveSelection, 1),
+            TerminalHistoryKey.P when control => new(TerminalHistoryKeyActionKind.MoveSelection, -1),
+            TerminalHistoryKey.R when control => new(TerminalHistoryKeyActionKind.MoveSelection, -1),
+            _ => default
+        };
+    }
 
     public static bool TryFuzzyMatch(
         string text,

@@ -119,4 +119,78 @@ public sealed class TerminalHistoryCoordinatorTests
         Assert.False(coordinator.TryBeginSeed());
         Assert.True(coordinator.IsSeeded);
     }
+
+    [Theory]
+    [InlineData((int)TerminalHistoryKey.Escape, (int)TerminalHistoryKeyActionKind.Close, 0)]
+    [InlineData((int)TerminalHistoryKey.Enter, (int)TerminalHistoryKeyActionKind.Accept, 0)]
+    [InlineData((int)TerminalHistoryKey.Up, (int)TerminalHistoryKeyActionKind.MoveSelection, -1)]
+    [InlineData((int)TerminalHistoryKey.Down, (int)TerminalHistoryKeyActionKind.MoveSelection, 1)]
+    public void ResolveKeyMapsUnmodifiedHistoryActions(
+        int keyValue,
+        int expectedKindValue,
+        int expectedDelta)
+    {
+        TerminalHistoryKeyAction action = TerminalHistoryCoordinator.ResolveKey(
+            (TerminalHistoryKey)keyValue,
+            TerminalHistoryKeyModifiers.None);
+
+        Assert.Equal((TerminalHistoryKeyActionKind)expectedKindValue, action.Kind);
+        Assert.Equal(expectedDelta, action.SelectionDelta);
+        Assert.True(action.Handled);
+    }
+
+    [Theory]
+    [InlineData((int)TerminalHistoryKey.N, 1)]
+    [InlineData((int)TerminalHistoryKey.P, -1)]
+    [InlineData((int)TerminalHistoryKey.R, -1)]
+    public void ResolveKeyMapsControlNavigationWithAdditionalModifiers(
+        int keyValue,
+        int expectedDelta)
+    {
+        TerminalHistoryKeyAction action = TerminalHistoryCoordinator.ResolveKey(
+            (TerminalHistoryKey)keyValue,
+            TerminalHistoryKeyModifiers.Control |
+            TerminalHistoryKeyModifiers.Shift |
+            TerminalHistoryKeyModifiers.Alt |
+            TerminalHistoryKeyModifiers.Windows);
+
+        Assert.Equal(TerminalHistoryKeyActionKind.MoveSelection, action.Kind);
+        Assert.Equal(expectedDelta, action.SelectionDelta);
+        Assert.True(action.Handled);
+    }
+
+    [Theory]
+    [InlineData((int)TerminalHistoryKey.Escape, (int)TerminalHistoryKeyActionKind.Close, 0)]
+    [InlineData((int)TerminalHistoryKey.Enter, (int)TerminalHistoryKeyActionKind.Accept, 0)]
+    [InlineData((int)TerminalHistoryKey.Up, (int)TerminalHistoryKeyActionKind.MoveSelection, -1)]
+    [InlineData((int)TerminalHistoryKey.Down, (int)TerminalHistoryKeyActionKind.MoveSelection, 1)]
+    public void ResolveKeyKeepsDirectActionsWithAdditionalModifiers(
+        int keyValue,
+        int expectedKindValue,
+        int expectedDelta)
+    {
+        TerminalHistoryKeyAction action = TerminalHistoryCoordinator.ResolveKey(
+            (TerminalHistoryKey)keyValue,
+            TerminalHistoryKeyModifiers.Control | TerminalHistoryKeyModifiers.Alt);
+
+        Assert.Equal((TerminalHistoryKeyActionKind)expectedKindValue, action.Kind);
+        Assert.Equal(expectedDelta, action.SelectionDelta);
+        Assert.True(action.Handled);
+    }
+
+    [Theory]
+    [InlineData((int)TerminalHistoryKey.N)]
+    [InlineData((int)TerminalHistoryKey.P)]
+    [InlineData((int)TerminalHistoryKey.R)]
+    [InlineData((int)TerminalHistoryKey.Other)]
+    public void ResolveKeyLeavesUnsupportedKeysUnhandled(int keyValue)
+    {
+        TerminalHistoryKeyAction action = TerminalHistoryCoordinator.ResolveKey(
+            (TerminalHistoryKey)keyValue,
+            TerminalHistoryKeyModifiers.Shift | TerminalHistoryKeyModifiers.Alt);
+
+        Assert.Equal(TerminalHistoryKeyActionKind.None, action.Kind);
+        Assert.Equal(0, action.SelectionDelta);
+        Assert.False(action.Handled);
+    }
 }

@@ -911,39 +911,48 @@ public partial class TerminalTabView
 
     private void HistorySearchBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
-        switch (e.Key)
+        TerminalHistoryKeyAction action = TerminalHistoryCoordinator.ResolveKey(
+            MapHistoryKey(e.Key),
+            MapHistoryKeyModifiers(Keyboard.Modifiers));
+        switch (action.Kind)
         {
-            case Key.Escape:
+            case TerminalHistoryKeyActionKind.Close:
                 CloseHistoryPanel();
-                e.Handled = true;
                 break;
-            case Key.Enter:
+            case TerminalHistoryKeyActionKind.Accept:
                 AcceptHistorySelection();
-                e.Handled = true;
                 break;
-            case Key.Down:
-                MoveHistorySelection(1);
-                e.Handled = true;
-                break;
-            case Key.Up:
-                MoveHistorySelection(-1);
-                e.Handled = true;
-                break;
-            case Key.N when ctrl:
-                MoveHistorySelection(1);
-                e.Handled = true;
-                break;
-            case Key.P when ctrl:
-                MoveHistorySelection(-1);
-                e.Handled = true;
-                break;
-            case Key.R when ctrl:
-                // Repeating Ctrl+R walks upward to older matches, like reverse-i-search.
-                MoveHistorySelection(-1);
-                e.Handled = true;
+            case TerminalHistoryKeyActionKind.MoveSelection:
+                MoveHistorySelection(action.SelectionDelta);
                 break;
         }
+
+        if (action.Handled)
+        {
+            e.Handled = true;
+        }
+    }
+
+    private static TerminalHistoryKey MapHistoryKey(Key key) => key switch
+    {
+        Key.Escape => TerminalHistoryKey.Escape,
+        Key.Enter => TerminalHistoryKey.Enter,
+        Key.Up => TerminalHistoryKey.Up,
+        Key.Down => TerminalHistoryKey.Down,
+        Key.N => TerminalHistoryKey.N,
+        Key.P => TerminalHistoryKey.P,
+        Key.R => TerminalHistoryKey.R,
+        _ => TerminalHistoryKey.Other
+    };
+
+    private static TerminalHistoryKeyModifiers MapHistoryKeyModifiers(ModifierKeys modifiers)
+    {
+        TerminalHistoryKeyModifiers result = TerminalHistoryKeyModifiers.None;
+        if ((modifiers & ModifierKeys.Control) != 0) result |= TerminalHistoryKeyModifiers.Control;
+        if ((modifiers & ModifierKeys.Shift) != 0) result |= TerminalHistoryKeyModifiers.Shift;
+        if ((modifiers & ModifierKeys.Alt) != 0) result |= TerminalHistoryKeyModifiers.Alt;
+        if ((modifiers & ModifierKeys.Windows) != 0) result |= TerminalHistoryKeyModifiers.Windows;
+        return result;
     }
 
     private void MoveHistorySelection(int delta)
