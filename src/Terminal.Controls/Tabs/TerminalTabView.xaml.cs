@@ -46,12 +46,12 @@ public partial class TerminalTabView : UserControl
     private readonly DispatcherTimer _toastDismissTimer = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(4) };
     private System.Windows.Controls.Primitives.Popup? _toastPopup;
     private readonly TerminalOutputBatchCoordinator _outputBatch = new();
+    private readonly TerminalRenderCoordinator _renderCoordinator = new();
     private int _autoRecoveryAttempts;
     private bool _isRecovering;
     private bool _isSessionTransitionActive => _sessionLifecycle.IsTransitionActive;
     private bool _isClosingWindow;
-    private bool _isRenderingTerminal;
-    private bool _documentRenderScheduled;
+    private bool _isRenderingTerminal => _renderCoordinator.IsRendering;
     private bool _followTerminalOutput = true;
     private bool _alternateScreenViewportMode;
     private bool _cursorBlinkVisible = true;
@@ -62,7 +62,6 @@ public partial class TerminalTabView : UserControl
     private bool _overlayUpdateQueued;
     private bool _terminalViewportSizeUpdateQueued;
     private bool _imeCompositionActive;
-    private DateTime _lastDocumentRenderUtc = DateTime.MinValue;
     private readonly string _initialCommandLine;
     private readonly string _initialWorkingDirectory;
     private bool _hasStartedInitialSession;
@@ -272,7 +271,7 @@ public partial class TerminalTabView : UserControl
         _sessionWatchdog.Stop();
         _cursorBlinkTimer.Stop();
         _renderThrottleTimer.Stop();
-        _synchronizedUpdateWatchdogTimer.Stop();
+        StopSynchronizedUpdateWatchdog();
         _toastDismissTimer.Stop();
         _toastPopup = null;
         ReleaseTerminalMouseCapture(force: true);
@@ -1332,7 +1331,7 @@ public partial class TerminalTabView : UserControl
 
     private void ScheduleSynchronizedUpdateWatchdog()
     {
-        if (_synchronizedUpdateWatchdogTimer.IsEnabled)
+        if (!_renderCoordinator.ArmWatchdog())
         {
             return;
         }
@@ -1342,13 +1341,17 @@ public partial class TerminalTabView : UserControl
 
     private void StopSynchronizedUpdateWatchdog()
     {
+        _renderCoordinator.DisarmWatchdog();
         _synchronizedUpdateWatchdogTimer.Stop();
     }
 
     private void SynchronizedUpdateWatchdogTimer_Tick(object? sender, EventArgs e)
     {
-        StopSynchronizedUpdateWatchdog();
-        ForceEndSynchronizedUpdateAndRender();
+        _synchronizedUpdateWatchdogTimer.Stop();
+        if (_renderCoordinator.ConsumeWatchdogTick())
+        {
+            ForceEndSynchronizedUpdateAndRender();
+        }
     }
 
     private void ForceEndSynchronizedUpdateAndRender()
@@ -1485,59 +1488,52 @@ public partial class TerminalTabView : UserControl
 
     private void RequestDocumentRender(bool immediate = false)
     {
-        if (immediate)
+        TerminalRenderDecision decision = _renderCoordinator.RequestRender(
+            immediate,
+            Dispatcher.CheckAccess(),
+            _renderThrottleTimer.IsEnabled,
+            DateTime.UtcNow,
+            MinDocumentRenderInterval);
+        if (decision.StopThrottle)
         {
             _renderThrottleTimer.Stop();
-            if (Dispatcher.CheckAccess())
-            {
-                _documentRenderScheduled = false;
+        }
+
+        switch (decision.Action)
+        {
+            case TerminalRenderAction.RenderNow:
                 PerformDocumentRender();
-                return;
-            }
-
-            _documentRenderScheduled = true;
-            _ = Dispatcher.BeginInvoke(PerformDocumentRender, DispatcherPriority.Normal);
-            return;
+                break;
+            case TerminalRenderAction.Dispatch:
+                _ = Dispatcher.BeginInvoke(
+                    PerformDocumentRender,
+                    immediate ? DispatcherPriority.Normal : DispatcherPriority.Render);
+                break;
+            case TerminalRenderAction.StartThrottle:
+                _renderThrottleTimer.Interval = decision.ThrottleDelay;
+                _renderThrottleTimer.Start();
+                break;
         }
-
-        if (_documentRenderScheduled || _renderThrottleTimer.IsEnabled)
-        {
-            return;
-        }
-
-        TimeSpan elapsed = DateTime.UtcNow - _lastDocumentRenderUtc;
-        if (elapsed >= MinDocumentRenderInterval || _lastDocumentRenderUtc == DateTime.MinValue)
-        {
-            _documentRenderScheduled = true;
-            _ = Dispatcher.BeginInvoke(PerformDocumentRender, DispatcherPriority.Render);
-            return;
-        }
-
-        _renderThrottleTimer.Interval = MinDocumentRenderInterval - elapsed;
-        _renderThrottleTimer.Start();
     }
 
     private void PerformDocumentRender()
     {
-        _documentRenderScheduled = false;
+        _renderCoordinator.BeginDispatchedRender();
         RenderTerminal();
     }
 
     private void RenderThrottleTimer_Tick(object? sender, EventArgs e)
     {
         _renderThrottleTimer.Stop();
-        if (_documentRenderScheduled)
+        if (_renderCoordinator.OnThrottleTick())
         {
-            return;
+            _ = Dispatcher.BeginInvoke(PerformDocumentRender, DispatcherPriority.Render);
         }
-
-        _documentRenderScheduled = true;
-        _ = Dispatcher.BeginInvoke(PerformDocumentRender, DispatcherPriority.Render);
     }
 
     private void RenderTerminal()
     {
-        if (_isRenderingTerminal)
+        if (_renderCoordinator.IsRendering)
         {
             RequestDocumentRender();
             return;
@@ -1547,7 +1543,12 @@ public partial class TerminalTabView : UserControl
         UpdateTerminalSurfaceViewportFloor();
         ApplyAlternateScreenViewportMode(isAlternateScreenActive);
         double preservedDistanceFromBottom = isAlternateScreenActive ? 0 : GetDistanceFromBottom();
-        _isRenderingTerminal = true;
+        if (!_renderCoordinator.TryBeginRender())
+        {
+            RequestDocumentRender();
+            return;
+        }
+
         try
         {
             AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = _terminalBuffer.CreateRenderSnapshot(showCursor: false);
@@ -1564,8 +1565,7 @@ public partial class TerminalTabView : UserControl
         }
         finally
         {
-            _lastDocumentRenderUtc = DateTime.UtcNow;
-            _isRenderingTerminal = false;
+            _renderCoordinator.EndRender(DateTime.UtcNow);
         }
     }
 
