@@ -55,13 +55,11 @@ public partial class TerminalTabView : UserControl
     private bool _followTerminalOutput = true;
     private bool _alternateScreenViewportMode;
     private bool _cursorBlinkVisible = true;
-    private bool _resettingInputProxyText;
-    private bool _pendingProxyFlushAfterImeConfirm;
+    private readonly TerminalImeInputCoordinator _imeInput = new();
     private bool _terminalMouseCaptureActive;
     private bool _localMouseSelectionActive;
     private bool _overlayUpdateQueued;
     private bool _terminalViewportSizeUpdateQueued;
-    private bool _imeCompositionActive;
     private readonly string _initialCommandLine;
     private readonly string _initialWorkingDirectory;
     private bool _hasStartedInitialSession;
@@ -530,19 +528,19 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalInputProxy_PreviewTextInputStart(object sender, TextCompositionEventArgs e)
     {
-        _imeCompositionActive = true;
+        _imeInput.BeginOrUpdateComposition();
         QueueOverlayStateUpdate();
     }
 
     private void TerminalInputProxy_PreviewTextInputUpdate(object sender, TextCompositionEventArgs e)
     {
-        _imeCompositionActive = true;
+        _imeInput.BeginOrUpdateComposition();
         QueueOverlayStateUpdate();
     }
 
     private void TerminalInputProxy_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (_resettingInputProxyText)
+        if (!_imeInput.OnProxyTextChanged(HasPendingProxyText()))
         {
             return;
         }
@@ -552,7 +550,7 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalInputProxy_SelectionChanged(object sender, RoutedEventArgs e)
     {
-        if (_resettingInputProxyText)
+        if (!_imeInput.ShouldProcessSelectionChange())
         {
             return;
         }
@@ -562,14 +560,13 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalInputProxy_TextInput(object sender, TextCompositionEventArgs e)
     {
-        if (_resettingInputProxyText)
+        ImeCommitAction action = _imeInput.Commit(HasPendingProxyText());
+        if (action == ImeCommitAction.None)
         {
             return;
         }
 
-        _imeCompositionActive = false;
-        _pendingProxyFlushAfterImeConfirm = false;
-        if (!HasPendingProxyText())
+        if (action == ImeCommitAction.UpdateOverlay)
         {
             QueueOverlayStateUpdate();
             return;
@@ -1668,19 +1665,17 @@ public partial class TerminalTabView : UserControl
 
     private void ResetInputProxyText()
     {
-        _imeCompositionActive = false;
-        _pendingProxyFlushAfterImeConfirm = false;
-        if (!string.IsNullOrEmpty(TerminalInputProxy.Text))
+        _imeInput.BeginReset();
+        try
         {
-            _resettingInputProxyText = true;
-            try
+            if (!string.IsNullOrEmpty(TerminalInputProxy.Text))
             {
                 TerminalInputProxy.Clear();
             }
-            finally
-            {
-                _resettingInputProxyText = false;
-            }
+        }
+        finally
+        {
+            _imeInput.EndReset();
         }
 
         QueueOverlayStateUpdate();
@@ -1929,12 +1924,14 @@ public partial class TerminalTabView : UserControl
 
     internal static bool ShouldUseProxyCaret(bool hasPendingProxyText, bool imeCompositionActive)
     {
-        return hasPendingProxyText && imeCompositionActive;
+        return TerminalImeInputCoordinator.ShouldUseProxyCaretForState(
+            hasPendingProxyText,
+            imeCompositionActive);
     }
 
     private bool ShouldUseProxyCaret()
     {
-        return ShouldUseProxyCaret(HasPendingProxyText(), _imeCompositionActive);
+        return _imeInput.ShouldUseProxyCaret;
     }
 
     private void QueueOverlayStateUpdate()
@@ -1984,7 +1981,8 @@ public partial class TerminalTabView : UserControl
 
     private bool FlushInputProxyText()
     {
-        if (_resettingInputProxyText || !HasPendingProxyText())
+        _imeInput.OnProxyTextChanged(HasPendingProxyText());
+        if (!_imeInput.CanFlushProxyText())
         {
             return false;
         }
@@ -2000,23 +1998,21 @@ public partial class TerminalTabView : UserControl
 
     private void QueuePendingProxyTextFlushAfterImeConfirm()
     {
-        if (_pendingProxyFlushAfterImeConfirm)
+        if (!_imeInput.TryQueueDeferredFlush())
         {
             return;
         }
 
-        _pendingProxyFlushAfterImeConfirm = true;
         _ = Dispatcher.BeginInvoke(FlushPendingProxyTextAfterImeConfirm, DispatcherPriority.Background);
     }
 
     private void FlushPendingProxyTextAfterImeConfirm()
     {
-        if (!_pendingProxyFlushAfterImeConfirm)
+        if (!_imeInput.TryConsumeDeferredFlush())
         {
             return;
         }
 
-        _pendingProxyFlushAfterImeConfirm = false;
         if (!FlushInputProxyText())
         {
             QueueOverlayStateUpdate();
