@@ -37,6 +37,7 @@ public partial class TerminalTabView : UserControl
     private readonly TerminalSessionOrchestrator _sessionOrchestrator = new();
     private readonly TerminalKeyboardCoordinator _keyboardState = new();
     private readonly TerminalMouseCoordinator _mouseState = new();
+    private readonly TerminalClipboardCoordinator _clipboardState = new();
     private ITerminalSession? _session => _sessionOrchestrator.Current;
     private AnsiTerminalBuffer _terminalBuffer = new(120, 30);
     private short _currentColumns = 120;
@@ -1244,14 +1245,22 @@ public partial class TerminalTabView : UserControl
 
     private void PasteFromClipboard()
     {
-        if (_session is null || !Clipboard.ContainsText())
+        bool hasSession = _session is not null;
+        if (!hasSession)
+        {
+            return;
+        }
+
+        bool containsText = Clipboard.ContainsText();
+        if (!_clipboardState.CanPaste(hasSession, containsText))
         {
             return;
         }
 
         string text = Clipboard.GetText();
-
-        if (!_terminalBuffer.BracketedPasteEnabled && (text.Contains('\n') || text.Contains('\r')))
+        TerminalPasteAction action = _clipboardState.ResolvePaste(
+            hasSession, containsText, text, _terminalBuffer.BracketedPasteEnabled, multilinePasteApproved: false);
+        if (action.Kind == TerminalPasteActionKind.ConfirmMultiline)
         {
             var result = MessageBox.Show(
                 Window.GetWindow(this),
@@ -1263,19 +1272,20 @@ public partial class TerminalTabView : UserControl
             {
                 return;
             }
+
+            action = _clipboardState.ResolvePaste(
+                hasSession, containsText, text, _terminalBuffer.BracketedPasteEnabled, multilinePasteApproved: true);
         }
 
-        if (_terminalBuffer.BracketedPasteEnabled)
+        if (action is { Kind: TerminalPasteActionKind.Send, Text: not null })
         {
-            text = $"\u001b[200~{text}\u001b[201~";
+            _ = SendTerminalInput(action.Text);
         }
-
-        _ = SendTerminalInput(text);
     }
 
     private bool CanPasteFromClipboard()
     {
-        return _session is not null && Clipboard.ContainsText();
+        return _session is not null && _clipboardState.CanPaste(hasSession: true, Clipboard.ContainsText());
     }
 
     private void CopySelectionToClipboard()
@@ -2255,8 +2265,7 @@ public partial class TerminalTabView : UserControl
         try
         {
             string text = Clipboard.ContainsText() ? Clipboard.GetText() : string.Empty;
-            string encodedText = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
-            _session.Write($"\u001b]52;{NormalizeClipboardSelectionTargets(selectionTargets)};{encodedText}\u0007");
+            _session.Write(_clipboardState.BuildOsc52Response(selectionTargets, text));
         }
         catch (Exception ex)
         {
@@ -2468,11 +2477,6 @@ public partial class TerminalTabView : UserControl
     private bool SupportsTerminalInput()
     {
         return _session?.Capabilities.SupportsTerminalInput ?? false;
-    }
-
-    private static string NormalizeClipboardSelectionTargets(string? selectionTargets)
-    {
-        return string.IsNullOrWhiteSpace(selectionTargets) ? "c" : selectionTargets.Trim();
     }
 
     private string BuildSessionStartedMessage(string commandLine)
