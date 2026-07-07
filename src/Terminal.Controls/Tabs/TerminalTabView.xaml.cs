@@ -64,7 +64,7 @@ public partial class TerminalTabView : UserControl
     private readonly string _initialCommandLine;
     private readonly string _initialWorkingDirectory;
     private bool _hasStartedInitialSession;
-    private readonly List<int> _shellCommandLines = [];
+    private readonly TerminalCommandNavigationCoordinator _commandNavigation = new();
 
     // Command lines reported via OSC 633;E, most-recent last. Backs the Ctrl+R
     // history overlay and the public CommandHistory API. Capped to keep memory bounded.
@@ -1964,7 +1964,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ShellCommandZoneReceived -= TerminalBuffer_ShellCommandZoneReceived;
         _terminalBuffer.ShellCommandLineReceived -= TerminalBuffer_ShellCommandLineReceived;
         _terminalBuffer.ShellHistoryPathReceived -= TerminalBuffer_ShellHistoryPathReceived;
-        _shellCommandLines.Clear();
+        _commandNavigation.ResetSession();
         _agentCommands.ResetSession();
         // Command history intentionally survives a restart so the user keeps their history.
         _terminalBuffer = nextBuffer;
@@ -2097,16 +2097,9 @@ public partial class TerminalTabView : UserControl
     {
         OnAgentShellCommandZone(e);
         RaiseShellCommandActivity(e);
+        _commandNavigation.Observe(e.ZoneType, e.AbsoluteLine);
 
-        if (e.ZoneType == ShellCommandZoneType.PromptStart)
-        {
-            // Prompt redraws re-emit the marker for the same line; skip duplicates.
-            if (_shellCommandLines.Count == 0 || _shellCommandLines[^1] != e.AbsoluteLine)
-            {
-                _shellCommandLines.Add(e.AbsoluteLine);
-            }
-        }
-        else if (e.ZoneType == ShellCommandZoneType.CommandDone && e.ExitCode.HasValue && e.ExitCode.Value != 0)
+        if (e.ZoneType == ShellCommandZoneType.CommandDone && e.ExitCode.HasValue && e.ExitCode.Value != 0)
         {
             SetStatus($"Command exited with code {e.ExitCode.Value}.");
         }
@@ -2154,53 +2147,20 @@ public partial class TerminalTabView : UserControl
 
     private bool TryScrollToAdjacentCommandLine(bool upward)
     {
-        if (_shellCommandLines.Count == 0)
+        if (!_commandNavigation.HasPrompts)
         {
             return false;
         }
 
         var (_, charHeight) = MeasureCharacterCell();
         int currentTopLine = (int)(TerminalScrollHost.VerticalOffset / Math.Max(charHeight, 1.0));
-
-        if (upward)
+        int? targetLine = _commandNavigation.FindAdjacent(currentTopLine, upward);
+        if (!targetLine.HasValue)
         {
-            int targetLine = -1;
-            for (int i = _shellCommandLines.Count - 1; i >= 0; i--)
-            {
-                if (_shellCommandLines[i] < currentTopLine)
-                {
-                    targetLine = _shellCommandLines[i];
-                    break;
-                }
-            }
-
-            if (targetLine < 0)
-            {
-                return false;
-            }
-
-            ScrollToAbsoluteLine(targetLine);
-        }
-        else
-        {
-            int targetLine = -1;
-            foreach (int line in _shellCommandLines)
-            {
-                if (line > currentTopLine)
-                {
-                    targetLine = line;
-                    break;
-                }
-            }
-
-            if (targetLine < 0)
-            {
-                return false;
-            }
-
-            ScrollToAbsoluteLine(targetLine);
+            return false;
         }
 
+        ScrollToAbsoluteLine(targetLine.Value);
         return true;
     }
 
