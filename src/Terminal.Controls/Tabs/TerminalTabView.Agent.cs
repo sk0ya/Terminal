@@ -17,8 +17,8 @@ public partial class TerminalTabView
 {
     private static readonly TimeSpan AgentCommandTimeout = TimeSpan.FromMinutes(10);
 
-    private readonly SemaphoreSlim _runCommandGate = new(1, 1);
     private readonly TerminalAgentCommandCoordinator _agentCommands = new();
+    private readonly TerminalAgentCommandOrchestrator _agentCommandOrchestrator;
 
     /// <summary>
     /// True once OSC 133 shell-integration markers have been observed on this session,
@@ -37,69 +37,9 @@ public partial class TerminalTabView
         ArgumentNullException.ThrowIfNull(command);
 
         return Dispatcher.CheckAccess()
-            ? RunCommandGatedAsync(command, cancellationToken)
-            : Dispatcher.InvokeAsync(() => RunCommandGatedAsync(command, cancellationToken)).Task.Unwrap();
-    }
-
-    private async Task<TerminalCommandResult> RunCommandGatedAsync(string command, CancellationToken cancellationToken)
-    {
-        await _runCommandGate.WaitAsync(cancellationToken).ConfigureAwait(true);
-        try
-        {
-            return await ExecuteAgentCommandAsync(command, cancellationToken).ConfigureAwait(true);
-        }
-        finally
-        {
-            _runCommandGate.Release();
-        }
-    }
-
-    private async Task<TerminalCommandResult> ExecuteAgentCommandAsync(string command, CancellationToken cancellationToken)
-    {
-        if (_session is null || cancellationToken.IsCancellationRequested)
-        {
-            return new TerminalCommandResult(command, string.Empty, -1, false);
-        }
-
-        bool useShellIntegration = _agentCommands.ShellIntegrationObserved;
-        string lineToSend;
-        string markerId = string.Empty;
-        int outputStartLine = -1;
-        if (useShellIntegration)
-        {
-            lineToSend = command;
-        }
-        else
-        {
-            AgentShellKind shell = AgentCommandProtocol.DetectShellKind(_launchState.ActiveCommandLine);
-            if (shell == AgentShellKind.Unknown)
-            {
-                // No completion mechanism available: report not-completed rather than hang.
-                return new TerminalCommandResult(command, string.Empty, -1, false);
-            }
-
-            markerId = AgentCommandProtocol.NewMarkerId();
-            lineToSend = AgentCommandProtocol.BuildSentinelCommand(shell, command, markerId);
-            // Record where output will begin so a cancelled/timed-out sentinel command can
-            // still return the text produced so far (the OSC path records this at marker C).
-            outputStartLine = _terminalBuffer.ScrollbackLineCount + _terminalBuffer.CursorRow;
-        }
-
-        TerminalAgentCommandExecution execution = _agentCommands.Begin(command, markerId, outputStartLine);
-
-        using CancellationTokenRegistration cancellationRegistration = cancellationToken.Register(() =>
-            _ = Dispatcher.BeginInvoke(() => CancelAgentCommand(execution)));
-        using var timeoutCts = new CancellationTokenSource(AgentCommandTimeout);
-        using CancellationTokenRegistration timeoutRegistration = timeoutCts.Token.Register(() =>
-            _ = Dispatcher.BeginInvoke(() => TimeoutAgentCommand(execution)));
-
-        if (!SendTerminalInput(lineToSend + "\r"))
-        {
-            _agentCommands.Abandon(execution);
-            return new TerminalCommandResult(command, string.Empty, -1, false);
-        }
-
-        return await execution.Completion.Task.ConfigureAwait(true);
+            ? _agentCommandOrchestrator.RunAsync(command, cancellationToken)
+            : Dispatcher.InvokeAsync(
+                () => _agentCommandOrchestrator.RunAsync(command, cancellationToken)).Task.Unwrap();
     }
 
     /// <summary>
@@ -114,17 +54,12 @@ public partial class TerminalTabView
 
     private void CancelAgentCommand(TerminalAgentCommandExecution execution)
     {
-        _agentCommands.Cancel(
-            execution,
-            SendInterrupt,
-            startLine => _terminalBuffer.GetPlainTextForAbsoluteLineRange(startLine, int.MaxValue));
+        _agentCommandOrchestrator.Cancel(execution);
     }
 
     private void TimeoutAgentCommand(TerminalAgentCommandExecution execution)
     {
-        _agentCommands.Timeout(
-            execution,
-            startLine => _terminalBuffer.GetPlainTextForAbsoluteLineRange(startLine, int.MaxValue));
+        _agentCommandOrchestrator.Timeout(execution);
     }
 
     /// <summary>

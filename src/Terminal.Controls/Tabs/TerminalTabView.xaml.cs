@@ -187,6 +187,18 @@ public partial class TerminalTabView : UserControl
 
     public TerminalTabView(string? commandLine = null, string? workingDirectory = null)
     {
+        _agentCommandOrchestrator = new(
+            _agentCommands,
+            new TerminalAgentCommandHost(
+                () => _session is not null,
+                () => _launchState.ActiveCommandLine,
+                () => _terminalBuffer.ScrollbackLineCount + _terminalBuffer.CursorRow,
+                SendTerminalInput,
+                SendInterrupt,
+                startLine => _terminalBuffer.GetPlainTextForAbsoluteLineRange(startLine, int.MaxValue),
+                action => _ = Dispatcher.BeginInvoke(action)),
+            new TerminalAgentTimeoutScheduler(),
+            AgentCommandTimeout);
         _initialCommandLine = string.IsNullOrWhiteSpace(commandLine)
             ? TerminalProfileCatalog.BuildDefaultCommandLine()
             : commandLine.Trim();
