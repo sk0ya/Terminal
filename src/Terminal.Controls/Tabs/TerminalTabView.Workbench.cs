@@ -380,37 +380,30 @@ public partial class TerminalTabView
         ModifierKeys modifiers = Keyboard.Modifiers;
         Key key = GetEffectiveKey(e);
 
-        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.S)
+        TerminalWorkbenchShortcutAction shortcutAction = TerminalWorkbenchShortcutCoordinator.Resolve(
+            MapWorkbenchShortcutKey(key),
+            MapWorkbenchShortcutModifiers(modifiers));
+        switch (shortcutAction)
         {
-            SaveTranscript();
-            e.Handled = true;
-            return;
+            case TerminalWorkbenchShortcutAction.SaveTranscript:
+                SaveTranscript();
+                break;
+            case TerminalWorkbenchShortcutAction.Restart:
+                RestartButton_Click(RestartButton, new RoutedEventArgs(Button.ClickEvent));
+                break;
+            case TerminalWorkbenchShortcutAction.IncreaseFontSize:
+                ApplyTerminalFontSize(TerminalOutput.FontSize + 1);
+                break;
+            case TerminalWorkbenchShortcutAction.DecreaseFontSize:
+                ApplyTerminalFontSize(TerminalOutput.FontSize - 1);
+                break;
+            case TerminalWorkbenchShortcutAction.ResetFontSize:
+                ApplyTerminalFontSize(DefaultTerminalFontSize);
+                break;
         }
 
-        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.R)
+        if (shortcutAction != TerminalWorkbenchShortcutAction.None)
         {
-            RestartButton_Click(RestartButton, new RoutedEventArgs(Button.ClickEvent));
-            e.Handled = true;
-            return;
-        }
-
-        if (modifiers == ModifierKeys.Control && key is Key.Add or Key.OemPlus)
-        {
-            ApplyTerminalFontSize(TerminalOutput.FontSize + 1);
-            e.Handled = true;
-            return;
-        }
-
-        if (modifiers == ModifierKeys.Control && key is Key.Subtract or Key.OemMinus)
-        {
-            ApplyTerminalFontSize(TerminalOutput.FontSize - 1);
-            e.Handled = true;
-            return;
-        }
-
-        if (modifiers == ModifierKeys.Control && key is Key.D0 or Key.NumPad0)
-        {
-            ApplyTerminalFontSize(DefaultTerminalFontSize);
             e.Handled = true;
             return;
         }
@@ -433,6 +426,35 @@ public partial class TerminalTabView
         {
             e.Handled = true;
         }
+    }
+
+    private static TerminalWorkbenchShortcutKey MapWorkbenchShortcutKey(Key key) => key switch
+    {
+        Key.S => TerminalWorkbenchShortcutKey.S,
+        Key.R => TerminalWorkbenchShortcutKey.R,
+        Key.Add => TerminalWorkbenchShortcutKey.Add,
+        Key.OemPlus => TerminalWorkbenchShortcutKey.OemPlus,
+        Key.Subtract => TerminalWorkbenchShortcutKey.Subtract,
+        Key.OemMinus => TerminalWorkbenchShortcutKey.OemMinus,
+        Key.D0 => TerminalWorkbenchShortcutKey.D0,
+        Key.NumPad0 => TerminalWorkbenchShortcutKey.NumPad0,
+        _ => TerminalWorkbenchShortcutKey.Other
+    };
+
+    private static TerminalWorkbenchShortcutModifiers MapWorkbenchShortcutModifiers(ModifierKeys modifiers)
+    {
+        TerminalWorkbenchShortcutModifiers result = TerminalWorkbenchShortcutModifiers.None;
+        if ((modifiers & ModifierKeys.Shift) != 0)
+        {
+            result |= TerminalWorkbenchShortcutModifiers.Shift;
+        }
+        if ((modifiers & ModifierKeys.Control) != 0)
+        {
+            result |= TerminalWorkbenchShortcutModifiers.Control;
+        }
+        if ((modifiers & ModifierKeys.Alt) != 0) result |= TerminalWorkbenchShortcutModifiers.Alt;
+        if ((modifiers & ModifierKeys.Windows) != 0) result |= TerminalWorkbenchShortcutModifiers.Windows;
+        return result;
     }
 
     private void ApplyTerminalFontSize(double fontSize, bool persist = true)
