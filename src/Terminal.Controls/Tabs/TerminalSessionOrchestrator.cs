@@ -21,13 +21,79 @@ internal sealed record TerminalSessionStopResult(
     Exception? Error = null,
     TerminalSessionStopErrorKind ErrorKind = TerminalSessionStopErrorKind.None);
 
+internal enum TerminalRecoveryStatus
+{
+    Completed,
+    Ignored,
+    LimitReached,
+    Failed
+}
+
+internal sealed record TerminalRecoveryResult(TerminalRecoveryStatus Status, Exception? Error = null);
+
 internal sealed class TerminalSessionOrchestrator
 {
     private readonly TerminalSessionLifecycleCoordinator _lifecycle = new();
+    private int _isRecovering;
+    private int _autoRecoveryAttempts;
 
     public ITerminalSession? Current => _lifecycle.Current;
     public bool IsTransitionActive => _lifecycle.IsTransitionActive;
     public bool IsCurrent(ITerminalSession session) => _lifecycle.IsCurrent(session);
+    public bool IsRecovering => Volatile.Read(ref _isRecovering) != 0;
+    public int AutoRecoveryAttempts => Volatile.Read(ref _autoRecoveryAttempts);
+
+    public void ResetRecoveryAttempts() => Interlocked.Exchange(ref _autoRecoveryAttempts, 0);
+
+    public async Task<TerminalRecoveryResult> RecoverAsync(
+        ITerminalSession? session,
+        bool isAutomatic,
+        int maxAutomaticAttempts,
+        Func<bool> isClosing,
+        Action prepareRestart,
+        Func<Task> restart)
+    {
+        if (session is null || !_lifecycle.IsCurrent(session) || isClosing())
+        {
+            return new(TerminalRecoveryStatus.Ignored);
+        }
+
+        if (Interlocked.CompareExchange(ref _isRecovering, 1, 0) != 0)
+        {
+            return new(TerminalRecoveryStatus.Ignored);
+        }
+
+        try
+        {
+            if (isAutomatic)
+            {
+                if (AutoRecoveryAttempts >= maxAutomaticAttempts)
+                {
+                    return new(TerminalRecoveryStatus.LimitReached);
+                }
+
+                Interlocked.Increment(ref _autoRecoveryAttempts);
+            }
+
+            _ = await Task.Run(() => session.TryForceUnlock());
+            if (!_lifecycle.IsCurrent(session) || isClosing())
+            {
+                return new(TerminalRecoveryStatus.Ignored);
+            }
+
+            prepareRestart();
+            await restart();
+            return new(TerminalRecoveryStatus.Completed);
+        }
+        catch (Exception ex)
+        {
+            return new(TerminalRecoveryStatus.Failed, ex);
+        }
+        finally
+        {
+            Volatile.Write(ref _isRecovering, 0);
+        }
+    }
 
     public async Task<TerminalSessionStartResult> StartAsync(
         Func<Task<ITerminalSession>> createSession,

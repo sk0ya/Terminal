@@ -269,7 +269,7 @@ public partial class TerminalTabView
 
     private async void RestartButton_Click(object sender, RoutedEventArgs e)
     {
-        _autoRecoveryAttempts = 0;
+        _sessionOrchestrator.ResetRecoveryAttempts();
         await StartTerminalAsync(focusTerminal: true);
     }
 

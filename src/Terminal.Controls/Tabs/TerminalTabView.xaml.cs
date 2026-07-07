@@ -47,8 +47,7 @@ public partial class TerminalTabView : UserControl
     private System.Windows.Controls.Primitives.Popup? _toastPopup;
     private readonly TerminalOutputBatchCoordinator _outputBatch = new();
     private readonly TerminalRenderCoordinator _renderCoordinator = new();
-    private int _autoRecoveryAttempts;
-    private bool _isRecovering;
+    private bool _isRecovering => _sessionOrchestrator.IsRecovering;
     private bool _isSessionTransitionActive => _sessionOrchestrator.IsTransitionActive;
     private bool _isClosingWindow;
     private bool _isRenderingTerminal => _renderCoordinator.IsRendering;
@@ -295,13 +294,13 @@ public partial class TerminalTabView : UserControl
 
     private async void StartButton_Click(object sender, RoutedEventArgs e)
     {
-        _autoRecoveryAttempts = 0;
+        _sessionOrchestrator.ResetRecoveryAttempts();
         await StartTerminalAsync(focusTerminal: true);
     }
 
     private async void StopButton_Click(object sender, RoutedEventArgs e)
     {
-        _autoRecoveryAttempts = 0;
+        _sessionOrchestrator.ResetRecoveryAttempts();
         await StopTerminalAsync(reportStopped: true);
     }
 
@@ -2866,24 +2865,11 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        if (_autoRecoveryAttempts >= MaxAutoRecoveryAttempts)
-        {
-            SetStatus("Initial output stalled. Click Recover.");
-            return;
-        }
-
-        _autoRecoveryAttempts++;
         _ = RecoverSessionAsync(isAutomatic: true);
     }
 
     private async Task RecoverSessionAsync(bool isAutomatic)
     {
-        if (_session is null || _isRecovering)
-        {
-            return;
-        }
-
-        _isRecovering = true;
         UpdateUiState(_session is not null);
         try
         {
@@ -2897,32 +2883,42 @@ public partial class TerminalTabView : UserControl
             string recoveredCommandLine = _launchState.ActiveCommandLine;
             string recoveredWorkingDirectory = _launchState.ActiveWorkingDirectory;
 
-            _ = await Task.Run(() => session.TryForceUnlock());
+            Task<TerminalRecoveryResult> recovery = _sessionOrchestrator.RecoverAsync(
+                session,
+                isAutomatic,
+                MaxAutoRecoveryAttempts,
+                () => _isClosingWindow,
+                () =>
+                {
+                    if (!string.IsNullOrEmpty(recoveredCommandLine))
+                    {
+                        CommandTextBox.Text = recoveredCommandLine;
+                    }
 
-            // Restore the UI to the captured session state so the recovered session
-            // starts with the same command line and working directory
-            if (!string.IsNullOrEmpty(recoveredCommandLine))
+                    if (!string.IsNullOrEmpty(recoveredWorkingDirectory))
+                    {
+                        WorkingDirectoryTextBox.Text = recoveredWorkingDirectory;
+                    }
+
+                    SetStatus(isAutomatic
+                        ? "Initial output stalled. Unlocking and restarting session..."
+                        : "Recover requested. Unlocking and restarting session...");
+                },
+                () => StartTerminalAsync(focusTerminal: true));
+            UpdateUiState(_session is not null);
+            TerminalRecoveryResult result = await recovery;
+
+            if (result.Status == TerminalRecoveryStatus.LimitReached)
             {
-                CommandTextBox.Text = recoveredCommandLine;
+                SetStatus("Initial output stalled. Click Recover.");
             }
-
-            if (!string.IsNullOrEmpty(recoveredWorkingDirectory))
+            else if (result.Status == TerminalRecoveryStatus.Failed && result.Error is not null)
             {
-                WorkingDirectoryTextBox.Text = recoveredWorkingDirectory;
+                SetStatus($"Recovery failed: {FormatExceptionMessage(result.Error)}");
             }
-
-            SetStatus(isAutomatic
-                ? "Initial output stalled. Unlocking and restarting session..."
-                : "Recover requested. Unlocking and restarting session...");
-            await StartTerminalAsync(focusTerminal: true);
-        }
-        catch (Exception ex)
-        {
-            SetStatus($"Recovery failed: {FormatExceptionMessage(ex)}");
         }
         finally
         {
-            _isRecovering = false;
             UpdateUiState(_session is not null);
         }
     }

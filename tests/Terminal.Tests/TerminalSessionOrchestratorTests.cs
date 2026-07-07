@@ -171,6 +171,93 @@ public sealed class TerminalSessionOrchestratorTests
         Assert.Null(service.Current);
     }
 
+    [Fact]
+    public async Task RecoveryRunsForceUnlockBeforeRestartAndResetsOwnership()
+    {
+        var service = new TerminalSessionOrchestrator();
+        var order = new List<string>();
+        var session = new FakeSession { ForceUnlockAction = () => order.Add("force") };
+        await StartAsync(service, session);
+
+        TerminalRecoveryResult result = await service.RecoverAsync(
+            session, false, 1, () => false,
+            () => order.Add("prepare"),
+            () => { order.Add("restart"); return Task.CompletedTask; });
+
+        Assert.Equal(TerminalRecoveryStatus.Completed, result.Status);
+        Assert.Equal(["force", "prepare", "restart"], order);
+        Assert.False(service.IsRecovering);
+    }
+
+    [Fact]
+    public async Task AutomaticRecoveryHonorsAttemptLimitAndCanBeReset()
+    {
+        var service = new TerminalSessionOrchestrator();
+        var session = new FakeSession();
+        await StartAsync(service, session);
+
+        Assert.Equal(TerminalRecoveryStatus.Completed, (await Recover(service, session, automatic: true)).Status);
+        Assert.Equal(TerminalRecoveryStatus.LimitReached, (await Recover(service, session, automatic: true)).Status);
+        Assert.Equal(1, session.ForceUnlockCount);
+
+        service.ResetRecoveryAttempts();
+        Assert.Equal(TerminalRecoveryStatus.Completed, (await Recover(service, session, automatic: true)).Status);
+    }
+
+    [Fact]
+    public async Task ConcurrentRecoveryHasSingleOwnerAndFailureReleasesIt()
+    {
+        var service = new TerminalSessionOrchestrator();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var session = new FakeSession
+        {
+            ForceUnlockAction = () =>
+            {
+                entered.SetResult();
+                release.Task.GetAwaiter().GetResult();
+            }
+        };
+        await StartAsync(service, session);
+
+        Task<TerminalRecoveryResult> owner = Recover(service, session, automatic: false, restartError: true);
+        await entered.Task;
+        Assert.Equal(TerminalRecoveryStatus.Ignored, (await Recover(service, session, automatic: false)).Status);
+        release.SetResult();
+        Assert.Equal(TerminalRecoveryStatus.Failed, (await owner).Status);
+        Assert.False(service.IsRecovering);
+
+        session.ForceUnlockAction = null;
+        Assert.Equal(TerminalRecoveryStatus.Completed, (await Recover(service, session, automatic: false)).Status);
+    }
+
+    [Fact]
+    public async Task RecoveryRejectsStaleSessionAndClosingState()
+    {
+        var service = new TerminalSessionOrchestrator();
+        var stale = new FakeSession();
+        var current = new FakeSession();
+        await StartAsync(service, stale);
+        await StartAsync(service, current);
+
+        Assert.Equal(TerminalRecoveryStatus.Ignored, (await Recover(service, stale, automatic: false)).Status);
+        TerminalRecoveryResult closing = await service.RecoverAsync(
+            current, false, 1, () => true, () => { }, () => Task.CompletedTask);
+        Assert.Equal(TerminalRecoveryStatus.Ignored, closing.Status);
+        Assert.Equal(0, current.ForceUnlockCount);
+    }
+
+    private static Task<TerminalRecoveryResult> Recover(
+        TerminalSessionOrchestrator service,
+        FakeSession session,
+        bool automatic,
+        bool restartError = false) =>
+        service.RecoverAsync(
+            session, automatic, 1, () => false, () => { },
+            () => restartError
+                ? Task.FromException(new InvalidOperationException("restart"))
+                : Task.CompletedTask);
+
     private static Task<TerminalSessionStartResult> StartAsync(
         TerminalSessionOrchestrator service,
         FakeSession session) =>
@@ -185,6 +272,7 @@ public sealed class TerminalSessionOrchestratorTests
             TerminalSessionKind.ConPty, SupportsResize: true, SupportsTerminalInput: true);
         public Exception? StartError { get; init; }
         public Exception? DisposeError { get; init; }
+        public Action? ForceUnlockAction { get; set; }
         public int StartCount { get; private set; }
         public int DisposeCount { get; private set; }
         public int ForceUnlockCount { get; private set; }
@@ -199,7 +287,12 @@ public sealed class TerminalSessionOrchestratorTests
                 : ValueTask.FromException(DisposeError);
         }
         public void Dispose() => DisposeCount++;
-        public bool TryForceUnlock(uint exitCode = 1) { ForceUnlockCount++; return true; }
+        public bool TryForceUnlock(uint exitCode = 1)
+        {
+            ForceUnlockCount++;
+            ForceUnlockAction?.Invoke();
+            return true;
+        }
         public bool IsOutputStalled(TimeSpan initialOutputTimeout, TimeSpan idleOutputTimeout) => false;
         public void Resize(short columns, short rows) { }
         public void Write(string input) { }
