@@ -72,7 +72,7 @@ public partial class TerminalTabView
         }
         else
         {
-            AgentShellKind shell = AgentCommandProtocol.DetectShellKind(_activeCommandLine);
+            AgentShellKind shell = AgentCommandProtocol.DetectShellKind(_launchState.ActiveCommandLine);
             if (shell == AgentShellKind.Unknown)
             {
                 // No completion mechanism available: report not-completed rather than hang.

@@ -19,16 +19,8 @@ public partial class TerminalTabView
     private const double MinTerminalFontSize = 11;
     private const double MaxTerminalFontSize = 24;
 
-    private readonly List<TerminalProfileDefinition> _profiles = [];
-    private readonly TerminalProfileDefinition _customProfile = new(
-        "custom",
-        "Custom",
-        string.Empty,
-        "Use any executable or shell command line.",
-        IsCustom: true);
-
-    private string _activeCommandLine = string.Empty;
-    private string _activeWorkingDirectory = Environment.CurrentDirectory;
+    private readonly TerminalLaunchCoordinator _launchState = new(
+        TerminalProfileCatalog.CreateProfiles());
 
     // Maximum scrollback lines for terminal buffers created after the change
     // (the buffer's own limit is readonly, so it applies from the next session).
@@ -108,10 +100,7 @@ public partial class TerminalTabView
 
     private void BuildProfileCatalog()
     {
-        _profiles.Clear();
-        _profiles.AddRange(TerminalProfileCatalog.CreateProfiles());
-        _profiles.Add(_customProfile);
-        ProfileComboBox.ItemsSource = _profiles;
+        ProfileComboBox.ItemsSource = _launchState.Profiles;
     }
 
     private void ApplySavedWorkbenchSettings()
@@ -140,13 +129,9 @@ public partial class TerminalTabView
     {
         return new TerminalAppSettings
         {
-            SelectedProfileId = GetSelectedProfile().Id,
-            CommandLine = string.IsNullOrWhiteSpace(CommandTextBox.Text)
-                ? TerminalProfileCatalog.BuildDefaultCommandLine()
-                : CommandTextBox.Text.Trim(),
-            WorkingDirectory = string.IsNullOrWhiteSpace(WorkingDirectoryTextBox.Text)
-                ? Environment.CurrentDirectory
-                : WorkingDirectoryTextBox.Text.Trim(),
+            SelectedProfileId = _launchState.SelectedProfile.Id,
+            CommandLine = _launchState.GetEffectiveCommandLine(TerminalProfileCatalog.BuildDefaultCommandLine()),
+            WorkingDirectory = _launchState.GetEffectiveWorkingDirectory(Environment.CurrentDirectory),
             FontFamilyName = TerminalOutput.FontFamily.Source,
             FontSize = TerminalOutput.FontSize,
             CjkAmbiguousWidthIsWide = _terminalBuffer.AmbiguousWidthIsWide,
@@ -157,22 +142,14 @@ public partial class TerminalTabView
 
     private void SetSelectedProfile(string? profileId, string commandLine)
     {
-        TerminalProfileDefinition selectedProfile = TerminalProfileCatalog.ResolveSelectedProfile(
-            _profiles,
-            _customProfile,
-            profileId,
-            commandLine);
-
-        string effectiveCommandLine = string.IsNullOrWhiteSpace(commandLine) && !selectedProfile.IsCustom
-            ? selectedProfile.CommandLine
-            : commandLine;
+        _launchState.Apply(profileId, commandLine, WorkingDirectoryTextBox.Text, Environment.CurrentDirectory);
 
         _suppressProfileSelectionChanged = true;
-        ProfileComboBox.SelectedItem = selectedProfile;
+        ProfileComboBox.SelectedItem = _launchState.SelectedProfile;
         _suppressProfileSelectionChanged = false;
 
         _suppressCommandTextChanged = true;
-        CommandTextBox.Text = effectiveCommandLine;
+        CommandTextBox.Text = _launchState.CommandLine;
         _suppressCommandTextChanged = false;
 
         UpdateProfileHint();
@@ -180,65 +157,48 @@ public partial class TerminalTabView
 
     private TerminalProfileDefinition GetSelectedProfile()
     {
-        return ProfileComboBox.SelectedItem as TerminalProfileDefinition ?? _customProfile;
-    }
-
-    private TerminalProfileDefinition? MatchProfileByCommandLine(string? commandLine)
-    {
-        return TerminalProfileCatalog.MatchProfileByCommandLine(_profiles, commandLine);
+        return _launchState.SelectedProfile;
     }
 
     private void UpdateProfileHint()
     {
-        TerminalProfileDefinition profile = GetSelectedProfile();
-        ProfileHintText.Text = profile.Description;
+        ProfileHintText.Text = _launchState.ProfileHint;
     }
 
     private bool TryBuildLaunchRequest(out string commandLine, out string workingDirectory)
     {
-        commandLine = string.IsNullOrWhiteSpace(CommandTextBox.Text)
-            ? TerminalProfileCatalog.BuildDefaultCommandLine()
-            : CommandTextBox.Text.Trim();
-
-        try
+        if (_launchState.TryBuildLaunchRequest(
+            CommandTextBox.Text,
+            WorkingDirectoryTextBox.Text,
+            TerminalProfileCatalog.BuildDefaultCommandLine(),
+            Environment.CurrentDirectory,
+            Environment.ExpandEnvironmentVariables,
+            Path.GetFullPath,
+            Directory.Exists,
+            out TerminalLaunchRequest? request,
+            out Exception? error))
         {
-            workingDirectory = NormalizeWorkingDirectory(WorkingDirectoryTextBox.Text);
+            commandLine = request!.CommandLine;
+            workingDirectory = request.WorkingDirectory;
             WorkingDirectoryTextBox.Text = workingDirectory;
             return true;
         }
-        catch (Exception ex)
-        {
-            workingDirectory = string.Empty;
-            SetStatus($"Invalid working directory: {ex.Message}");
-            return false;
-        }
-    }
 
-    private static string NormalizeWorkingDirectory(string? rawPath)
-    {
-        string candidate = string.IsNullOrWhiteSpace(rawPath)
-            ? Environment.CurrentDirectory
-            : Environment.ExpandEnvironmentVariables(rawPath.Trim());
-        string fullPath = Path.GetFullPath(candidate);
-        if (!Directory.Exists(fullPath))
-        {
-            throw new DirectoryNotFoundException(fullPath);
-        }
-
-        return fullPath;
+        commandLine = string.Empty;
+        workingDirectory = string.Empty;
+        SetStatus($"Invalid working directory: {error!.Message}");
+        return false;
     }
 
     private void UpdateActiveLaunchState(string commandLine, string workingDirectory)
     {
-        _activeCommandLine = commandLine;
-        _activeWorkingDirectory = workingDirectory;
+        _launchState.Activate(commandLine, workingDirectory);
         UpdateTerminalChrome();
     }
 
     private void ClearActiveLaunchState()
     {
-        _activeCommandLine = string.Empty;
-        _activeWorkingDirectory = Environment.CurrentDirectory;
+        _launchState.ClearActive(Environment.CurrentDirectory);
         UpdateTerminalChrome();
     }
 
@@ -254,7 +214,7 @@ public partial class TerminalTabView
 
         string workingDirectory = _session is null
             ? (string.IsNullOrWhiteSpace(WorkingDirectoryTextBox.Text) ? Environment.CurrentDirectory : WorkingDirectoryTextBox.Text.Trim())
-            : _activeWorkingDirectory;
+            : _launchState.ActiveWorkingDirectory;
         WorkingDirectorySummaryText.Text = workingDirectory;
     }
 
@@ -265,13 +225,10 @@ public partial class TerminalTabView
             return;
         }
 
-        TerminalProfileDefinition profile = GetSelectedProfile();
-        if (!profile.IsCustom && !string.IsNullOrWhiteSpace(profile.CommandLine))
-        {
-            _suppressCommandTextChanged = true;
-            CommandTextBox.Text = profile.CommandLine;
-            _suppressCommandTextChanged = false;
-        }
+        string commandLine = _launchState.SelectProfile(ProfileComboBox.SelectedItem as TerminalProfileDefinition);
+        _suppressCommandTextChanged = true;
+        CommandTextBox.Text = commandLine;
+        _suppressCommandTextChanged = false;
 
         UpdateProfileHint();
         UpdateTerminalChrome();
@@ -285,7 +242,7 @@ public partial class TerminalTabView
             return;
         }
 
-        TerminalProfileDefinition matchedProfile = MatchProfileByCommandLine(CommandTextBox.Text) ?? _customProfile;
+        TerminalProfileDefinition matchedProfile = _launchState.UpdateCommandLine(CommandTextBox.Text);
         _suppressProfileSelectionChanged = true;
         ProfileComboBox.SelectedItem = matchedProfile;
         _suppressProfileSelectionChanged = false;
@@ -300,6 +257,7 @@ public partial class TerminalTabView
             return;
         }
 
+        _launchState.UpdateWorkingDirectory(WorkingDirectoryTextBox.Text, Environment.CurrentDirectory);
         UpdateTerminalChrome();
     }
 
@@ -800,7 +758,7 @@ public partial class TerminalTabView
         }
 
         // Otherwise only guess for PowerShell shells, probing the known defaults.
-        string commandLine = string.IsNullOrWhiteSpace(_activeCommandLine) ? _initialCommandLine : _activeCommandLine;
+        string commandLine = string.IsNullOrWhiteSpace(_launchState.ActiveCommandLine) ? _initialCommandLine : _launchState.ActiveCommandLine;
         string executable = ExtractExecutableName(commandLine);
         bool isPowerShell = executable.Equals("pwsh", StringComparison.OrdinalIgnoreCase)
             || executable.Equals("powershell", StringComparison.OrdinalIgnoreCase);
@@ -1043,9 +1001,9 @@ public partial class TerminalTabView
         string basis = _terminalBuffer.WindowTitle;
         if (string.IsNullOrWhiteSpace(basis))
         {
-            basis = string.IsNullOrWhiteSpace(_activeCommandLine)
+            basis = string.IsNullOrWhiteSpace(_launchState.ActiveCommandLine)
                 ? GetSelectedProfile().DisplayName
-                : _activeCommandLine;
+                : _launchState.ActiveCommandLine;
         }
 
         return $"{DateTime.Now:yyyyMMdd-HHmmss}-{SanitizeFileName(basis)}.txt";

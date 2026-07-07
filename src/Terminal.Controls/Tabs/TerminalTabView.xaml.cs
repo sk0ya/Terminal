@@ -2214,7 +2214,8 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        _activeWorkingDirectory = canonicalPath;
+        _launchState.UpdateActiveWorkingDirectory(canonicalPath);
+        _launchState.UpdateWorkingDirectory(canonicalPath, Environment.CurrentDirectory);
         _suppressWorkingDirectoryTextChanged = true;
         WorkingDirectoryTextBox.Text = canonicalPath;
         _suppressWorkingDirectoryTextChanged = false;
@@ -2845,9 +2846,9 @@ public partial class TerminalTabView : UserControl
 
     private string GetEffectiveTabTitleCommandLine()
     {
-        return string.IsNullOrWhiteSpace(_activeCommandLine)
+        return string.IsNullOrWhiteSpace(_launchState.ActiveCommandLine)
             ? CommandTextBox.Text
-            : _activeCommandLine;
+            : _launchState.ActiveCommandLine;
     }
 
     private void SetStatus(string message)
@@ -2856,13 +2857,9 @@ public partial class TerminalTabView : UserControl
         UpdateTerminalChrome();
     }
 
-    public string CommandLine => string.IsNullOrWhiteSpace(CommandTextBox.Text)
-        ? TerminalProfileCatalog.BuildDefaultCommandLine()
-        : CommandTextBox.Text.Trim();
+    public string CommandLine => _launchState.GetEffectiveCommandLine(TerminalProfileCatalog.BuildDefaultCommandLine());
 
-    public string WorkingDirectory => string.IsNullOrWhiteSpace(WorkingDirectoryTextBox.Text)
-        ? Environment.CurrentDirectory
-        : WorkingDirectoryTextBox.Text.Trim();
+    public string WorkingDirectory => _launchState.GetEffectiveWorkingDirectory(Environment.CurrentDirectory);
 
     public void FocusTerminal()
     {
@@ -2933,8 +2930,8 @@ public partial class TerminalTabView : UserControl
             }
 
             // Capture the active session's launch parameters before stopping
-            string recoveredCommandLine = _activeCommandLine;
-            string recoveredWorkingDirectory = _activeWorkingDirectory;
+            string recoveredCommandLine = _launchState.ActiveCommandLine;
+            string recoveredWorkingDirectory = _launchState.ActiveWorkingDirectory;
 
             _ = await Task.Run(() => session.TryForceUnlock());
 
