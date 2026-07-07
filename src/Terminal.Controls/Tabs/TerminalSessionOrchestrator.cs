@@ -34,26 +34,37 @@ internal sealed record TerminalRecoveryResult(TerminalRecoveryStatus Status, Exc
 internal sealed class TerminalSessionOrchestrator
 {
     private readonly TerminalSessionLifecycleCoordinator _lifecycle = new();
+    private readonly object _closeRecoveryGate = new();
     private int _isRecovering;
+    private int _isClosing;
     private int _autoRecoveryAttempts;
 
     public ITerminalSession? Current => _lifecycle.Current;
     public bool IsTransitionActive => _lifecycle.IsTransitionActive;
     public bool IsCurrent(ITerminalSession session) => _lifecycle.IsCurrent(session);
     public bool IsRecovering => Volatile.Read(ref _isRecovering) != 0;
+    public bool IsClosing => Volatile.Read(ref _isClosing) != 0;
     public int AutoRecoveryAttempts => Volatile.Read(ref _autoRecoveryAttempts);
 
     public void ResetRecoveryAttempts() => Interlocked.Exchange(ref _autoRecoveryAttempts, 0);
+
+    public bool TryBeginClose()
+    {
+        lock (_closeRecoveryGate)
+        {
+            return Interlocked.CompareExchange(ref _isClosing, 1, 0) == 0;
+        }
+    }
 
     public async Task<TerminalRecoveryResult> RecoverAsync(
         ITerminalSession? session,
         bool isAutomatic,
         int maxAutomaticAttempts,
-        Func<bool> isClosing,
         Action prepareRestart,
-        Func<Task> restart)
+        Func<Task> restart,
+        Action? beforeRestartAdmission = null)
     {
-        if (session is null || !_lifecycle.IsCurrent(session) || isClosing())
+        if (session is null || !_lifecycle.IsCurrent(session) || IsClosing)
         {
             return new(TerminalRecoveryStatus.Ignored);
         }
@@ -76,13 +87,20 @@ internal sealed class TerminalSessionOrchestrator
             }
 
             _ = await Task.Run(() => session.TryForceUnlock());
-            if (!_lifecycle.IsCurrent(session) || isClosing())
+            beforeRestartAdmission?.Invoke();
+            Task restartTask;
+            lock (_closeRecoveryGate)
             {
-                return new(TerminalRecoveryStatus.Ignored);
+                if (!_lifecycle.IsCurrent(session) || IsClosing)
+                {
+                    return new(TerminalRecoveryStatus.Ignored);
+                }
+
+                prepareRestart();
+                restartTask = restart();
             }
 
-            prepareRestart();
-            await restart();
+            await restartTask;
             return new(TerminalRecoveryStatus.Completed);
         }
         catch (Exception ex)
@@ -99,8 +117,7 @@ internal sealed class TerminalSessionOrchestrator
         Func<Task<ITerminalSession>> createSession,
         Action<ITerminalSession> wireEvents,
         Action<ITerminalSession> unwireEvents,
-        Action resetView,
-        Func<bool> isClosing)
+        Action resetView)
     {
         await _lifecycle.BeginTransitionAsync();
         try
@@ -113,7 +130,7 @@ internal sealed class TerminalSessionOrchestrator
             try
             {
                 resetView();
-                if (isClosing())
+                if (IsClosing)
                 {
                     return new(false, PreviousCleanupError: previousCleanupError);
                 }
@@ -123,7 +140,7 @@ internal sealed class TerminalSessionOrchestrator
                 _lifecycle.Attach(candidate);
                 attached = true;
                 await Task.Run(candidate.Start);
-                if (isClosing())
+                if (IsClosing)
                 {
                     Exception? cleanupError = await CleanupCandidateAsync(candidate, attached, unwireEvents);
                     return new(false, CleanupError: cleanupError, PreviousCleanupError: previousCleanupError);

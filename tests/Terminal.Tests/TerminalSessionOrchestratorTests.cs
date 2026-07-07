@@ -6,6 +6,95 @@ namespace Terminal.Tests;
 public sealed class TerminalSessionOrchestratorTests
 {
     [Fact]
+    public void CloseCanBeginOnlyOnce()
+    {
+        var service = new TerminalSessionOrchestrator();
+
+        Assert.False(service.IsClosing);
+        Assert.True(service.TryBeginClose());
+        Assert.True(service.IsClosing);
+        Assert.False(service.TryBeginClose());
+    }
+
+    [Fact]
+    public async Task ConcurrentCloseHasSingleOwner()
+    {
+        var service = new TerminalSessionOrchestrator();
+        var ready = new CountdownEvent(8);
+        var release = new ManualResetEventSlim();
+        Task<bool>[] attempts = Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+        {
+            ready.Signal();
+            release.Wait();
+            return service.TryBeginClose();
+        })).ToArray();
+
+        ready.Wait();
+        release.Set();
+        bool[] results = await Task.WhenAll(attempts);
+
+        Assert.Single(results, result => result);
+        Assert.True(service.IsClosing);
+    }
+
+    [Fact]
+    public async Task StartAfterCloseDoesNotCreateSession()
+    {
+        var service = new TerminalSessionOrchestrator();
+        int createCount = 0;
+        int resetCount = 0;
+        Assert.True(service.TryBeginClose());
+
+        TerminalSessionStartResult result = await service.StartAsync(
+            () =>
+            {
+                createCount++;
+                return Task.FromResult<ITerminalSession>(new FakeSession());
+            },
+            Wire,
+            Unwire,
+            () => resetCount++);
+
+        Assert.False(result.Started);
+        Assert.Equal(0, createCount);
+        Assert.Equal(1, resetCount);
+        Assert.Null(service.Current);
+    }
+
+    [Fact]
+    public async Task CloseDuringSessionCreationCleansStartedCandidate()
+    {
+        var service = new TerminalSessionOrchestrator();
+        var session = new FakeSession();
+        var createEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCreate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int wireCount = 0;
+        int unwireCount = 0;
+        Task<TerminalSessionStartResult> start = service.StartAsync(
+            async () =>
+            {
+                createEntered.SetResult();
+                await releaseCreate.Task;
+                return session;
+            },
+            _ => wireCount++,
+            _ => unwireCount++,
+            () => { });
+        await createEntered.Task;
+
+        Assert.True(service.TryBeginClose());
+        releaseCreate.SetResult();
+        TerminalSessionStartResult result = await start;
+
+        Assert.False(result.Started);
+        Assert.Equal(1, wireCount);
+        Assert.Equal(1, unwireCount);
+        Assert.Equal(1, session.StartCount);
+        Assert.Equal(1, session.DisposeCount);
+        Assert.Null(service.Current);
+    }
+
+    [Fact]
     public async Task StartFailureDetachesAndDisposesFailedSession()
     {
         var service = new TerminalSessionOrchestrator();
@@ -30,8 +119,7 @@ public sealed class TerminalSessionOrchestratorTests
             () => Task.FromResult<ITerminalSession>(session),
             _ => throw new InvalidOperationException("wire"),
             _ => unwireCount++,
-            () => { },
-            () => false);
+            () => { });
 
         Assert.False(result.Started);
         Assert.IsType<InvalidOperationException>(result.Error);
@@ -50,8 +138,7 @@ public sealed class TerminalSessionOrchestratorTests
         TerminalSessionStartResult result = await service.StartAsync(
             () => Task.FromResult<ITerminalSession>(new FakeSession()),
             Wire, Unwire,
-            () => throw new InvalidOperationException("reset"),
-            () => false);
+            () => throw new InvalidOperationException("reset"));
 
         Assert.False(result.Started);
         Assert.IsType<InvalidOperationException>(result.Error);
@@ -180,7 +267,7 @@ public sealed class TerminalSessionOrchestratorTests
         await StartAsync(service, session);
 
         TerminalRecoveryResult result = await service.RecoverAsync(
-            session, false, 1, () => false,
+            session, false, 1,
             () => order.Add("prepare"),
             () => { order.Add("restart"); return Task.CompletedTask; });
 
@@ -241,10 +328,122 @@ public sealed class TerminalSessionOrchestratorTests
         await StartAsync(service, current);
 
         Assert.Equal(TerminalRecoveryStatus.Ignored, (await Recover(service, stale, automatic: false)).Status);
+        Assert.True(service.TryBeginClose());
         TerminalRecoveryResult closing = await service.RecoverAsync(
-            current, false, 1, () => true, () => { }, () => Task.CompletedTask);
+            current, false, 1, () => { }, () => Task.CompletedTask);
         Assert.Equal(TerminalRecoveryStatus.Ignored, closing.Status);
         Assert.Equal(0, current.ForceUnlockCount);
+    }
+
+    [Fact]
+    public async Task CloseDuringRecoveryPreventsRestart()
+    {
+        var service = new TerminalSessionOrchestrator();
+        var forceEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseForce = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var session = new FakeSession
+        {
+            ForceUnlockAction = () =>
+            {
+                forceEntered.SetResult();
+                releaseForce.Task.GetAwaiter().GetResult();
+            }
+        };
+        await StartAsync(service, session);
+        int prepareCount = 0;
+        int restartCount = 0;
+        Task<TerminalRecoveryResult> recovery = service.RecoverAsync(
+            session,
+            isAutomatic: false,
+            maxAutomaticAttempts: 1,
+            () => prepareCount++,
+            () => { restartCount++; return Task.CompletedTask; });
+        await forceEntered.Task;
+
+        Assert.True(service.TryBeginClose());
+        releaseForce.SetResult();
+        TerminalRecoveryResult result = await recovery;
+
+        Assert.Equal(TerminalRecoveryStatus.Ignored, result.Status);
+        Assert.Equal(1, session.ForceUnlockCount);
+        Assert.Equal(0, prepareCount);
+        Assert.Equal(0, restartCount);
+        Assert.False(service.IsRecovering);
+    }
+
+    [Fact]
+    public async Task CloseWinningRestartAdmissionPreventsBothCallbacks()
+    {
+        var service = new TerminalSessionOrchestrator();
+        var session = new FakeSession();
+        await StartAsync(service, session);
+        var admissionReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseAdmission = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int prepareCount = 0;
+        int restartCount = 0;
+        Task<TerminalRecoveryResult> recovery = service.RecoverAsync(
+            session,
+            isAutomatic: false,
+            maxAutomaticAttempts: 1,
+            () => prepareCount++,
+            () => { restartCount++; return Task.CompletedTask; },
+            () =>
+            {
+                admissionReached.SetResult();
+                releaseAdmission.Task.GetAwaiter().GetResult();
+            });
+        await admissionReached.Task;
+
+        Assert.True(service.TryBeginClose());
+        releaseAdmission.SetResult();
+        TerminalRecoveryResult result = await recovery;
+
+        Assert.Equal(TerminalRecoveryStatus.Ignored, result.Status);
+        Assert.Equal(0, prepareCount);
+        Assert.Equal(0, restartCount);
+    }
+
+    [Fact]
+    public async Task RecoveryWinningAdmissionStartsCallbacksBeforeCloseWithoutHoldingLockAcrossAwait()
+    {
+        var service = new TerminalSessionOrchestrator();
+        var session = new FakeSession();
+        await StartAsync(service, session);
+        var prepareEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePrepare = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var restartEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRestart = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<TerminalRecoveryResult> recovery = service.RecoverAsync(
+            session,
+            isAutomatic: false,
+            maxAutomaticAttempts: 1,
+            () =>
+            {
+                prepareEntered.SetResult();
+                releasePrepare.Task.GetAwaiter().GetResult();
+            },
+            () =>
+            {
+                restartEntered.SetResult();
+                return releaseRestart.Task;
+            });
+        await prepareEntered.Task;
+        var closeAttempted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> close = Task.Run(() =>
+        {
+            closeAttempted.SetResult();
+            return service.TryBeginClose();
+        });
+        await closeAttempted.Task;
+        Assert.False(close.IsCompleted);
+
+        releasePrepare.SetResult();
+        await restartEntered.Task;
+        Assert.True(await close.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.False(recovery.IsCompleted);
+
+        releaseRestart.SetResult();
+        Assert.Equal(TerminalRecoveryStatus.Completed, (await recovery).Status);
     }
 
     private static Task<TerminalRecoveryResult> Recover(
@@ -253,7 +452,7 @@ public sealed class TerminalSessionOrchestratorTests
         bool automatic,
         bool restartError = false) =>
         service.RecoverAsync(
-            session, automatic, 1, () => false, () => { },
+            session, automatic, 1, () => { },
             () => restartError
                 ? Task.FromException(new InvalidOperationException("restart"))
                 : Task.CompletedTask);
@@ -261,7 +460,7 @@ public sealed class TerminalSessionOrchestratorTests
     private static Task<TerminalSessionStartResult> StartAsync(
         TerminalSessionOrchestrator service,
         FakeSession session) =>
-        service.StartAsync(() => Task.FromResult<ITerminalSession>(session), Wire, Unwire, () => { }, () => false);
+        service.StartAsync(() => Task.FromResult<ITerminalSession>(session), Wire, Unwire, () => { });
 
     private static void Wire(ITerminalSession session) { }
     private static void Unwire(ITerminalSession session) { }

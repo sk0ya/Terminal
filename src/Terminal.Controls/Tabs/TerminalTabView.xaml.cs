@@ -52,7 +52,7 @@ public partial class TerminalTabView : UserControl
     private readonly TerminalRenderCoordinator _renderCoordinator = new();
     private bool _isRecovering => _sessionOrchestrator.IsRecovering;
     private bool _isSessionTransitionActive => _sessionOrchestrator.IsTransitionActive;
-    private bool _isClosingWindow;
+    private bool _isClosingWindow => _sessionOrchestrator.IsClosing;
     private bool _isRenderingTerminal => _renderCoordinator.IsRendering;
     private readonly TerminalViewportCoordinator _viewportState = new(AutoFollowThreshold);
     private bool _cursorBlinkVisible = true;
@@ -260,12 +260,11 @@ public partial class TerminalTabView : UserControl
 
     public async Task CloseAsync()
     {
-        if (_isClosingWindow)
+        if (!_sessionOrchestrator.TryBeginClose())
         {
             return;
         }
 
-        _isClosingWindow = true;
         _sessionWatchdog.Stop();
         _cursorBlinkTimer.Stop();
         _renderThrottleTimer.Stop();
@@ -809,8 +808,7 @@ public partial class TerminalTabView : UserControl
                 () => CreateSessionAsync(commandLine, _currentColumns, _currentRows, workingDirectory),
                 WireSessionEvents,
                 UnwireSessionEvents,
-                ResetViewForSessionStart,
-                () => _isClosingWindow);
+                ResetViewForSessionStart);
             if (result.PreviousCleanupError is not null)
             {
                 SetStatus($"Previous session cleanup failed: {FormatExceptionMessage(result.PreviousCleanupError)}");
@@ -2679,7 +2677,6 @@ public partial class TerminalTabView : UserControl
                 session,
                 isAutomatic,
                 MaxAutoRecoveryAttempts,
-                () => _isClosingWindow,
                 () =>
                 {
                     if (!string.IsNullOrEmpty(recoveredCommandLine))
