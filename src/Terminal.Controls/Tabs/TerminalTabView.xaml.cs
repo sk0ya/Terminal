@@ -34,8 +34,8 @@ public partial class TerminalTabView : UserControl
     private static readonly Brush BlockCursorBrush = CreateFrozenBrush(Color.FromArgb(0xA0, 0xE3, 0xE3, 0xE3));
     private static readonly Brush AccentCursorBrush = CreateFrozenBrush(Color.FromRgb(0x5F, 0xAF, 0xFF));
 
-    private readonly TerminalSessionLifecycleCoordinator _sessionLifecycle = new();
-    private ITerminalSession? _session => _sessionLifecycle.Current;
+    private readonly TerminalSessionOrchestrator _sessionOrchestrator = new();
+    private ITerminalSession? _session => _sessionOrchestrator.Current;
     private AnsiTerminalBuffer _terminalBuffer = new(120, 30);
     private short _currentColumns = 120;
     private short _currentRows = 30;
@@ -49,7 +49,7 @@ public partial class TerminalTabView : UserControl
     private readonly TerminalRenderCoordinator _renderCoordinator = new();
     private int _autoRecoveryAttempts;
     private bool _isRecovering;
-    private bool _isSessionTransitionActive => _sessionLifecycle.IsTransitionActive;
+    private bool _isSessionTransitionActive => _sessionOrchestrator.IsTransitionActive;
     private bool _isClosingWindow;
     private bool _isRenderingTerminal => _renderCoordinator.IsRendering;
     private bool _followTerminalOutput = true;
@@ -929,63 +929,42 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        await _sessionLifecycle.BeginTransitionAsync();
         try
         {
             UpdateUiState(_session is not null);
-
-            ITerminalSession? previousSession = DetachCurrentSession();
-            Exception? stopError = await DisposeSessionAsync(previousSession);
-
-            ClearPendingOutput();
-            StopSynchronizedUpdateWatchdog();
-            ReleaseTerminalMouseCapture(force: true);
-            ResetInputProxyText();
-            (_currentColumns, _currentRows) = CalculateTerminalSize();
-            ReplaceTerminalBuffer(new AnsiTerminalBuffer(_currentColumns, _currentRows, _scrollbackLimit));
-            _cursorBlinkVisible = true;
-            _outputBatch.SetPrioritizeNextRender(true);
-            UpdateOverlayState();
-            UpdateUiState(isRunning: false);
-            UpdateWindowTitle();
-            RenderTerminal();
-
-            if (stopError is not null)
+            TerminalSessionStartResult result = await _sessionOrchestrator.StartAsync(
+                () => CreateSessionAsync(commandLine, _currentColumns, _currentRows, workingDirectory),
+                WireSessionEvents,
+                UnwireSessionEvents,
+                ResetViewForSessionStart,
+                () => _isClosingWindow);
+            if (result.PreviousCleanupError is not null)
             {
-                SetStatus($"Previous session cleanup failed: {FormatExceptionMessage(stopError)}");
+                SetStatus($"Previous session cleanup failed: {FormatExceptionMessage(result.PreviousCleanupError)}");
             }
 
-            if (_isClosingWindow)
+            if (!result.Started)
             {
-                return;
-            }
-
-            ITerminalSession session = await CreateSessionAsync(commandLine, _currentColumns, _currentRows, workingDirectory);
-            session.OutputReceived += OnOutputReceived;
-            session.Exited += OnProcessExited;
-            _sessionLifecycle.Attach(session);
-
-            try
-            {
-                await Task.Run(session.Start);
-            }
-            catch (Exception startException)
-            {
-                _ = DetachCurrentSession();
-                Exception? startCleanupError = await DisposeSessionAsync(session);
-                if (startCleanupError is not null)
+                if (result.Error is null)
                 {
-                    SetStatus($"Failed to start terminal: {FormatExceptionMessage(startException)} Cleanup: {FormatExceptionMessage(startCleanupError)}");
                     return;
                 }
 
-                throw;
-            }
+                ClearActiveLaunchState();
+                UpdateUiState(isRunning: false);
+                UpdateWindowTitle();
+                string hint = ConPtyStartupDiagnostics.BuildDiagnosticHint(result.Error, commandLine);
+                string message = $"Failed to start terminal: {FormatExceptionMessage(result.Error)}";
+                if (result.CleanupError is not null)
+                {
+                    message = $"{message} Cleanup: {FormatExceptionMessage(result.CleanupError)}";
+                }
+                else if (!string.IsNullOrEmpty(hint))
+                {
+                    message = $"{message} — {hint}";
+                }
 
-            if (_isClosingWindow)
-            {
-                ITerminalSession? closingSession = DetachCurrentSession();
-                await DisposeSessionAsync(closingSession);
+                SetStatus(message);
                 return;
             }
 
@@ -1000,22 +979,36 @@ public partial class TerminalTabView : UserControl
         }
         catch (Exception ex)
         {
-            ClearActiveLaunchState();
-            UpdateUiState(isRunning: false);
-            UpdateWindowTitle();
-            string hint = ConPtyStartupDiagnostics.BuildDiagnosticHint(ex, commandLine);
-            string message = $"Failed to start terminal: {FormatExceptionMessage(ex)}";
-            if (!string.IsNullOrEmpty(hint))
-            {
-                message = $"{message} — {hint}";
-            }
-
-            SetStatus(message);
+            HandleStartFailureBestEffort(ex, commandLine);
         }
         finally
         {
-            UpdateUiState(_session is not null);
-            _sessionLifecycle.EndTransition();
+            TryUiAction(() => UpdateUiState(_session is not null));
+        }
+    }
+
+    private void HandleStartFailureBestEffort(Exception error, string commandLine)
+    {
+        TryUiAction(ClearActiveLaunchState);
+        TryUiAction(() => UpdateUiState(isRunning: false));
+        TryUiAction(UpdateWindowTitle);
+        TryUiAction(() =>
+        {
+            string hint = ConPtyStartupDiagnostics.BuildDiagnosticHint(error, commandLine);
+            string message = $"Failed to start terminal: {FormatExceptionMessage(error)}";
+            SetStatus(string.IsNullOrEmpty(hint) ? message : $"{message} — {hint}");
+        });
+    }
+
+    private static void TryUiAction(Action action)
+    {
+        try
+        {
+            action();
+        }
+        catch
+        {
+            // UI cleanup/status reporting is best effort during an existing failure.
         }
     }
 
@@ -1025,37 +1018,22 @@ public partial class TerminalTabView : UserControl
         ITerminalSession? expectedSession = null,
         bool forceTerminate = false)
     {
-        await _sessionLifecycle.BeginTransitionAsync();
+        UpdateUiState(_session is not null);
+        TerminalSessionStopResult result = await _sessionOrchestrator.StopAsync(
+            expectedSession,
+            forceTerminate,
+            UnwireSessionEvents,
+            ResetViewForSessionStop);
         try
         {
-            if (!_sessionLifecycle.MatchesExpected(expectedSession))
+            if (!result.Applied)
             {
                 return;
             }
 
-            UpdateUiState(_session is not null);
-
-            ITerminalSession? session = DetachCurrentSession();
-            ClearActiveLaunchState();
-            ClearPendingOutput();
-            StopSynchronizedUpdateWatchdog();
-            ForceEndTransientModesAndRender();
-            ReleaseTerminalMouseCapture(force: true);
-            ResetInputProxyText();
-            _outputBatch.SetPrioritizeNextRender(false);
-            UpdateOverlayState();
-            UpdateUiState(isRunning: false);
-            UpdateWindowTitle();
-
-            if (forceTerminate && session is not null)
+            if (result.Error is not null)
             {
-                _ = await Task.Run(() => session.TryForceUnlock());
-            }
-
-            Exception? stopError = await DisposeSessionAsync(session);
-            if (stopError is not null)
-            {
-                statusOverride = $"Failed to stop terminal: {FormatExceptionMessage(stopError)}";
+                statusOverride = $"Failed to stop terminal: {FormatExceptionMessage(result.Error)}";
             }
 
             if (statusOverride is not null)
@@ -1070,22 +1048,50 @@ public partial class TerminalTabView : UserControl
         finally
         {
             UpdateUiState(_session is not null);
-            _sessionLifecycle.EndTransition();
         }
     }
 
-    private ITerminalSession? DetachCurrentSession()
+    private void WireSessionEvents(ITerminalSession session)
     {
-        ITerminalSession? session = _sessionLifecycle.DetachCurrent();
-        if (session is null)
-        {
-            return null;
-        }
+        session.OutputReceived += OnOutputReceived;
+        session.Exited += OnProcessExited;
+    }
 
+    private void UnwireSessionEvents(ITerminalSession session)
+    {
         session.OutputReceived -= OnOutputReceived;
         session.Exited -= OnProcessExited;
         AbortActiveAgentCommand();
-        return session;
+    }
+
+    private void ResetViewForSessionStart()
+    {
+        ClearPendingOutput();
+        StopSynchronizedUpdateWatchdog();
+        ReleaseTerminalMouseCapture(force: true);
+        ResetInputProxyText();
+        (_currentColumns, _currentRows) = CalculateTerminalSize();
+        ReplaceTerminalBuffer(new AnsiTerminalBuffer(_currentColumns, _currentRows, _scrollbackLimit));
+        _cursorBlinkVisible = true;
+        _outputBatch.SetPrioritizeNextRender(true);
+        UpdateOverlayState();
+        UpdateUiState(isRunning: false);
+        UpdateWindowTitle();
+        RenderTerminal();
+    }
+
+    private void ResetViewForSessionStop()
+    {
+        ClearActiveLaunchState();
+        ClearPendingOutput();
+        StopSynchronizedUpdateWatchdog();
+        ForceEndTransientModesAndRender();
+        ReleaseTerminalMouseCapture(force: true);
+        ResetInputProxyText();
+        _outputBatch.SetPrioritizeNextRender(false);
+        UpdateOverlayState();
+        UpdateUiState(isRunning: false);
+        UpdateWindowTitle();
     }
 
     private async Task<ITerminalSession> CreateSessionAsync(string commandLine, short columns, short rows, string workingDirectory)
@@ -1138,32 +1144,9 @@ public partial class TerminalTabView : UserControl
         return variables;
     }
 
-    private async Task<Exception?> DisposeSessionAsync(ITerminalSession? session)
-    {
-        if (session is null)
-        {
-            return null;
-        }
-
-        if (!_sessionLifecycle.TryClaimDisposal(session))
-        {
-            return null;
-        }
-
-        try
-        {
-            await Task.Run(() => session.DisposeAsync().AsTask());
-            return null;
-        }
-        catch (Exception ex)
-        {
-            return ex;
-        }
-    }
-
     private void OnOutputReceived(object? sender, string text)
     {
-        if (sender is not ITerminalSession session || !_sessionLifecycle.IsCurrent(session))
+        if (sender is not ITerminalSession session || !_sessionOrchestrator.IsCurrent(session))
         {
             return;
         }
@@ -1188,47 +1171,28 @@ public partial class TerminalTabView : UserControl
     {
         try
         {
-            if (!_sessionLifecycle.TryClaimExit(session, out long generation))
+            TerminalSessionStopResult result = await _sessionOrchestrator.HandleExitAsync(
+                session,
+                ExitOutputDrainPasses,
+                ExitOutputDrainInterval,
+                force => FlushPendingOutput(forceEndTransientModes: force),
+                UnwireSessionEvents,
+                ResetViewForSessionStop);
+            if (result.Error is not null)
             {
-                return;
+                SetStatus(result.ErrorKind == TerminalSessionStopErrorKind.Dispose
+                    ? $"Failed to stop terminal: {FormatExceptionMessage(result.Error)}"
+                    : $"Exit handling failed: {FormatExceptionMessage(result.Error)}");
             }
-
-            await DrainExitedSessionOutputAsync(session, generation);
-            if (!_sessionLifecycle.ShouldContinueExit(session, generation))
+            else if (result.Applied)
             {
-                return;
+                SetStatus($"Process exited with code {exitCode}.");
             }
-
-            await StopTerminalAsync(
-                reportStopped: false,
-                statusOverride: $"Process exited with code {exitCode}.",
-                expectedSession: session);
         }
         catch (Exception ex)
         {
             SetStatus($"Exit handling failed: {FormatExceptionMessage(ex)}");
         }
-    }
-
-    private async Task DrainExitedSessionOutputAsync(ITerminalSession session, long generation)
-    {
-        for (int pass = 0; pass < ExitOutputDrainPasses; pass++)
-        {
-            if (!_sessionLifecycle.ShouldContinueExit(session, generation))
-            {
-                return;
-            }
-
-            FlushPendingOutput();
-            await Task.Delay(ExitOutputDrainInterval);
-        }
-
-        if (!_sessionLifecycle.ShouldContinueExit(session, generation))
-        {
-            return;
-        }
-
-        FlushPendingOutput(forceEndTransientModes: true);
     }
 
     private void CursorBlinkTimer_Tick(object? sender, EventArgs e)
