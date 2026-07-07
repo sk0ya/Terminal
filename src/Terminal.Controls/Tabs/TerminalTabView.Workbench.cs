@@ -357,12 +357,13 @@ public partial class TerminalTabView
 
     private void LaunchInput_KeyDown(object sender, KeyEventArgs e)
     {
-        if (_session is not null || _isSessionTransitionActive || _isRecovering || _isClosingWindow)
-        {
-            return;
-        }
-
-        if (GetEffectiveKey(e) != Key.Enter)
+        TerminalLaunchInputAction action = TerminalLaunchCoordinator.ResolveInput(
+            () => MapLaunchInputKey(GetEffectiveKey(e)),
+            _session is not null,
+            _isSessionTransitionActive,
+            _isRecovering,
+            _isClosingWindow);
+        if (action != TerminalLaunchInputAction.Start)
         {
             return;
         }
@@ -370,6 +371,9 @@ public partial class TerminalTabView
         e.Handled = true;
         StartButton_Click(StartButton, new RoutedEventArgs(Button.ClickEvent));
     }
+
+    private static TerminalLaunchInputKey MapLaunchInputKey(Key key) =>
+        key == Key.Enter ? TerminalLaunchInputKey.Enter : TerminalLaunchInputKey.Other;
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {

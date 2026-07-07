@@ -134,6 +134,88 @@ public sealed class TerminalLaunchCoordinatorTests
         Assert.Equal("C:\\current", coordinator.ActiveWorkingDirectory);
     }
 
+    [Fact]
+    public void IdleEnterResolvesStartAndEvaluatesKeyOnce()
+    {
+        int calls = 0;
+
+        TerminalLaunchInputAction action = TerminalLaunchCoordinator.ResolveInput(
+            () =>
+            {
+                calls++;
+                return TerminalLaunchInputKey.Enter;
+            },
+            hasSession: false,
+            isTransitionActive: false,
+            isRecovering: false,
+            isClosing: false);
+
+        Assert.Equal(TerminalLaunchInputAction.Start, action);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void IdleOtherKeyDoesNotStartAndEvaluatesKeyOnce()
+    {
+        int calls = 0;
+
+        TerminalLaunchInputAction action = TerminalLaunchCoordinator.ResolveInput(
+            () =>
+            {
+                calls++;
+                return TerminalLaunchInputKey.Other;
+            },
+            hasSession: false,
+            isTransitionActive: false,
+            isRecovering: false,
+            isClosing: false);
+
+        Assert.Equal(TerminalLaunchInputAction.None, action);
+        Assert.Equal(1, calls);
+    }
+
+    [Theory]
+    [InlineData(true, false, false, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(false, false, false, true)]
+    [InlineData(true, true, true, true)]
+    public void BusyStateDoesNotStartOrEvaluateKey(
+        bool hasSession,
+        bool isTransitionActive,
+        bool isRecovering,
+        bool isClosing)
+    {
+        int calls = 0;
+
+        TerminalLaunchInputAction action = TerminalLaunchCoordinator.ResolveInput(
+            () =>
+            {
+                calls++;
+                return TerminalLaunchInputKey.Enter;
+            },
+            hasSession,
+            isTransitionActive,
+            isRecovering,
+            isClosing);
+
+        Assert.Equal(TerminalLaunchInputAction.None, action);
+        Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public void BusyStateShortCircuitsThrowingKeyResolver()
+    {
+        TerminalLaunchInputAction action = TerminalLaunchCoordinator.ResolveInput(
+            () => throw new InvalidOperationException("key resolver must not run"),
+            hasSession: true,
+            isTransitionActive: false,
+            isRecovering: false,
+            isClosing: false);
+
+        Assert.Equal(TerminalLaunchInputAction.None, action);
+    }
+
     private static TerminalLaunchCoordinator CreateCoordinator() =>
         new([CmdProfile, PwshProfile]);
 }

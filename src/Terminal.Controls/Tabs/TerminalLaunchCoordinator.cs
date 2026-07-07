@@ -4,6 +4,18 @@ using Terminal.Settings;
 
 namespace Terminal.Tabs;
 
+internal enum TerminalLaunchInputKey
+{
+    Other,
+    Enter
+}
+
+internal enum TerminalLaunchInputAction
+{
+    None,
+    Start
+}
+
 internal sealed record TerminalLaunchRequest(string CommandLine, string WorkingDirectory);
 
 internal sealed class TerminalLaunchCoordinator
@@ -30,6 +42,23 @@ internal sealed class TerminalLaunchCoordinator
     public string ActiveCommandLine { get; private set; } = string.Empty;
     public string ActiveWorkingDirectory { get; private set; }
     public string ProfileHint => SelectedProfile.Description;
+
+    public static TerminalLaunchInputAction ResolveInput(
+        Func<TerminalLaunchInputKey> resolveKey,
+        bool hasSession,
+        bool isTransitionActive,
+        bool isRecovering,
+        bool isClosing)
+    {
+        if (hasSession || isTransitionActive || isRecovering || isClosing)
+        {
+            return TerminalLaunchInputAction.None;
+        }
+
+        return resolveKey() == TerminalLaunchInputKey.Enter
+            ? TerminalLaunchInputAction.Start
+            : TerminalLaunchInputAction.None;
+    }
 
     public void Apply(
         string? profileId,
