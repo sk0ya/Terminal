@@ -56,6 +56,39 @@ internal sealed class TerminalSessionOrchestrator
         }
     }
 
+    public Task<TerminalRecoveryResult> RecoverStalledAsync(
+        TimeSpan initialOutputTimeout,
+        TimeSpan idleOutputTimeout,
+        int maxAutomaticAttempts,
+        Action prepareRestart,
+        Func<Task> restart,
+        Action? afterStallProbe = null)
+    {
+        ITerminalSession? session = Current;
+        if (session is null || IsRecovering || IsTransitionActive || IsClosing)
+        {
+            return Task.FromResult(new TerminalRecoveryResult(TerminalRecoveryStatus.Ignored));
+        }
+
+        if (!session.IsOutputStalled(initialOutputTimeout, idleOutputTimeout))
+        {
+            return Task.FromResult(new TerminalRecoveryResult(TerminalRecoveryStatus.Ignored));
+        }
+
+        afterStallProbe?.Invoke();
+        if (!_lifecycle.IsCurrent(session) || IsRecovering || IsTransitionActive || IsClosing)
+        {
+            return Task.FromResult(new TerminalRecoveryResult(TerminalRecoveryStatus.Ignored));
+        }
+
+        return RecoverAsync(
+            session,
+            isAutomatic: true,
+            maxAutomaticAttempts,
+            prepareRestart,
+            restart);
+    }
+
     public async Task<TerminalRecoveryResult> RecoverAsync(
         ITerminalSession? session,
         bool isAutomatic,
