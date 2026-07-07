@@ -804,41 +804,13 @@ public partial class TerminalTabView
     {
         // The shell reports its exact HistorySavePath via OSC 633;P when shell
         // integration is active; that is authoritative (handles custom paths).
-        if (!string.IsNullOrWhiteSpace(_shellHistoryPath) && File.Exists(_shellHistoryPath))
-        {
-            return _shellHistoryPath;
-        }
-
-        // Otherwise only guess for PowerShell shells, probing the known defaults.
         string commandLine = string.IsNullOrWhiteSpace(_launchState.ActiveCommandLine) ? _initialCommandLine : _launchState.ActiveCommandLine;
-        string executable = ExtractExecutableName(commandLine);
-        bool isPowerShell = executable.Equals("pwsh", StringComparison.OrdinalIgnoreCase)
-            || executable.Equals("powershell", StringComparison.OrdinalIgnoreCase);
-
-        return isPowerShell ? PSReadLineHistory.FindDefaultHistoryPath() : null;
-    }
-
-    private static string ExtractExecutableName(string? commandLine)
-    {
-        if (string.IsNullOrWhiteSpace(commandLine))
-        {
-            return string.Empty;
-        }
-
-        string trimmed = commandLine.TrimStart();
-        string token;
-        if (trimmed.StartsWith('"'))
-        {
-            int end = trimmed.IndexOf('"', 1);
-            token = end > 0 ? trimmed[1..end] : trimmed[1..];
-        }
-        else
-        {
-            int space = trimmed.IndexOf(' ');
-            token = space > 0 ? trimmed[..space] : trimmed;
-        }
-
-        return Path.GetFileNameWithoutExtension(token);
+        // Otherwise only guess for PowerShell shells, probing the known defaults.
+        return TerminalHistorySeedResolver.ResolvePath(
+            _shellHistoryPath,
+            commandLine,
+            File.Exists,
+            PSReadLineHistory.FindDefaultHistoryPath);
     }
 
     private void CloseHistoryPanel()
