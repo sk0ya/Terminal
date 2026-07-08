@@ -55,8 +55,6 @@ public partial class TerminalTabView : UserControl
     private readonly TerminalViewportCoordinator _viewportState = new(AutoFollowThreshold);
     private bool _cursorBlinkVisible = true;
     private readonly TerminalImeInputCoordinator _imeInput = new();
-    private bool _terminalMouseCaptureActive;
-    private bool _localMouseSelectionActive;
     private bool _overlayUpdateQueued;
     private bool _terminalViewportSizeUpdateQueued;
     private readonly string _initialCommandLine;
@@ -370,7 +368,7 @@ public partial class TerminalTabView : UserControl
 
         if (ShouldStartLocalMouseSelection(e))
         {
-            _localMouseSelectionActive = true;
+            _mouseState.BeginLocalSelection();
             ReleaseTerminalMouseCapture(force: true);
             return;
         }
@@ -387,7 +385,7 @@ public partial class TerminalTabView : UserControl
     {
         if (IsRightClick(e))
         {
-            _localMouseSelectionActive = false;
+            _mouseState.EndLocalSelection();
             if (!TerminalOutput.HasSelection)
             {
                 PasteFromClipboard();
@@ -398,9 +396,9 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        if (_localMouseSelectionActive && e.ChangedButton == MouseButton.Left)
+        if (_mouseState.IsLocalSelectionActive && e.ChangedButton == MouseButton.Left)
         {
-            _localMouseSelectionActive = false;
+            _mouseState.EndLocalSelection();
             ReleaseTerminalMouseCapture(force: true);
             return;
         }
@@ -417,7 +415,7 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalOutput_PreviewMouseMove(object sender, MouseEventArgs e)
     {
-        if (_localMouseSelectionActive)
+        if (_mouseState.IsLocalSelectionActive)
         {
             return;
         }
@@ -497,7 +495,7 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalOutput_LostMouseCapture(object sender, MouseEventArgs e)
     {
-        _terminalMouseCaptureActive = false;
+        _mouseState.CaptureLost();
     }
 
     private void TerminalOutput_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
@@ -2350,14 +2348,14 @@ public partial class TerminalTabView : UserControl
 
     private void TryCaptureTerminalMouse()
     {
-        if (_terminalMouseCaptureActive || !_mouseState.ShouldCapture(BuildMouseState()))
+        if (!_mouseState.ShouldAttemptCapture(BuildMouseState()))
         {
             return;
         }
 
         if (Mouse.Capture(TerminalOutput, CaptureMode.Element))
         {
-            _terminalMouseCaptureActive = true;
+            _mouseState.CaptureSucceeded();
         }
     }
 
@@ -2368,23 +2366,18 @@ public partial class TerminalTabView : UserControl
 
     private void ReleaseTerminalMouseCapture(bool force)
     {
-        bool hasCapture = _terminalMouseCaptureActive || ReferenceEquals(Mouse.Captured, TerminalOutput);
-        if (!hasCapture)
+        bool isElementCaptured = ReferenceEquals(Mouse.Captured, TerminalOutput);
+        if (!_mouseState.ShouldAttemptRelease(force, HasTrackedMouseButtonPressed(), isElementCaptured))
         {
             return;
         }
 
-        if (!_mouseState.ShouldReleaseCapture(force, HasTrackedMouseButtonPressed()))
-        {
-            return;
-        }
-
-        if (ReferenceEquals(Mouse.Captured, TerminalOutput))
+        if (isElementCaptured)
         {
             Mouse.Capture(null);
         }
 
-        _terminalMouseCaptureActive = false;
+        _mouseState.CaptureReleased();
     }
 
     private static bool HasTrackedMouseButtonPressed()

@@ -21,6 +21,31 @@ internal sealed record TerminalMouseAction(bool Handled, byte[]? BytePayload = n
 
 internal sealed class TerminalMouseCoordinator
 {
+    public bool IsLocalSelectionActive { get; private set; }
+
+    public bool IsCaptureActive { get; private set; }
+
+    public void BeginLocalSelection() => IsLocalSelectionActive = true;
+
+    public bool EndLocalSelection()
+    {
+        bool wasActive = IsLocalSelectionActive;
+        IsLocalSelectionActive = false;
+        return wasActive;
+    }
+
+    public bool ShouldAttemptCapture(TerminalMouseState state) =>
+        !IsCaptureActive && CanReport(state);
+
+    public void CaptureSucceeded() => IsCaptureActive = true;
+
+    public void CaptureLost() => IsCaptureActive = false;
+
+    public bool ShouldAttemptRelease(bool force, bool hasPressedButton, bool isElementCaptured) =>
+        (IsCaptureActive || isElementCaptured) && (force || !hasPressedButton);
+
+    public void CaptureReleased() => IsCaptureActive = false;
+
     public TerminalMouseAction ResolveButton(
         TerminalMouseState state, TerminalMouseButton button, bool pressed, int column, int row)
     {
@@ -76,10 +101,6 @@ internal sealed class TerminalMouseCoordinator
         int repeats = Math.Max(1, Math.Abs(delta) / wheelDelta);
         return new(true, TextPayload: string.Concat(Enumerable.Repeat(sequence, repeats)));
     }
-
-    public bool ShouldCapture(TerminalMouseState state) => CanReport(state);
-
-    public bool ShouldReleaseCapture(bool force, bool hasPressedButton) => force || !hasPressedButton;
 
     private static bool CanReport(TerminalMouseState state) =>
         state.SupportsInput && state.TrackingMode != TerminalMouseTrackingMode.Off;

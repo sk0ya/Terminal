@@ -60,14 +60,50 @@ public sealed class TerminalMouseCoordinatorTests
     }
 
     [Fact]
-    public void CaptureDecisionsFollowTrackingAndPressedButtons()
+    public void CaptureLifecycleOwnsStateAndPreventsDuplicateAttempts()
     {
-        Assert.True(_coordinator.ShouldCapture(State()));
-        Assert.False(_coordinator.ShouldCapture(State(supportsInput: false)));
-        Assert.False(_coordinator.ShouldCapture(State(tracking: TerminalMouseTrackingMode.Off)));
-        Assert.False(_coordinator.ShouldReleaseCapture(force: false, hasPressedButton: true));
-        Assert.True(_coordinator.ShouldReleaseCapture(force: true, hasPressedButton: true));
-        Assert.True(_coordinator.ShouldReleaseCapture(force: false, hasPressedButton: false));
+        Assert.True(_coordinator.ShouldAttemptCapture(State()));
+        Assert.False(_coordinator.ShouldAttemptCapture(State(supportsInput: false)));
+        Assert.False(_coordinator.ShouldAttemptCapture(State(tracking: TerminalMouseTrackingMode.Off)));
+
+        _coordinator.CaptureSucceeded();
+
+        Assert.True(_coordinator.IsCaptureActive);
+        Assert.False(_coordinator.ShouldAttemptCapture(State()));
+        Assert.False(_coordinator.ShouldAttemptRelease(force: false, hasPressedButton: true, isElementCaptured: true));
+        Assert.True(_coordinator.ShouldAttemptRelease(force: true, hasPressedButton: true, isElementCaptured: true));
+        Assert.True(_coordinator.ShouldAttemptRelease(force: false, hasPressedButton: false, isElementCaptured: true));
+
+        _coordinator.CaptureReleased();
+
+        Assert.False(_coordinator.IsCaptureActive);
+        Assert.False(_coordinator.ShouldAttemptRelease(force: true, hasPressedButton: false, isElementCaptured: false));
+    }
+
+    [Fact]
+    public void ExternalCaptureAndCaptureLossAreReflectedInDecisions()
+    {
+        Assert.True(_coordinator.ShouldAttemptRelease(force: true, hasPressedButton: false, isElementCaptured: true));
+
+        _coordinator.CaptureSucceeded();
+        _coordinator.CaptureLost();
+
+        Assert.False(_coordinator.IsCaptureActive);
+        Assert.True(_coordinator.ShouldAttemptCapture(State()));
+    }
+
+    [Fact]
+    public void LocalSelectionLifecycleReportsWhetherSelectionWasActive()
+    {
+        Assert.False(_coordinator.IsLocalSelectionActive);
+        Assert.False(_coordinator.EndLocalSelection());
+
+        _coordinator.BeginLocalSelection();
+
+        Assert.True(_coordinator.IsLocalSelectionActive);
+        Assert.True(_coordinator.EndLocalSelection());
+        Assert.False(_coordinator.IsLocalSelectionActive);
+        Assert.False(_coordinator.EndLocalSelection());
     }
 
     [Theory]
