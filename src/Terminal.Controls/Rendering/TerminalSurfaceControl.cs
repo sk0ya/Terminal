@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -1500,112 +1499,20 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         }
 
         LineLayout line = _lines[lineIndex];
-        int column = line.TextCellMap.GetCellColumn(textIndex, preferTrailingEdge: false);
-        foreach (SegmentLayout segment in line.Segments)
-        {
-            if (segment.Snapshot.Hyperlink is null)
-            {
-                continue;
-            }
-
-            int start = segment.StartCell;
-            int end = start + segment.Snapshot.CellLength;
-            if (column < start || column >= end)
-            {
-                continue;
-            }
-
-            // Explicit OSC 8 hyperlink — its target is the embedded URI.
-            target = segment.Snapshot.Hyperlink;
-            startColumn = start;
-            endColumn = end;
-            return true;
-        }
-
-        // No explicit OSC 8 hyperlink at this position — fall back to detecting a bare URL
-        // (e.g. "https://example.com") or a file path printed as plain text on the line.
-        if (!TryDetectTargetAt(line.Text, textIndex, out target, out int textStart, out int textLength))
+        if (!TerminalHyperlinkDetector.TryResolve(
+                line.Text,
+                line.TextCellMap,
+                line.HyperlinkSegments,
+                textIndex,
+                out TerminalHyperlinkMatch match))
         {
             return false;
         }
 
-        startColumn = line.TextCellMap.GetCellColumn(textStart, preferTrailingEdge: false);
-        endColumn = line.TextCellMap.GetCellColumn(textStart + textLength, preferTrailingEdge: false);
+        target = match.Target;
+        startColumn = match.StartColumn;
+        endColumn = match.EndColumn;
         return true;
-    }
-
-    private static readonly Regex UrlPattern = new(
-        @"(?:https?|ftp|file)://[^\s<>""'` ]+",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    // A Windows/UNC/Unix file path, optionally followed by :line or :line:col. The first
-    // alternative requires a recognizable root (drive, UNC, ./ ../ or a leading slash); the second
-    // accepts a relative path that has a separator and a file extension, so ordinary words aren't
-    // mistaken for paths (e.g. "src/Foo.cs:12").
-    private static readonly Regex FilePathPattern = new(
-        @"(?:[A-Za-z]:[\\/]|\\\\[^\s\\/]+[\\/]|\.{0,2}[\\/])[^\s:*?""<>|]+(?:[\\/][^\s:*?""<>|]+)*(?::\d+(?::\d+)?)?" +
-        @"|[\w.\-]+(?:[\\/][\w.\-]+)+\.\w+(?::\d+(?::\d+)?)?",
-        RegexOptions.Compiled);
-
-    /// <summary>
-    /// Scans <paramref name="text"/> for a clickable target (URL or file path) whose span contains
-    /// <paramref name="textIndex"/>. URLs take precedence over file paths. Trailing sentence
-    /// punctuation is trimmed. The raw matched text is returned so the host can route it.
-    /// </summary>
-    private static bool TryDetectTargetAt(string text, int textIndex, out string? target, out int matchStart, out int matchLength)
-    {
-        target = null;
-        matchStart = 0;
-        matchLength = 0;
-        if (string.IsNullOrEmpty(text) || textIndex < 0 || textIndex >= text.Length)
-        {
-            return false;
-        }
-
-        return TryMatchAt(UrlPattern, text, textIndex, out target, out matchStart, out matchLength)
-            || TryMatchAt(FilePathPattern, text, textIndex, out target, out matchStart, out matchLength);
-    }
-
-    private static bool TryMatchAt(Regex pattern, string text, int textIndex, out string? match, out int matchStart, out int matchLength)
-    {
-        match = null;
-        matchStart = 0;
-        matchLength = 0;
-        foreach (Match m in pattern.Matches(text))
-        {
-            int start = m.Index;
-            int length = TrimTrailingPunctuation(m.Value);
-            if (length <= 0 || textIndex < start || textIndex >= start + length)
-            {
-                continue;
-            }
-
-            match = text.Substring(start, length);
-            matchStart = start;
-            matchLength = length;
-            return true;
-        }
-
-        return false;
-    }
-
-    private static int TrimTrailingPunctuation(string url)
-    {
-        int length = url.Length;
-        while (length > 0)
-        {
-            char c = url[length - 1];
-            if (c is '.' or ',' or ';' or ':' or '!' or '?' or ')' or ']' or '}' or '>' or '"' or '\'')
-            {
-                length--;
-            }
-            else
-            {
-                break;
-            }
-        }
-
-        return length;
     }
 
     private static TerminalTextRange? NormalizeSelection(TerminalTextRange? selection)
@@ -1628,6 +1535,10 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             text,
             line.CellLength,
             segments,
+            segments.Select(static segment => new TerminalHyperlinkSegment(
+                segment.StartCell,
+                segment.Snapshot.CellLength,
+                segment.Snapshot.Hyperlink)).ToArray(),
             TerminalTextCellMap.Create(
                 line.Segments.Select(static segment => (segment.Text, segment.CellLength)),
                 line.CellLength,
@@ -1996,6 +1907,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         string Text,
         int CellLength,
         SegmentLayout[] Segments,
+        TerminalHyperlinkSegment[] HyperlinkSegments,
         TerminalTextCellMap TextCellMap);
 
     private readonly record struct SegmentLayout(
