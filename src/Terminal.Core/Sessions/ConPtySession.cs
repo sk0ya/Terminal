@@ -10,7 +10,6 @@ public sealed class ConPtySession : ITerminalSession
 {
     private const uint ExtendedStartupInfoPresent = 0x00080000;
     private const uint CreateUnicodeEnvironment = 0x00000400;
-    private const uint HandleFlagInherit = 0x00000001;
     private const int StartfUseStdHandles = 0x00000100;
     private const int ProcThreadAttributePseudoConsole = 0x00020016;
     private const int JobObjectExtendedLimitInformation = 9;
@@ -79,7 +78,8 @@ public sealed class ConPtySession : ITerminalSession
 
         try
         {
-            CreatePseudoConsole(columns, rows);
+            new ConPtyPseudoConsoleFactory(WindowsConPtyPseudoConsoleApi.Instance)
+                .Create(columns, rows, _handles);
             LaunchProcess(commandLine);
         }
         catch
@@ -272,110 +272,6 @@ public sealed class ConPtySession : ITerminalSession
         DisposeQuietly(exitMonitorCancellation);
 
         GC.SuppressFinalize(this);
-    }
-
-    private void CreatePseudoConsole(short columns, short rows)
-    {
-        IntPtr pipeToPseudoConsoleInputRead = IntPtr.Zero;
-        IntPtr pipeToPseudoConsoleInputWrite = IntPtr.Zero;
-        IntPtr pipeFromPseudoConsoleOutputRead = IntPtr.Zero;
-        IntPtr pipeFromPseudoConsoleOutputWrite = IntPtr.Zero;
-        var pipeSecurity = new SecurityAttributes
-        {
-            nLength = Marshal.SizeOf<SecurityAttributes>(),
-            bInheritHandle = true
-        };
-
-        try
-        {
-            if (!CreatePipe(
-                    out pipeToPseudoConsoleInputRead,
-                    out pipeToPseudoConsoleInputWrite,
-                    ref pipeSecurity,
-                    0))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to create ConPTY input pipe.");
-            }
-
-            if (!CreatePipe(
-                    out pipeFromPseudoConsoleOutputRead,
-                    out pipeFromPseudoConsoleOutputWrite,
-                    ref pipeSecurity,
-                    0))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to create ConPTY output pipe.");
-            }
-
-            if (!SetHandleInformation(pipeToPseudoConsoleInputWrite, HandleFlagInherit, 0))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to configure ConPTY input pipe.");
-            }
-
-            if (!SetHandleInformation(pipeFromPseudoConsoleOutputRead, HandleFlagInherit, 0))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to configure ConPTY output pipe.");
-            }
-
-            int hr = CreatePseudoConsoleHandle(
-                new Coord(columns, rows),
-                pipeToPseudoConsoleInputRead,
-                pipeFromPseudoConsoleOutputWrite,
-                0,
-                out IntPtr pseudoConsole);
-
-            if (hr != 0)
-            {
-                Marshal.ThrowExceptionForHR(hr);
-            }
-
-            IntPtr adoptedPseudoConsole = pseudoConsole;
-            IntPtr adoptedInputRead = pipeToPseudoConsoleInputRead;
-            IntPtr adoptedOutputWrite = pipeFromPseudoConsoleOutputWrite;
-            IntPtr adoptedInputWrite = pipeToPseudoConsoleInputWrite;
-            IntPtr adoptedOutputRead = pipeFromPseudoConsoleOutputRead;
-            Func<IntPtr, SafeFileHandle> createPipeHandle =
-                static handle => new SafeFileHandle(handle, ownsHandle: true);
-            Action<IntPtr> closePseudoConsole = ClosePseudoConsoleHandle;
-            Action<IntPtr> closeRawHandle = static handle => _ = CloseHandle(handle);
-
-            pseudoConsole = IntPtr.Zero;
-            pipeToPseudoConsoleInputWrite = IntPtr.Zero;
-            pipeFromPseudoConsoleOutputRead = IntPtr.Zero;
-            pipeToPseudoConsoleInputRead = IntPtr.Zero;
-            pipeFromPseudoConsoleOutputWrite = IntPtr.Zero;
-
-            _handles.AdoptPseudoConsole(
-                adoptedPseudoConsole,
-                adoptedInputRead,
-                adoptedOutputWrite,
-                adoptedInputWrite,
-                adoptedOutputRead,
-                createPipeHandle,
-                closePseudoConsole,
-                closeRawHandle);
-        }
-        finally
-        {
-            if (pipeToPseudoConsoleInputRead != IntPtr.Zero)
-            {
-                CloseHandle(pipeToPseudoConsoleInputRead);
-            }
-
-            if (pipeFromPseudoConsoleOutputWrite != IntPtr.Zero)
-            {
-                CloseHandle(pipeFromPseudoConsoleOutputWrite);
-            }
-
-            if (pipeToPseudoConsoleInputWrite != IntPtr.Zero)
-            {
-                CloseHandle(pipeToPseudoConsoleInputWrite);
-            }
-
-            if (pipeFromPseudoConsoleOutputRead != IntPtr.Zero)
-            {
-                CloseHandle(pipeFromPseudoConsoleOutputRead);
-            }
-        }
     }
 
     private void LaunchProcess(string commandLine)
@@ -702,27 +598,6 @@ public sealed class ConPtySession : ITerminalSession
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CreatePipe(
-        out IntPtr hReadPipe,
-        out IntPtr hWritePipe,
-        ref SecurityAttributes lpPipeAttributes,
-        int nSize);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool SetHandleInformation(
-        IntPtr hObject,
-        uint dwMask,
-        uint dwFlags);
-
-    [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "CreatePseudoConsole")]
-    private static extern int CreatePseudoConsoleHandle(
-        Coord size,
-        IntPtr hInput,
-        IntPtr hOutput,
-        uint dwFlags,
-        out IntPtr phPC);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern int ResizePseudoConsole(
         IntPtr hPC,
         Coord size);
@@ -812,15 +687,6 @@ public sealed class ConPtySession : ITerminalSession
             X = x;
             Y = y;
         }
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct SecurityAttributes
-    {
-        public int nLength;
-        public IntPtr lpSecurityDescriptor;
-        [MarshalAs(UnmanagedType.Bool)]
-        public bool bInheritHandle;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
