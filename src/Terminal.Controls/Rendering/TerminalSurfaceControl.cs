@@ -394,8 +394,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         for (int lineIndex = range.Start.LineIndex; lineIndex <= range.End.LineIndex; lineIndex++)
         {
             LineLayout line = _lines[lineIndex];
-            int startTextIndex = GetTextIndexForColumnHit(line, leftColumn);
-            int endTextIndex = GetTextIndexForColumnHit(line, rightColumn);
+            int startTextIndex = line.TextCellMap.GetTextIndex(leftColumn);
+            int endTextIndex = line.TextCellMap.GetTextIndex(rightColumn);
             startTextIndex = Math.Clamp(startTextIndex, 0, line.Text.Length);
             endTextIndex = Math.Clamp(endTextIndex, startTextIndex, line.Text.Length);
             builder.Append(line.Text.AsSpan(startTextIndex, endTextIndex - startTextIndex));
@@ -432,8 +432,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             int end;
             if (_blockSelectionMode)
             {
-                start = GetTextIndexForColumnHit(line, blockColumns.Left);
-                end = GetTextIndexForColumnHit(line, blockColumns.Right);
+                start = line.TextCellMap.GetTextIndex(blockColumns.Left);
+                end = line.TextCellMap.GetTextIndex(blockColumns.Right);
             }
             else
             {
@@ -634,9 +634,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     private double GetCellColumnFromPoint(Point point)
     {
-        Thickness padding = Padding;
-        double x = Math.Max(0, point.X - padding.Left + _horizontalOffset);
-        return x / _cellSize.Width;
+        return CreateCoordinateMapper().GetCellColumn(point.X);
     }
 
     public bool TryGetTextPositionFromPoint(Point point, out int lineIndex, out int textIndex)
@@ -649,21 +647,24 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             return false;
         }
 
-        Thickness padding = Padding;
-        double x = Math.Max(0, point.X - padding.Left + _horizontalOffset);
-        double y = Math.Max(0, point.Y - padding.Top + _verticalOffset);
-        lineIndex = Math.Clamp((int)(y / _cellSize.Height), 0, _lines.Count - 1);
+        TerminalSurfaceCoordinateMapper coordinates = CreateCoordinateMapper();
+        lineIndex = coordinates.GetLineIndex(point.Y, _lines.Count);
 
         LineLayout line = _lines[lineIndex];
-        if (line.Map.Length == 0)
-        {
-            textIndex = 0;
-            return true;
-        }
-
-        double columnPosition = x / _cellSize.Width;
-        textIndex = GetTextIndexForColumnHit(line, columnPosition);
+        textIndex = line.TextCellMap.GetTextIndex(coordinates.GetCellColumn(point.X));
         return true;
+    }
+
+    private TerminalSurfaceCoordinateMapper CreateCoordinateMapper()
+    {
+        Thickness padding = Padding;
+        return new TerminalSurfaceCoordinateMapper(
+            _cellSize.Width,
+            _cellSize.Height,
+            padding.Left,
+            padding.Top,
+            _horizontalOffset,
+            _verticalOffset);
     }
 
     public void ScrollToLineEnd()
@@ -1171,10 +1172,10 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         }
 
         int startColumn = lineIndex == range.Start.LineIndex
-            ? GetCellColumnForTextIndex(line, range.Start.TextIndex, preferTrailingEdge: false)
+            ? line.TextCellMap.GetCellColumn(range.Start.TextIndex, preferTrailingEdge: false)
             : 0;
         int endColumn = lineIndex == range.End.LineIndex
-            ? GetCellColumnForTextIndex(line, range.End.TextIndex, preferTrailingEdge: true)
+            ? line.TextCellMap.GetCellColumn(range.End.TextIndex, preferTrailingEdge: true)
             : line.CellLength;
         if (endColumn <= startColumn)
         {
@@ -1584,9 +1585,9 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         }
 
         LineLayout line = _lines[range.Start.LineIndex];
-        int startColumn = GetCellColumnForTextIndex(line, range.Start.TextIndex, preferTrailingEdge: false);
+        int startColumn = line.TextCellMap.GetCellColumn(range.Start.TextIndex, preferTrailingEdge: false);
         int endColumn = range.End.LineIndex == range.Start.LineIndex
-            ? GetCellColumnForTextIndex(line, range.End.TextIndex, preferTrailingEdge: true)
+            ? line.TextCellMap.GetCellColumn(range.End.TextIndex, preferTrailingEdge: true)
             : startColumn + 1;
         Rect startRect = GetCellRect(range.Start.LineIndex, startColumn);
         Rect endRect = GetCellRect(range.Start.LineIndex, Math.Max(startColumn + 1, endColumn));
@@ -1624,7 +1625,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         }
 
         LineLayout line = _lines[lineIndex];
-        int column = GetCellColumnForTextIndex(line, textIndex, preferTrailingEdge: false);
+        int column = line.TextCellMap.GetCellColumn(textIndex, preferTrailingEdge: false);
         foreach (SegmentLayout segment in line.Segments)
         {
             if (segment.Snapshot.Hyperlink is null)
@@ -1653,8 +1654,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             return false;
         }
 
-        startColumn = GetCellColumnForTextIndex(line, textStart, preferTrailingEdge: false);
-        endColumn = GetCellColumnForTextIndex(line, textStart + textLength, preferTrailingEdge: false);
+        startColumn = line.TextCellMap.GetCellColumn(textStart, preferTrailingEdge: false);
+        endColumn = line.TextCellMap.GetCellColumn(textStart + textLength, preferTrailingEdge: false);
         return true;
     }
 
@@ -1819,8 +1820,6 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     {
         string text = string.Concat(line.Segments.Select(static segment => segment.Text));
         var segments = new SegmentLayout[line.Segments.Length];
-        var allEntries = new List<TextElementMapEntry>(text.Length);
-        int charOffset = 0;
         int cellOffset = 0;
 
         for (int index = 0; index < line.Segments.Length; index++)
@@ -1828,155 +1827,16 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             AnsiTerminalBuffer.TerminalRenderSegmentSnapshot seg = line.Segments[index];
             segments[index] = new SegmentLayout(cellOffset, seg);
 
-            TextElementMapEntry[] segEntries = BuildTextMap(seg.Text, seg.CellLength, ambiguousAsWide);
-            foreach (TextElementMapEntry entry in segEntries)
-            {
-                allEntries.Add(new TextElementMapEntry(
-                    entry.TextIndex + charOffset,
-                    entry.TextLength,
-                    entry.StartCell + cellOffset,
-                    entry.CellLength));
-            }
-
-            charOffset += seg.Text.Length;
             cellOffset += seg.CellLength;
         }
-
-        // Re-clamp the last entry so the grand total exactly matches line.CellLength.
-        // Per-segment corrections can each floor to 1 via Math.Max(1, …), causing cumulative
-        // overshoot that the old single-pass correction would have absorbed in one step.
-        if (allEntries.Count > 0)
-        {
-            int totalMapped = allEntries.Sum(static e => e.CellLength);
-            if (totalMapped != line.CellLength)
-            {
-                TextElementMapEntry last = allEntries[^1];
-                int adjusted = Math.Max(1, last.CellLength + (line.CellLength - totalMapped));
-                allEntries[^1] = last with { CellLength = adjusted };
-            }
-        }
-
-        return new LineLayout(text, line.CellLength, segments, allEntries.ToArray());
-    }
-
-    private static TextElementMapEntry[] BuildTextMap(string text, int targetCellLength, bool ambiguousAsWide)
-    {
-        if (string.IsNullOrEmpty(text))
-        {
-            return Array.Empty<TextElementMapEntry>();
-        }
-
-        int[] starts = StringInfo.ParseCombiningCharacters(text);
-        var entries = new TextElementMapEntry[starts.Length];
-        int totalCells = 0;
-        for (int index = 0; index < starts.Length; index++)
-        {
-            int start = starts[index];
-            int end = index + 1 < starts.Length ? starts[index + 1] : text.Length;
-            string element = text[start..end];
-            int cellLength = EstimateTextElementCellWidth(element, ambiguousAsWide);
-            entries[index] = new TextElementMapEntry(start, end - start, totalCells, cellLength);
-            totalCells += cellLength;
-        }
-
-        if (entries.Length > 0 && totalCells != targetCellLength)
-        {
-            TextElementMapEntry last = entries[^1];
-            int adjustedCellLength = Math.Max(1, last.CellLength + (targetCellLength - totalCells));
-            entries[^1] = last with { CellLength = adjustedCellLength };
-        }
-
-        return entries;
-    }
-
-    private static int EstimateTextElementCellWidth(string element, bool ambiguousAsWide)
-    {
-        bool hasVisibleRune = false;
-        int maxWidth = 1;
-        foreach (Rune rune in element.EnumerateRunes())
-        {
-            int width = GetDisplayWidth(rune, ambiguousAsWide);
-            if (width <= 0)
-            {
-                continue;
-            }
-
-            hasVisibleRune = true;
-            maxWidth = Math.Max(maxWidth, width);
-        }
-
-        return hasVisibleRune ? maxWidth : 1;
-    }
-
-    private int GetTextIndexForColumnHit(LineLayout line, double columnPosition)
-    {
-        if (line.Map.Length == 0)
-        {
-            return 0;
-        }
-
-        if (columnPosition <= 0)
-        {
-            return 0;
-        }
-
-        if (columnPosition >= line.CellLength)
-        {
-            return line.Text.Length;
-        }
-
-        foreach (TextElementMapEntry entry in line.Map)
-        {
-            if (columnPosition < entry.StartCell)
-            {
-                return entry.TextIndex;
-            }
-
-            double endCell = entry.StartCell + entry.CellLength;
-            if (columnPosition <= endCell)
-            {
-                double midpoint = entry.StartCell + (entry.CellLength / 2.0);
-                return columnPosition >= midpoint
-                    ? entry.TextIndex + entry.TextLength
-                    : entry.TextIndex;
-            }
-        }
-
-        return line.Text.Length;
-    }
-
-    private static int GetCellColumnForTextIndex(LineLayout line, int textIndex, bool preferTrailingEdge)
-    {
-        if (textIndex <= 0 || line.Map.Length == 0)
-        {
-            return 0;
-        }
-
-        if (textIndex >= line.Text.Length)
-        {
-            return line.CellLength;
-        }
-
-        foreach (TextElementMapEntry entry in line.Map)
-        {
-            if (textIndex < entry.TextIndex)
-            {
-                return entry.StartCell;
-            }
-
-            int entryEnd = entry.TextIndex + entry.TextLength;
-            if (textIndex < entryEnd)
-            {
-                return preferTrailingEdge ? entry.StartCell + entry.CellLength : entry.StartCell;
-            }
-
-            if (textIndex == entryEnd)
-            {
-                return entry.StartCell + entry.CellLength;
-            }
-        }
-
-        return line.CellLength;
+        return new LineLayout(
+            text,
+            line.CellLength,
+            segments,
+            TerminalTextCellMap.Create(
+                line.Segments.Select(static segment => (segment.Text, segment.CellLength)),
+                line.CellLength,
+                ambiguousAsWide));
     }
 
     private Brush GetBrush(Color color)
@@ -2000,6 +1860,25 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     private static int GetDisplayWidth(Rune rune, bool ambiguousAsWide) =>
         UnicodeWidth.GetWidth(rune, ambiguousAsWide);
+
+    private static int EstimateTextElementCellWidth(string element, bool ambiguousAsWide)
+    {
+        bool hasVisibleRune = false;
+        int maxWidth = 1;
+        foreach (Rune rune in element.EnumerateRunes())
+        {
+            int width = GetDisplayWidth(rune, ambiguousAsWide);
+            if (width <= 0)
+            {
+                continue;
+            }
+
+            hasVisibleRune = true;
+            maxWidth = Math.Max(maxWidth, width);
+        }
+
+        return hasVisibleRune ? maxWidth : 1;
+    }
 
     // Lazily builds and caches LineLayout objects (and, alongside each, the shaped paint commands)
     // for the current render snapshot. Layouts for unchanged lines are reused across snapshots;
@@ -2322,17 +2201,11 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         string Text,
         int CellLength,
         SegmentLayout[] Segments,
-        TextElementMapEntry[] Map);
+        TerminalTextCellMap TextCellMap);
 
     private readonly record struct SegmentLayout(
         int StartCell,
         AnsiTerminalBuffer.TerminalRenderSegmentSnapshot Snapshot);
-
-    private readonly record struct TextElementMapEntry(
-        int TextIndex,
-        int TextLength,
-        int StartCell,
-        int CellLength);
 
     private readonly record struct TerminalTextPosition(int LineIndex, int TextIndex) : IComparable<TerminalTextPosition>
     {
