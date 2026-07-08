@@ -20,15 +20,8 @@ public sealed class ConPtySession : ITerminalSession
     private readonly object _syncRoot = new();
     private readonly string? _workingDirectory;
     private readonly IReadOnlyDictionary<string, string?>? _environmentVariables;
-    private IntPtr _pseudoConsole;
-    private IntPtr _processHandle;
-    private IntPtr _threadHandle;
-    private IntPtr _jobHandle;
+    private readonly ConPtyHandleOwner _handles = new();
     private int _processId;
-    private SafeFileHandle? _pseudoConsoleInputReadHandle;
-    private SafeFileHandle? _pseudoConsoleOutputWriteHandle;
-    private SafeFileHandle? _inputWriteHandle;
-    private SafeFileHandle? _outputReadHandle;
     private Stream? _inputStream;
     private StreamWriter? _inputWriter;
     private StreamReader? _outputReader;
@@ -148,7 +141,7 @@ public sealed class ConPtySession : ITerminalSession
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        int hr = ResizePseudoConsole(_pseudoConsole, new Coord(columns, rows));
+        int hr = ResizePseudoConsole(_handles.PseudoConsole, new Coord(columns, rows));
         if (hr != 0)
         {
             Marshal.ThrowExceptionForHR(hr);
@@ -159,12 +152,13 @@ public sealed class ConPtySession : ITerminalSession
     {
         _ = idleOutputTimeout;
 
-        if (_disposed || !_started || _processHandle == IntPtr.Zero)
+        IntPtr processHandle = _handles.Process;
+        if (_disposed || !_started || processHandle == IntPtr.Zero)
         {
             return false;
         }
 
-        if (WaitForSingleObject(_processHandle, 0) != WaitTimeout)
+        if (WaitForSingleObject(processHandle, 0) != WaitTimeout)
         {
             return false;
         }
@@ -178,22 +172,23 @@ public sealed class ConPtySession : ITerminalSession
 
     public bool TryForceUnlock(uint exitCode = 1)
     {
-        if (_disposed || _processHandle == IntPtr.Zero)
+        IntPtr processHandle = _handles.Process;
+        if (_disposed || processHandle == IntPtr.Zero)
         {
             return false;
         }
 
-        if (WaitForSingleObject(_processHandle, 0) != WaitTimeout)
+        if (WaitForSingleObject(processHandle, 0) != WaitTimeout)
         {
             return false;
         }
 
-        if (_jobHandle != IntPtr.Zero)
+        if (_handles.Job != IntPtr.Zero)
         {
-            return TerminateJobObject(_jobHandle, exitCode);
+            return TerminateJobObject(_handles.Job, exitCode);
         }
 
-        return TerminateProcess(_processHandle, exitCode);
+        return TerminateProcess(processHandle, exitCode);
     }
 
     public void Dispose()
@@ -210,14 +205,7 @@ public sealed class ConPtySession : ITerminalSession
         Task? readTask;
         CancellationTokenSource? exitMonitorCancellation;
         Task? exitMonitorTask;
-        SafeFileHandle? pseudoConsoleInputReadHandle;
-        SafeFileHandle? pseudoConsoleOutputWriteHandle;
-        SafeFileHandle? inputWriteHandle;
-        SafeFileHandle? outputReadHandle;
-        IntPtr pseudoConsole;
-        IntPtr processHandle;
-        IntPtr threadHandle;
-        IntPtr jobHandle;
+        ConPtyOwnedHandles? handles;
 
         lock (_syncRoot)
         {
@@ -235,14 +223,7 @@ public sealed class ConPtySession : ITerminalSession
             readTask = _readTask;
             exitMonitorCancellation = _exitMonitorCancellation;
             exitMonitorTask = _exitMonitorTask;
-            pseudoConsoleInputReadHandle = _pseudoConsoleInputReadHandle;
-            pseudoConsoleOutputWriteHandle = _pseudoConsoleOutputWriteHandle;
-            inputWriteHandle = _inputWriteHandle;
-            outputReadHandle = _outputReadHandle;
-            pseudoConsole = _pseudoConsole;
-            processHandle = _processHandle;
-            threadHandle = _threadHandle;
-            jobHandle = _jobHandle;
+            handles = _handles.DetachForShutdown();
 
             _inputWriter = null;
             _inputStream = null;
@@ -251,14 +232,6 @@ public sealed class ConPtySession : ITerminalSession
             _readTask = null;
             _exitMonitorCancellation = null;
             _exitMonitorTask = null;
-            _pseudoConsoleInputReadHandle = null;
-            _pseudoConsoleOutputWriteHandle = null;
-            _inputWriteHandle = null;
-            _outputReadHandle = null;
-            _pseudoConsole = IntPtr.Zero;
-            _processHandle = IntPtr.Zero;
-            _threadHandle = IntPtr.Zero;
-            _jobHandle = IntPtr.Zero;
         }
 
         TryWriteExit(inputStream, inputWriter);
@@ -269,19 +242,13 @@ public sealed class ConPtySession : ITerminalSession
         DisposeQuietly(inputWriter);
         DisposeQuietly(inputStream);
         DisposeQuietly(outputReader);
-        DisposeQuietly(pseudoConsoleInputReadHandle);
-        DisposeQuietly(pseudoConsoleOutputWriteHandle);
-        DisposeQuietly(inputWriteHandle);
-        DisposeQuietly(outputReadHandle);
-
-        if (pseudoConsole != IntPtr.Zero)
-        {
-            ClosePseudoConsoleHandle(pseudoConsole);
-        }
+        handles?.CloseCommunicationHandles(ClosePseudoConsoleHandle);
 
         await WaitForTaskAsync(readTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
         await WaitForTaskAsync(exitMonitorTask, TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
 
+        IntPtr processHandle = handles?.Process ?? IntPtr.Zero;
+        IntPtr jobHandle = handles?.Job ?? IntPtr.Zero;
         if (processHandle != IntPtr.Zero && !await WaitForProcessExitAsync(processHandle, TimeSpan.FromMilliseconds(250)).ConfigureAwait(false))
         {
             if (jobHandle != IntPtr.Zero)
@@ -299,20 +266,7 @@ public sealed class ConPtySession : ITerminalSession
         await WaitForTaskAsync(readTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
         await WaitForTaskAsync(exitMonitorTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
 
-        if (threadHandle != IntPtr.Zero)
-        {
-            CloseHandle(threadHandle);
-        }
-
-        if (processHandle != IntPtr.Zero)
-        {
-            CloseHandle(processHandle);
-        }
-
-        if (jobHandle != IntPtr.Zero)
-        {
-            CloseHandle(jobHandle);
-        }
+        handles?.CloseProcessHandles(static handle => _ = CloseHandle(handle));
 
         DisposeQuietly(readCancellation);
         DisposeQuietly(exitMonitorCancellation);
@@ -367,22 +321,38 @@ public sealed class ConPtySession : ITerminalSession
                 pipeToPseudoConsoleInputRead,
                 pipeFromPseudoConsoleOutputWrite,
                 0,
-                out _pseudoConsole);
+                out IntPtr pseudoConsole);
 
             if (hr != 0)
             {
                 Marshal.ThrowExceptionForHR(hr);
             }
 
-            _inputWriteHandle = new SafeFileHandle(pipeToPseudoConsoleInputWrite, ownsHandle: true);
-            _outputReadHandle = new SafeFileHandle(pipeFromPseudoConsoleOutputRead, ownsHandle: true);
-            _pseudoConsoleInputReadHandle = new SafeFileHandle(pipeToPseudoConsoleInputRead, ownsHandle: true);
-            _pseudoConsoleOutputWriteHandle = new SafeFileHandle(pipeFromPseudoConsoleOutputWrite, ownsHandle: true);
+            IntPtr adoptedPseudoConsole = pseudoConsole;
+            IntPtr adoptedInputRead = pipeToPseudoConsoleInputRead;
+            IntPtr adoptedOutputWrite = pipeFromPseudoConsoleOutputWrite;
+            IntPtr adoptedInputWrite = pipeToPseudoConsoleInputWrite;
+            IntPtr adoptedOutputRead = pipeFromPseudoConsoleOutputRead;
+            Func<IntPtr, SafeFileHandle> createPipeHandle =
+                static handle => new SafeFileHandle(handle, ownsHandle: true);
+            Action<IntPtr> closePseudoConsole = ClosePseudoConsoleHandle;
+            Action<IntPtr> closeRawHandle = static handle => _ = CloseHandle(handle);
 
+            pseudoConsole = IntPtr.Zero;
             pipeToPseudoConsoleInputWrite = IntPtr.Zero;
             pipeFromPseudoConsoleOutputRead = IntPtr.Zero;
             pipeToPseudoConsoleInputRead = IntPtr.Zero;
             pipeFromPseudoConsoleOutputWrite = IntPtr.Zero;
+
+            _handles.AdoptPseudoConsole(
+                adoptedPseudoConsole,
+                adoptedInputRead,
+                adoptedOutputWrite,
+                adoptedInputWrite,
+                adoptedOutputRead,
+                createPipeHandle,
+                closePseudoConsole,
+                closeRawHandle);
         }
         finally
         {
@@ -429,7 +399,7 @@ public sealed class ConPtySession : ITerminalSession
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to initialize attribute list.");
             }
 
-            IntPtr pseudoConsoleValue = _pseudoConsole;
+            IntPtr pseudoConsoleValue = _handles.PseudoConsole;
 
             if (!UpdateProcThreadAttribute(
                     attributeList,
@@ -478,15 +448,11 @@ public sealed class ConPtySession : ITerminalSession
                 throw new Win32Exception(Marshal.GetLastWin32Error(), $"Failed to launch command: {commandLine}");
             }
 
-            _processHandle = processInfo.hProcess;
-            _threadHandle = processInfo.hThread;
+            _handles.SetProcess(processInfo.hProcess, processInfo.hThread);
             _processId = processInfo.dwProcessId;
-            ConfigureProcessJob(_processHandle);
+            ConfigureProcessJob(processInfo.hProcess);
 
-            _pseudoConsoleInputReadHandle?.Dispose();
-            _pseudoConsoleInputReadHandle = null;
-            _pseudoConsoleOutputWriteHandle?.Dispose();
-            _pseudoConsoleOutputWriteHandle = null;
+            _handles.ReleasePseudoConsoleEndpoints();
         }
         finally
         {
@@ -516,12 +482,12 @@ public sealed class ConPtySession : ITerminalSession
 
     private void StartOutputReadLoop()
     {
-        if (_inputWriteHandle is null || _outputReadHandle is null)
+        if (_handles.InputWrite is null || _handles.OutputRead is null)
         {
             throw new InvalidOperationException("ConPTY pipes are not initialized.");
         }
 
-        _inputStream = new FileStream(_inputWriteHandle, FileAccess.Write, 4096, isAsync: false);
+        _inputStream = new FileStream(_handles.InputWrite, FileAccess.Write, 4096, isAsync: false);
         _inputWriter = new StreamWriter(
             _inputStream,
             new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
@@ -532,7 +498,7 @@ public sealed class ConPtySession : ITerminalSession
         };
 
         _outputReader = new StreamReader(
-            new FileStream(_outputReadHandle, FileAccess.Read, 4096, isAsync: false),
+            new FileStream(_handles.OutputRead, FileAccess.Read, 4096, isAsync: false),
             new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 
         _readCancellation = new CancellationTokenSource();
@@ -573,20 +539,21 @@ public sealed class ConPtySession : ITerminalSession
 
         _exitMonitorTask = Task.Run(() =>
         {
-            if (_processHandle == IntPtr.Zero)
+            IntPtr processHandle = _handles.Process;
+            if (processHandle == IntPtr.Zero)
             {
                 return;
             }
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                uint wait = WaitForSingleObject(_processHandle, 100);
+                uint wait = WaitForSingleObject(processHandle, 100);
                 if (wait == WaitTimeout)
                 {
                     continue;
                 }
 
-                if (wait == 0 && !_disposed && GetExitCodeProcess(_processHandle, out uint exitCode))
+                if (wait == 0 && !_disposed && GetExitCodeProcess(processHandle, out uint exitCode))
                 {
                     Exited?.Invoke(this, unchecked((int)exitCode));
                 }
@@ -643,7 +610,7 @@ public sealed class ConPtySession : ITerminalSession
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to assign process to job.");
             }
 
-            _jobHandle = jobHandle;
+            _handles.SetJob(jobHandle);
             jobHandle = IntPtr.Zero;
         }
         finally
