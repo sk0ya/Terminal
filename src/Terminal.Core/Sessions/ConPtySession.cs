@@ -1,5 +1,4 @@
 using Microsoft.Win32.SafeHandles;
-using System.Collections;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -504,47 +503,9 @@ public sealed class ConPtySession : ITerminalSession
         }
     }
 
-    internal static string[] BuildEnvironmentVariables(IReadOnlyDictionary<string, string?>? overrides)
-    {
-        if (overrides is null || overrides.Count == 0)
-        {
-            return [];
-        }
-
-        var variables = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables())
-        {
-            if (entry.Key is not string key || string.IsNullOrEmpty(key))
-            {
-                continue;
-            }
-
-            variables[key] = entry.Value?.ToString() ?? string.Empty;
-        }
-
-        foreach (KeyValuePair<string, string?> pair in overrides)
-        {
-            if (string.IsNullOrEmpty(pair.Key) || pair.Key.Contains('='))
-            {
-                continue;
-            }
-
-            if (pair.Value is null)
-            {
-                variables.Remove(pair.Key);
-            }
-            else
-            {
-                variables[pair.Key] = pair.Value;
-            }
-        }
-
-        return variables.Select(pair => $"{pair.Key}={pair.Value}").ToArray();
-    }
-
     private static IntPtr AllocateEnvironmentBlock(IReadOnlyDictionary<string, string?>? overrides)
     {
-        string[] variables = BuildEnvironmentVariables(overrides);
+        string[] variables = ConPtyProcessEnvironment.Build(overrides);
         if (variables.Length == 0)
         {
             return IntPtr.Zero;

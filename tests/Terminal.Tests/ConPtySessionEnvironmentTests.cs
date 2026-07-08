@@ -7,7 +7,7 @@ public sealed class ConPtySessionEnvironmentTests
     [Fact]
     public void BuildEnvironmentVariablesAddsOverrides()
     {
-        string[] variables = ConPtySession.BuildEnvironmentVariables(
+        string[] variables = ConPtyProcessEnvironment.Build(
             new Dictionary<string, string?>
             {
                 ["GIT_CONFIG_COUNT"] = "1",
@@ -27,7 +27,7 @@ public sealed class ConPtySessionEnvironmentTests
         Environment.SetEnvironmentVariable(variableName, "present");
         try
         {
-            string[] variables = ConPtySession.BuildEnvironmentVariables(
+            string[] variables = ConPtyProcessEnvironment.Build(
                 new Dictionary<string, string?>
                 {
                     [variableName] = null
@@ -39,5 +39,40 @@ public sealed class ConPtySessionEnvironmentTests
         {
             Environment.SetEnvironmentVariable(variableName, null);
         }
+    }
+
+    [Fact]
+    public void BuildMergesOverridesCaseInsensitivelyAndSortsTheResult()
+    {
+        var inherited = new Dictionary<string, string>
+        {
+            ["Path"] = "inherited",
+            ["ALPHA"] = "first"
+        };
+        var overrides = new Dictionary<string, string?>
+        {
+            ["PATH"] = "overridden",
+            ["ZULU"] = "last"
+        };
+
+        string[] variables = ConPtyProcessEnvironment.Build(inherited, overrides);
+
+        Assert.Equal(["ALPHA=first", "Path=overridden", "ZULU=last"], variables);
+    }
+
+    [Fact]
+    public void BuildIgnoresInvalidOverrideNames()
+    {
+        var inherited = new Dictionary<string, string> { ["VALID"] = "inherited" };
+        var overrides = new Dictionary<string, string?>
+        {
+            [""] = "empty",
+            ["INVALID=NAME"] = "invalid",
+            ["VALID"] = "overridden"
+        };
+
+        string[] variables = ConPtyProcessEnvironment.Build(inherited, overrides);
+
+        Assert.Equal(["VALID=overridden"], variables);
     }
 }
