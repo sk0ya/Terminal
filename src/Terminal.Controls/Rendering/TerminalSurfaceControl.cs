@@ -27,7 +27,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     // lazily for the lines that are actually touched (the visible window plus any selection/search
     // probes) and evicted once they scroll out, so memory and per-update CPU scale with the viewport
     // rather than with the full scrollback history.
-    private readonly VirtualLineLayouts _lines = new();
+    private readonly TerminalLineRenderCache<LineDrawable> _lines = new();
     private IReadOnlyList<TerminalSelectionLine> SelectionLines => new SelectionLineList(_lines);
     private bool _ambiguousAsWide;
     private Typeface? _typeface;
@@ -102,7 +102,19 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         RequestBringIntoView += OnRequestBringIntoView;
         _blinkTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = BlinkInterval };
         _blinkTimer.Tick += OnBlinkTimerTick;
-        Unloaded += (_, _) => StopBlinkTimer();
+        Unloaded += (_, _) =>
+        {
+            StopBlinkTimer();
+            TextFormatter? formatter = _textFormatter;
+            _textFormatter = null;
+            var cleanup = new List<Action> { _lines.Clear };
+            if (formatter is not null)
+            {
+                cleanup.Add(formatter.Dispose);
+            }
+
+            DisposableResourceOwner.ExecuteAllBestEffort(cleanup);
+        };
     }
 
     private void OnBlinkTimerTick(object? sender, EventArgs e)
@@ -202,6 +214,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     // line shapes its glyphs once and reuses them across repaints until the line content or font
     // metrics change.
     internal int CachedLineDrawableCount => _lines.CachedDrawableCount;
+
+    internal bool HasTextFormatter => _textFormatter is not null;
 
     // When enabled, primary-font runs are shaped through TextFormatter with OpenType standard
     // ligatures and contextual alternates turned on, so programming fonts (FiraCode, Cascadia Code)
@@ -1087,72 +1101,80 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private LineDrawable BuildLineDrawable(TerminalLineLayout line)
     {
         var commands = new List<IDrawCommand>();
-        foreach (TerminalLineSegmentLayout segment in line.Segments)
+        try
         {
-            if (string.IsNullOrEmpty(segment.Snapshot.Text))
+            foreach (TerminalLineSegmentLayout segment in line.Segments)
             {
-                continue;
-            }
-
-            string segText = segment.Snapshot.Text;
-            Typeface primaryTypeface = segment.Snapshot.Italic ? _italicTypeface! : _typeface!;
-            FontWeight fontWeight = segment.Snapshot.Bold ? FontWeights.SemiBold : FontWeights.Regular;
-            Brush foreground = GetBrush(segment.Snapshot.Foreground);
-            TextDecorationCollection? decorations = BuildDecorations(segment.Snapshot);
-            FontFallbackResolver? fallback = _fontFallback;
-            bool ambiguousAsWide = _ambiguousAsWide;
-            bool italic = segment.Snapshot.Italic;
-            bool blink = segment.Snapshot.Blink;
-
-            if (fallback is null)
-            {
-                commands.Add(CreateRunCommand(segText, primaryTypeface, isPrimary: true, fontWeight, foreground,
-                    decorations, segment.StartCell * _cellSize.Width, blink));
-                continue;
-            }
-
-            int[] starts = StringInfo.ParseCombiningCharacters(segText);
-            double cellX = segment.StartCell * _cellSize.Width;
-            int runStart = 0;
-            double runCellX = cellX;
-            GlyphTypeface? runGlyph = null;
-
-            for (int i = 0; i < starts.Length; i++)
-            {
-                int elemStart = starts[i];
-                int elemEnd = i + 1 < starts.Length ? starts[i + 1] : segText.Length;
-                int codepoint = char.ConvertToUtf32(segText, elemStart);
-                GlyphTypeface? resolved = fallback.Resolve(codepoint);
-
-                if (i == 0)
+                if (string.IsNullOrEmpty(segment.Snapshot.Text))
                 {
-                    runGlyph = resolved;
+                    continue;
                 }
-                else if (!ReferenceEquals(resolved, runGlyph))
+
+                string segText = segment.Snapshot.Text;
+                Typeface primaryTypeface = segment.Snapshot.Italic ? _italicTypeface! : _typeface!;
+                FontWeight fontWeight = segment.Snapshot.Bold ? FontWeights.SemiBold : FontWeights.Regular;
+                Brush foreground = GetBrush(segment.Snapshot.Foreground);
+                TextDecorationCollection? decorations = BuildDecorations(segment.Snapshot);
+                FontFallbackResolver? fallback = _fontFallback;
+                bool ambiguousAsWide = _ambiguousAsWide;
+                bool italic = segment.Snapshot.Italic;
+                bool blink = segment.Snapshot.Blink;
+
+                if (fallback is null)
                 {
-                    string runText = segText[runStart..elemStart];
+                    commands.Add(CreateRunCommand(segText, primaryTypeface, isPrimary: true, fontWeight, foreground,
+                        decorations, segment.StartCell * _cellSize.Width, blink));
+                    continue;
+                }
+
+                int[] starts = StringInfo.ParseCombiningCharacters(segText);
+                double cellX = segment.StartCell * _cellSize.Width;
+                int runStart = 0;
+                double runCellX = cellX;
+                GlyphTypeface? runGlyph = null;
+
+                for (int i = 0; i < starts.Length; i++)
+                {
+                    int elemStart = starts[i];
+                    int elemEnd = i + 1 < starts.Length ? starts[i + 1] : segText.Length;
+                    int codepoint = char.ConvertToUtf32(segText, elemStart);
+                    GlyphTypeface? resolved = fallback.Resolve(codepoint);
+
+                    if (i == 0)
+                    {
+                        runGlyph = resolved;
+                    }
+                    else if (!ReferenceEquals(resolved, runGlyph))
+                    {
+                        string runText = segText[runStart..elemStart];
+                        Typeface tf = ResolveTypeface(runGlyph, primaryTypeface, italic);
+                        commands.Add(CreateRunCommand(runText, tf, IsPrimaryGlyph(runGlyph), fontWeight, foreground,
+                            decorations, runCellX, blink));
+                        runStart = elemStart;
+                        runCellX = cellX;
+                        runGlyph = resolved;
+                    }
+
+                    string elem = segText[elemStart..elemEnd];
+                    cellX += EstimateTextElementCellWidth(elem, ambiguousAsWide) * _cellSize.Width;
+                }
+
+                if (runStart < segText.Length)
+                {
+                    string runText = segText[runStart..];
                     Typeface tf = ResolveTypeface(runGlyph, primaryTypeface, italic);
                     commands.Add(CreateRunCommand(runText, tf, IsPrimaryGlyph(runGlyph), fontWeight, foreground,
                         decorations, runCellX, blink));
-                    runStart = elemStart;
-                    runCellX = cellX;
-                    runGlyph = resolved;
                 }
-
-                string elem = segText[elemStart..elemEnd];
-                cellX += EstimateTextElementCellWidth(elem, ambiguousAsWide) * _cellSize.Width;
             }
 
-            if (runStart < segText.Length)
-            {
-                string runText = segText[runStart..];
-                Typeface tf = ResolveTypeface(runGlyph, primaryTypeface, italic);
-                commands.Add(CreateRunCommand(runText, tf, IsPrimaryGlyph(runGlyph), fontWeight, foreground,
-                    decorations, runCellX, blink));
-            }
+            return new LineDrawable(commands.ToArray());
         }
-
-        return new LineDrawable(commands.ToArray());
+        catch
+        {
+            DisposableResourceOwner.RollBackBestEffort(commands.OfType<IDisposable>());
+            throw;
+        }
     }
 
     private bool IsPrimaryGlyph(GlyphTypeface? glyphTypeface)
@@ -1559,173 +1581,24 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         return hasVisibleRune ? maxWidth : 1;
     }
 
-    // Lazily builds and caches LineLayout objects (and, alongside each, the shaped paint commands)
-    // for the current render snapshot. Layouts for unchanged lines are reused across snapshots;
-    // entries outside the viewport window are evicted, so memory and per-update CPU scale with the
-    // visible region rather than the whole scrollback. The shaped drawable rides in the same entry,
-    // so it is reused across repaints and discarded together with its layout on eviction.
-    private sealed class VirtualLineLayouts
-    {
-        private sealed class Entry(TerminalLineLayout layout)
-        {
-            public TerminalLineLayout Layout { get; } = layout;
-            public LineDrawable? Drawable { get; set; }
-        }
-
-        private readonly Dictionary<int, Entry> _cache = [];
-        private readonly List<int> _evictionScratch = [];
-        private AnsiTerminalBuffer.TerminalRenderLineSnapshot[] _snapshot = [];
-        private bool _ambiguousAsWide;
-
-        public int Count => _snapshot.Length;
-
-        public int CachedCount => _cache.Count;
-
-        public int CachedDrawableCount
-        {
-            get
-            {
-                int count = 0;
-                foreach (Entry entry in _cache.Values)
-                {
-                    if (entry.Drawable is not null)
-                    {
-                        count++;
-                    }
-                }
-
-                return count;
-            }
-        }
-
-        public TerminalLineLayout this[int index] => GetEntry(index).Layout;
-
-        private Entry GetEntry(int index)
-        {
-            if (!_cache.TryGetValue(index, out Entry? entry))
-            {
-                entry = new Entry(TerminalLineLayoutBuilder.Create(_snapshot[index], _ambiguousAsWide));
-                _cache[index] = entry;
-            }
-
-            return entry;
-        }
-
-        // Returns the shaped paint commands for a line, building them once via <paramref name="builder"/>
-        // and reusing them on subsequent repaints until the entry is evicted or invalidated.
-        public LineDrawable GetDrawable(int index, Func<TerminalLineLayout, LineDrawable> builder)
-        {
-            Entry entry = GetEntry(index);
-            return entry.Drawable ??= builder(entry.Layout);
-        }
-
-        // Drops every cached drawable (keeping the layouts) so the next repaint re-shapes against the
-        // current font metrics or ligature setting.
-        public void InvalidateDrawables()
-        {
-            foreach (Entry entry in _cache.Values)
-            {
-                entry.Drawable?.Dispose();
-                entry.Drawable = null;
-            }
-        }
-
-        // Adopts a new snapshot and returns the maximum cell length across all lines (for the
-        // horizontal scroll extent). Cached entries are kept only where the line content is
-        // unchanged, so new output at the bottom reuses the scrollback layouts above it.
-        public int SetSnapshot(AnsiTerminalBuffer.TerminalRenderLineSnapshot[] lines, bool ambiguousAsWide)
-        {
-            AnsiTerminalBuffer.TerminalRenderLineSnapshot[] previous = _snapshot;
-            bool reuse = ambiguousAsWide == _ambiguousAsWide && _cache.Count > 0;
-
-            int maxCellLength = 0;
-            for (int index = 0; index < lines.Length; index++)
-            {
-                if (lines[index].CellLength > maxCellLength)
-                {
-                    maxCellLength = lines[index].CellLength;
-                }
-            }
-
-            _snapshot = lines;
-            _ambiguousAsWide = ambiguousAsWide;
-
-            if (!reuse)
-            {
-                DisposeAndClear();
-                return maxCellLength;
-            }
-
-            _evictionScratch.Clear();
-            foreach (int index in _cache.Keys)
-            {
-                if (index >= lines.Length || index >= previous.Length || !lines[index].ContentEquals(previous[index]))
-                {
-                    _evictionScratch.Add(index);
-                }
-            }
-
-            Evict();
-            return maxCellLength;
-        }
-
-        // Evicts cached entries whose line index falls outside [startInclusive, endInclusive].
-        public void TrimOutsideWindow(int startInclusive, int endInclusive)
-        {
-            if (_cache.Count == 0)
-            {
-                return;
-            }
-
-            _evictionScratch.Clear();
-            foreach (int index in _cache.Keys)
-            {
-                if (index < startInclusive || index > endInclusive)
-                {
-                    _evictionScratch.Add(index);
-                }
-            }
-
-            Evict();
-        }
-
-        private void Evict()
-        {
-            foreach (int index in _evictionScratch)
-            {
-                if (_cache.Remove(index, out Entry? entry))
-                {
-                    entry.Drawable?.Dispose();
-                }
-            }
-        }
-
-        private void DisposeAndClear()
-        {
-            foreach (Entry entry in _cache.Values)
-            {
-                entry.Drawable?.Dispose();
-            }
-
-            _cache.Clear();
-        }
-    }
-
     // A line's shaped, position-relative paint commands, reused across repaints. Disposing it
     // releases any unmanaged text resources held by its commands (e.g. TextLine).
-    private sealed class LineDrawable(IDrawCommand[] commands) : IDisposable
+    private sealed class LineDrawable : IDisposable
     {
-        public IDrawCommand[] Commands { get; } = commands;
+        private IDrawCommand[] _commands;
+
+        public LineDrawable(IDrawCommand[] commands)
+        {
+            _commands = commands;
+        }
+
+        public IDrawCommand[] Commands => _commands;
 
         public void Dispose()
         {
-            foreach (IDrawCommand command in Commands)
-            {
-                if (command is IDisposable disposable)
-                {
-                    disposable.Dispose();
-                }
-            }
+            IDrawCommand[] commands = _commands;
+            _commands = [];
+            DisposableResourceOwner.DisposeAllBestEffort(commands.OfType<IDisposable>());
         }
     }
 
@@ -1876,7 +1749,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         public override bool StylisticSet20 => false;
     }
 
-    private sealed class SelectionLineList(VirtualLineLayouts lines) : IReadOnlyList<TerminalSelectionLine>
+    private sealed class SelectionLineList(TerminalLineRenderCache<LineDrawable> lines) : IReadOnlyList<TerminalSelectionLine>
     {
         public int Count => lines.Count;
 

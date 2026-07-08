@@ -404,6 +404,33 @@ public sealed class TerminalSurfaceControlTests
         });
     }
 
+    [Fact]
+    public void Surface_Unloaded_ReleasesCachedDrawablesAndCanRenderAfterReload()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            surface.FontLigaturesEnabled = true;
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                CreateLine("reload line")
+            ]));
+            ForceRender(surface);
+            Assert.True(surface.CachedLineDrawableCount > 0);
+            Assert.True(surface.HasTextFormatter);
+
+            surface.RaiseEvent(new RoutedEventArgs(FrameworkElement.UnloadedEvent));
+
+            Assert.Equal(0, surface.CachedLineDrawableCount);
+            Assert.Equal(0, surface.CachedLineLayoutCount);
+            Assert.Equal(1, surface.LineCount);
+            Assert.False(surface.HasTextFormatter);
+            ForceRender(surface);
+            Assert.True(surface.CachedLineDrawableCount > 0);
+            Assert.True(surface.HasTextFormatter);
+        });
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
