@@ -29,6 +29,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     // probes) and evicted once they scroll out, so memory and per-update CPU scale with the viewport
     // rather than with the full scrollback history.
     private readonly VirtualLineLayouts _lines = new();
+    private IReadOnlyList<TerminalSelectionLine> SelectionLines => new SelectionLineList(_lines);
     private bool _ambiguousAsWide;
     private Typeface? _typeface;
     private Typeface? _italicTypeface;
@@ -40,16 +41,33 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private double _pixelsPerDip = 1.0;
     private bool _metricsDirty = true;
     private int _maxCellLength;
-    private TerminalTextRange? _selection;
+    private readonly TerminalSelectionSearchModel _selectionModel = new();
+    private TerminalTextRange? _selection
+    {
+        get => _selectionModel.Selection;
+        set => _selectionModel.Selection = value;
+    }
     private TerminalTextPosition? _selectionAnchor;
     private Point? _selectionAnchorPoint;
     private bool _selectionDragStarted;
-    private bool _blockSelectionMode;
+    private bool _blockSelectionMode
+    {
+        get => _selectionModel.IsBlockSelection;
+        set => _selectionModel.IsBlockSelection = value;
+    }
     // The link (URL/file path) currently under the mouse pointer, drawn with an underline so it
     // reads as clickable. Cell-column span on a single line; null when not hovering a link.
     private (int Line, int StartColumn, int EndColumn)? _hoveredLink;
-    private double _blockAnchorCellColumn;
-    private double _blockCurrentCellColumn;
+    private double _blockAnchorCellColumn
+    {
+        get => _selectionModel.BlockAnchorColumn;
+        set => _selectionModel.BlockAnchorColumn = value;
+    }
+    private double _blockCurrentCellColumn
+    {
+        get => _selectionModel.BlockCurrentColumn;
+        set => _selectionModel.BlockCurrentColumn = value;
+    }
     private TerminalTextPosition _keyboardCursor;
     private TerminalTextPosition? _keyboardAnchor;
     private double _extentWidth;
@@ -160,7 +178,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     public ScrollViewer? ScrollOwner { get; set; }
 
-    public bool HasSelection => _selection.HasValue && !_selection.Value.IsEmpty;
+    public bool HasSelection => _selectionModel.HasSelection;
 
     public Brush? SelectionBackground
     {
@@ -254,9 +272,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             return;
         }
 
-        _selection = null;
+        _selectionModel.ClearSelection();
         _keyboardAnchor = null;
-        _blockSelectionMode = false;
         InvalidateVisual();
     }
 
@@ -344,69 +361,16 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     public string GetSelectedText()
     {
-        TerminalTextRange? selection = NormalizeSelection(_selection);
-        if (!selection.HasValue)
-        {
-            return string.Empty;
-        }
-
-        TerminalTextRange range = selection.Value;
-
-        if (_blockSelectionMode)
-        {
-            return GetBlockSelectedText(range);
-        }
-
-        var builder = new StringBuilder();
-        for (int lineIndex = range.Start.LineIndex; lineIndex <= range.End.LineIndex; lineIndex++)
-        {
-            LineLayout line = _lines[lineIndex];
-            int start = lineIndex == range.Start.LineIndex ? range.Start.TextIndex : 0;
-            int end = lineIndex == range.End.LineIndex ? range.End.TextIndex : line.Text.Length;
-            start = Math.Clamp(start, 0, line.Text.Length);
-            end = Math.Clamp(end, start, line.Text.Length);
-            builder.Append(line.Text.AsSpan(start, end - start));
-            if (lineIndex < range.End.LineIndex)
-            {
-                builder.AppendLine();
-            }
-        }
-
-        return builder.ToString();
+        return TerminalSelectionSearchModel.ExtractText(
+            SelectionLines,
+            _selection,
+            _blockSelectionMode,
+            _blockAnchorCellColumn,
+            _blockCurrentCellColumn);
     }
 
-    private (int Left, int Right) GetBlockColumnRange()
-    {
-        int left = (int)Math.Min(_blockAnchorCellColumn, _blockCurrentCellColumn);
-        int right = (int)Math.Ceiling(Math.Max(_blockAnchorCellColumn, _blockCurrentCellColumn));
-        if (right <= left)
-        {
-            right = left + 1;
-        }
-
-        return (left, right);
-    }
-
-    private string GetBlockSelectedText(TerminalTextRange range)
-    {
-        var (leftColumn, rightColumn) = GetBlockColumnRange();
-        var builder = new StringBuilder();
-        for (int lineIndex = range.Start.LineIndex; lineIndex <= range.End.LineIndex; lineIndex++)
-        {
-            LineLayout line = _lines[lineIndex];
-            int startTextIndex = line.TextCellMap.GetTextIndex(leftColumn);
-            int endTextIndex = line.TextCellMap.GetTextIndex(rightColumn);
-            startTextIndex = Math.Clamp(startTextIndex, 0, line.Text.Length);
-            endTextIndex = Math.Clamp(endTextIndex, startTextIndex, line.Text.Length);
-            builder.Append(line.Text.AsSpan(startTextIndex, endTextIndex - startTextIndex));
-            if (lineIndex < range.End.LineIndex)
-            {
-                builder.AppendLine();
-            }
-        }
-
-        return builder.ToString();
-    }
+    private (int Left, int Right) GetBlockColumnRange() =>
+        TerminalSelectionSearchModel.GetBlockColumns(_blockAnchorCellColumn, _blockCurrentCellColumn);
 
     /// <summary>
     /// 現在の選択範囲を「行ごとの装飾付きラン列」（各セルの表示文字＋解決済み前景/背景 RGB＋
@@ -491,64 +455,14 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     }
 
     public int CountMatches(string query, StringComparison comparison)
-    {
-        if (string.IsNullOrEmpty(query))
-        {
-            return 0;
-        }
-
-        int count = 0;
-        for (int lineIndex = 0; lineIndex < _lines.Count; lineIndex++)
-        {
-            LineLayout line = _lines[lineIndex];
-            int index = 0;
-            while (index < line.Text.Length)
-            {
-                int found = line.Text.IndexOf(query, index, comparison);
-                if (found < 0)
-                {
-                    break;
-                }
-
-                count++;
-                index = found + query.Length;
-            }
-        }
-
-        return count;
-    }
+        => TerminalSelectionSearchModel.CountMatches(SelectionLines, query, comparison);
 
     /// <summary>
     /// バッファ全体から <paramref name="query"/> の一致をすべて列挙する（行頭→行末、上から下へ）。
     /// 同一行に複数あれば重なりなく順に返す。選択状態やスクロール位置は変更しない。
     /// </summary>
     public IReadOnlyList<TerminalMatch> FindMatches(string query, StringComparison comparison)
-    {
-        var matches = new List<TerminalMatch>();
-        if (string.IsNullOrEmpty(query))
-        {
-            return matches;
-        }
-
-        for (int lineIndex = 0; lineIndex < _lines.Count; lineIndex++)
-        {
-            LineLayout line = _lines[lineIndex];
-            int index = 0;
-            while (index <= line.Text.Length)
-            {
-                int found = line.Text.IndexOf(query, index, comparison);
-                if (found < 0)
-                {
-                    break;
-                }
-
-                matches.Add(new TerminalMatch(lineIndex, found, query.Length, line.Text));
-                index = found + query.Length;
-            }
-        }
-
-        return matches;
-    }
+        => TerminalSelectionSearchModel.FindMatches(SelectionLines, query, comparison);
 
     /// <summary>
     /// 指定位置の範囲を選択ハイライトし、その箇所までスクロールして可視化する
@@ -557,68 +471,24 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     /// <returns>行インデックスが有効で選択できれば <c>true</c>。</returns>
     public bool SelectMatch(int lineIndex, int column, int length)
     {
-        if (lineIndex < 0 || lineIndex >= _lines.Count)
+        if (!TerminalSelectionSearchModel.TryCreateMatchRange(
+            SelectionLines, lineIndex, column, length, out TerminalTextRange range))
         {
             return false;
         }
-
-        LineLayout line = _lines[lineIndex];
-        int start = Math.Clamp(column, 0, line.Text.Length);
-        int end = Math.Clamp(column + length, start, line.Text.Length);
-        SelectRange(new TerminalTextRange(
-            new TerminalTextPosition(lineIndex, start),
-            new TerminalTextPosition(lineIndex, end)));
+        SelectRange(range);
         return true;
     }
 
     public bool TrySelectNextMatch(string query, StringComparison comparison, bool forward, out bool wrapped)
     {
-        wrapped = false;
-        if (string.IsNullOrEmpty(query) || _lines.Count == 0)
+        if (!TerminalSelectionSearchModel.TryFindNext(
+            SelectionLines, _selection, query, comparison, forward, out TerminalTextRange match, out wrapped))
         {
             return false;
         }
-
-        if (forward)
-        {
-            TerminalTextPosition start = _selection.HasValue
-                ? NormalizeSelection(_selection)!.Value.End
-                : new TerminalTextPosition(0, 0);
-            if (TryFindForward(start, query, comparison, out TerminalTextRange match))
-            {
-                SelectRange(match);
-                return true;
-            }
-
-            wrapped = TryFindForward(new TerminalTextPosition(0, 0), query, comparison, out match);
-            if (wrapped)
-            {
-                SelectRange(match);
-            }
-
-            return wrapped;
-        }
-
-        TerminalTextPosition backwardStart = _selection.HasValue
-            ? NormalizeSelection(_selection)!.Value.Start
-            : new TerminalTextPosition(_lines.Count - 1, _lines[^1].Text.Length);
-        if (TryFindBackward(backwardStart, query, comparison, out TerminalTextRange backwardMatch))
-        {
-            SelectRange(backwardMatch);
-            return true;
-        }
-
-        wrapped = TryFindBackward(
-            new TerminalTextPosition(_lines.Count - 1, _lines[^1].Text.Length),
-            query,
-            comparison,
-            out backwardMatch);
-        if (wrapped)
-        {
-            SelectRange(backwardMatch);
-        }
-
-        return wrapped;
+        SelectRange(match);
+        return true;
     }
 
     public Rect GetCellRect(int lineIndex, int column)
@@ -1551,20 +1421,25 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     }
 
     private TerminalTextPosition CoerceTextPosition(TerminalTextPosition position)
-    {
-        if (_lines.Count == 0)
-        {
-            return new TerminalTextPosition(0, 0);
-        }
-
-        int lineIndex = Math.Clamp(position.LineIndex, 0, _lines.Count - 1);
-        int textIndex = Math.Clamp(position.TextIndex, 0, _lines[lineIndex].Text.Length);
-        return new TerminalTextPosition(lineIndex, textIndex);
-    }
+        => TerminalSelectionSearchModel.ClampPosition(SelectionLines, position);
 
     private void SelectRange(TerminalTextRange range)
     {
         _blockSelectionMode = false;
+        _selection = NormalizeSelection(range);
+        BringSelectionIntoView();
+        InvalidateVisual();
+    }
+
+    internal void SelectRange(
+        TerminalTextRange range,
+        bool blockSelection,
+        double blockAnchorCellColumn,
+        double blockCurrentCellColumn)
+    {
+        _blockSelectionMode = blockSelection;
+        _blockAnchorCellColumn = blockAnchorCellColumn;
+        _blockCurrentCellColumn = blockCurrentCellColumn;
         _selection = NormalizeSelection(range);
         BringSelectionIntoView();
         InvalidateVisual();
@@ -1733,88 +1608,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         return length;
     }
 
-    private bool TryFindForward(TerminalTextPosition start, string query, StringComparison comparison, out TerminalTextRange range)
-    {
-        start = CoerceTextPosition(start);
-        for (int lineIndex = start.LineIndex; lineIndex < _lines.Count; lineIndex++)
-        {
-            LineLayout line = _lines[lineIndex];
-            int searchStart = lineIndex == start.LineIndex ? Math.Clamp(start.TextIndex, 0, line.Text.Length) : 0;
-            int found = line.Text.IndexOf(query, searchStart, comparison);
-            if (found < 0)
-            {
-                continue;
-            }
-
-            range = new TerminalTextRange(
-                new TerminalTextPosition(lineIndex, found),
-                new TerminalTextPosition(lineIndex, found + query.Length));
-            return true;
-        }
-
-        range = default;
-        return false;
-    }
-
-    private bool TryFindBackward(TerminalTextPosition start, string query, StringComparison comparison, out TerminalTextRange range)
-    {
-        start = CoerceTextPosition(start);
-        for (int lineIndex = start.LineIndex; lineIndex >= 0; lineIndex--)
-        {
-            LineLayout line = _lines[lineIndex];
-            int searchLimit = lineIndex == start.LineIndex
-                ? Math.Clamp(start.TextIndex, 0, line.Text.Length)
-                : line.Text.Length;
-            if (searchLimit == 0)
-            {
-                continue;
-            }
-
-            int found = FindLastIndex(line.Text, query, searchLimit, comparison);
-            if (found < 0)
-            {
-                continue;
-            }
-
-            range = new TerminalTextRange(
-                new TerminalTextPosition(lineIndex, found),
-                new TerminalTextPosition(lineIndex, found + query.Length));
-            return true;
-        }
-
-        range = default;
-        return false;
-    }
-
-    private static int FindLastIndex(string text, string query, int searchLimit, StringComparison comparison)
-    {
-        int maxStart = searchLimit - query.Length;
-        for (int index = maxStart; index >= 0; index--)
-        {
-            if (string.Compare(text, index, query, 0, query.Length, comparison) == 0)
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
-
     private static TerminalTextRange? NormalizeSelection(TerminalTextRange? selection)
-    {
-        if (!selection.HasValue)
-        {
-            return null;
-        }
-
-        TerminalTextRange range = selection.Value;
-        if (range.Start.CompareTo(range.End) <= 0)
-        {
-            return range;
-        }
-
-        return new TerminalTextRange(range.End, range.Start);
-    }
+        => TerminalSelectionSearchModel.Normalize(selection);
 
     private static LineLayout CreateLineLayout(AnsiTerminalBuffer.TerminalRenderLineSnapshot line, bool ambiguousAsWide)
     {
@@ -2207,18 +2002,28 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         int StartCell,
         AnsiTerminalBuffer.TerminalRenderSegmentSnapshot Snapshot);
 
-    private readonly record struct TerminalTextPosition(int LineIndex, int TextIndex) : IComparable<TerminalTextPosition>
+    private sealed class SelectionLineList(VirtualLineLayouts lines) : IReadOnlyList<TerminalSelectionLine>
     {
-        public int CompareTo(TerminalTextPosition other)
-        {
-            int lineCompare = LineIndex.CompareTo(other.LineIndex);
-            return lineCompare != 0 ? lineCompare : TextIndex.CompareTo(other.TextIndex);
-        }
-    }
+        public int Count => lines.Count;
 
-    private readonly record struct TerminalTextRange(TerminalTextPosition Start, TerminalTextPosition End)
-    {
-        public bool IsEmpty => Start.LineIndex == End.LineIndex && Start.TextIndex == End.TextIndex;
+        public TerminalSelectionLine this[int index]
+        {
+            get
+            {
+                LineLayout line = lines[index];
+                return new TerminalSelectionLine(line.Text, line.TextCellMap);
+            }
+        }
+
+        public IEnumerator<TerminalSelectionLine> GetEnumerator()
+        {
+            for (int index = 0; index < Count; index++)
+            {
+                yield return this[index];
+            }
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     private static class DoubleUtil
