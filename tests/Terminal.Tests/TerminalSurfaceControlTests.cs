@@ -405,6 +405,44 @@ public sealed class TerminalSurfaceControlTests
     }
 
     [Fact]
+    public void SurfaceScrollAdapterClampsOffsetsWhenSnapshotShrinks()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+                Enumerable.Range(0, 100).Select(index => CreateLine(new string('x', 200) + index)).ToArray()));
+            surface.SetHorizontalOffset(double.PositiveInfinity);
+            surface.SetVerticalOffset(double.PositiveInfinity);
+            Assert.True(surface.HorizontalOffset > 0);
+            Assert.True(surface.VerticalOffset > 0);
+
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot([CreateLine("short")]));
+
+            Assert.Equal(0, surface.HorizontalOffset);
+            Assert.Equal(0, surface.VerticalOffset);
+        });
+    }
+
+    [Fact]
+    public void SurfaceMakeVisibleUsesScrollStateOffsetsAndReturnsIntersection()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+                Enumerable.Range(0, 100).Select(_ => CreateLine(new string('x', 200))).ToArray()));
+            var target = new Rect(700, 500, 40, 20);
+
+            Rect visible = surface.MakeVisible(surface, target);
+
+            Assert.Equal(target, visible);
+            Assert.Equal(target.Right - surface.ViewportWidth, surface.HorizontalOffset, precision: 3);
+            Assert.Equal(target.Bottom - surface.ViewportHeight, surface.VerticalOffset, precision: 3);
+        });
+    }
+
+    [Fact]
     public void Surface_Unloaded_ReleasesCachedDrawablesAndCanRenderAfterReload()
     {
         RunSta(() =>

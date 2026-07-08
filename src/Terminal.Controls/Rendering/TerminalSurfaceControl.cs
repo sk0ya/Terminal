@@ -69,16 +69,9 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     }
     private TerminalTextPosition _keyboardCursor;
     private TerminalTextPosition? _keyboardAnchor;
-    private double _extentWidth;
-    private double _extentHeight;
+    private readonly TerminalScrollState _scrollState = new();
     private double _lastReportedExtentWidth;
     private double _lastReportedExtentHeight;
-    private double _viewportWidth;
-    private double _viewportHeight;
-    private double _viewportFloorWidth;
-    private double _viewportFloorHeight;
-    private double _horizontalOffset;
-    private double _verticalOffset;
     // SGR 5/6 text blink: a timer toggles _blinkTextVisible on a fixed cadence and OnRender skips
     // blinking runs on the off phase. The timer only runs while blinking runs are actually on screen
     // (decided each paint), so a terminal with no blinking content never repaints for blink.
@@ -175,17 +168,17 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     public bool CanVerticallyScroll { get; set; } = true;
 
-    public double ExtentWidth => _extentWidth;
+    public double ExtentWidth => _scrollState.ExtentWidth;
 
-    public double ExtentHeight => _extentHeight;
+    public double ExtentHeight => _scrollState.ExtentHeight;
 
-    public double ViewportWidth => _viewportWidth;
+    public double ViewportWidth => _scrollState.ViewportWidth;
 
-    public double ViewportHeight => _viewportHeight;
+    public double ViewportHeight => _scrollState.ViewportHeight;
 
-    public double HorizontalOffset => _horizontalOffset;
+    public double HorizontalOffset => _scrollState.HorizontalOffset;
 
-    public double VerticalOffset => _verticalOffset;
+    public double VerticalOffset => _scrollState.VerticalOffset;
 
     public ScrollViewer? ScrollOwner { get; set; }
 
@@ -263,16 +256,11 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     internal void SetViewportFloor(Size size)
     {
-        double nextWidth = NormalizeViewportFloorExtent(size.Width);
-        double nextHeight = NormalizeViewportFloorExtent(size.Height);
-        if (DoubleUtil.AreClose(_viewportFloorWidth, nextWidth) &&
-            DoubleUtil.AreClose(_viewportFloorHeight, nextHeight))
+        if (!_scrollState.SetViewportFloor(size.Width, size.Height))
         {
             return;
         }
 
-        _viewportFloorWidth = nextWidth;
-        _viewportFloorHeight = nextHeight;
         UpdateScrollMetrics();
         InvalidateMeasure();
         InvalidateVisual();
@@ -546,8 +534,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             _cellSize.Height,
             padding.Left,
             padding.Top,
-            _horizontalOffset,
-            _verticalOffset);
+            HorizontalOffset,
+            VerticalOffset);
     }
 
     public void ScrollToLineEnd()
@@ -557,86 +545,102 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     public void LineUp()
     {
-        SetVerticalOffset(_verticalOffset - CharacterCellSize.Height);
+        MoveVertical(TerminalScrollDelta.LineBackward);
     }
 
     public void LineDown()
     {
-        SetVerticalOffset(_verticalOffset + CharacterCellSize.Height);
+        MoveVertical(TerminalScrollDelta.LineForward);
     }
 
     public void LineLeft()
     {
-        SetHorizontalOffset(_horizontalOffset - CharacterCellSize.Width);
+        MoveHorizontal(TerminalScrollDelta.LineBackward);
     }
 
     public void LineRight()
     {
-        SetHorizontalOffset(_horizontalOffset + CharacterCellSize.Width);
+        MoveHorizontal(TerminalScrollDelta.LineForward);
     }
 
     public void PageUp()
     {
-        SetVerticalOffset(_verticalOffset - _viewportHeight);
+        MoveVertical(TerminalScrollDelta.PageBackward);
     }
 
     public void PageDown()
     {
-        SetVerticalOffset(_verticalOffset + _viewportHeight);
+        MoveVertical(TerminalScrollDelta.PageForward);
     }
 
     public void PageLeft()
     {
-        SetHorizontalOffset(_horizontalOffset - _viewportWidth);
+        MoveHorizontal(TerminalScrollDelta.PageBackward);
     }
 
     public void PageRight()
     {
-        SetHorizontalOffset(_horizontalOffset + _viewportWidth);
+        MoveHorizontal(TerminalScrollDelta.PageForward);
     }
 
     public void MouseWheelUp()
     {
-        SetVerticalOffset(_verticalOffset - SystemParameters.WheelScrollLines * CharacterCellSize.Height);
+        MoveVertical(TerminalScrollDelta.WheelBackward, SystemParameters.WheelScrollLines);
     }
 
     public void MouseWheelDown()
     {
-        SetVerticalOffset(_verticalOffset + SystemParameters.WheelScrollLines * CharacterCellSize.Height);
+        MoveVertical(TerminalScrollDelta.WheelForward, SystemParameters.WheelScrollLines);
     }
 
     public void MouseWheelLeft()
     {
-        SetHorizontalOffset(_horizontalOffset - (SystemParameters.WheelScrollLines * CharacterCellSize.Width));
+        MoveHorizontal(TerminalScrollDelta.WheelBackward, SystemParameters.WheelScrollLines);
     }
 
     public void MouseWheelRight()
     {
-        SetHorizontalOffset(_horizontalOffset + (SystemParameters.WheelScrollLines * CharacterCellSize.Width));
+        MoveHorizontal(TerminalScrollDelta.WheelForward, SystemParameters.WheelScrollLines);
+    }
+
+    private void MoveHorizontal(TerminalScrollDelta delta, int wheelLines = 0)
+    {
+        EnsureMetrics();
+        if (_scrollState.MoveHorizontal(delta, _cellSize.Width, wheelLines))
+        {
+            ScrollOwner?.InvalidateScrollInfo();
+            InvalidateVisual();
+        }
+    }
+
+    private void MoveVertical(TerminalScrollDelta delta, int wheelLines = 0)
+    {
+        EnsureMetrics();
+        if (_scrollState.MoveVertical(delta, _cellSize.Height, wheelLines))
+        {
+            ScrollOwner?.InvalidateScrollInfo();
+            InvalidateVisual();
+        }
     }
 
     public void SetHorizontalOffset(double offset)
     {
-        double next = Math.Clamp(offset, 0, Math.Max(0, ExtentWidth - ViewportWidth));
-        if (DoubleUtil.AreClose(_horizontalOffset, next))
+        if (!_scrollState.SetHorizontalOffset(offset))
         {
             return;
         }
 
-        _horizontalOffset = next;
         ScrollOwner?.InvalidateScrollInfo();
         InvalidateVisual();
     }
 
     public void SetVerticalOffset(double offset)
     {
-        double next = Math.Clamp(offset, 0, Math.Max(0, ExtentHeight - ViewportHeight));
-        if (DoubleUtil.AreClose(_verticalOffset, next))
+        if (!_scrollState.SetVerticalOffset(offset))
         {
             return;
         }
 
-        _verticalOffset = next;
         ScrollOwner?.InvalidateScrollInfo();
         InvalidateVisual();
     }
@@ -648,26 +652,23 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             return rectangle;
         }
 
-        if (rectangle.Left < _horizontalOffset)
+        if (rectangle.IsEmpty)
         {
-            SetHorizontalOffset(rectangle.Left);
-        }
-        else if (rectangle.Right > _horizontalOffset + _viewportWidth)
-        {
-            SetHorizontalOffset(rectangle.Right - _viewportWidth);
+            return rectangle;
         }
 
-        if (rectangle.Top < _verticalOffset)
+        TerminalScrollMakeVisibleResult result = _scrollState.MakeVisible(new(
+            rectangle.Left, rectangle.Top, rectangle.Width, rectangle.Height));
+        if (result.HorizontalOffsetChanged || result.VerticalOffsetChanged)
         {
-            SetVerticalOffset(rectangle.Top);
-        }
-        else if (rectangle.Bottom > _verticalOffset + _viewportHeight)
-        {
-            SetVerticalOffset(rectangle.Bottom - _viewportHeight);
+            ScrollOwner?.InvalidateScrollInfo();
+            InvalidateVisual();
         }
 
-        rectangle.Intersect(new Rect(_horizontalOffset, _verticalOffset, _viewportWidth, _viewportHeight));
-        return rectangle;
+        TerminalScrollRectangle visible = result.VisibleRectangle;
+        return result.HasVisibleIntersection
+            ? new Rect(visible.Left, visible.Top, visible.Width, visible.Height)
+            : Rect.Empty;
     }
 
     protected override Size MeasureOverride(Size constraint)
@@ -676,8 +677,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         Size viewportSize = ResolveViewportSize(constraint);
         UpdateViewport(viewportSize);
         return new Size(
-            double.IsInfinity(constraint.Width) ? ExtentWidth : Math.Max(constraint.Width, _viewportFloorWidth),
-            double.IsInfinity(constraint.Height) ? ExtentHeight : Math.Max(constraint.Height, _viewportFloorHeight));
+            double.IsInfinity(constraint.Width) ? ExtentWidth : Math.Max(constraint.Width, _scrollState.ViewportFloorWidth),
+            double.IsInfinity(constraint.Height) ? ExtentHeight : Math.Max(constraint.Height, _scrollState.ViewportFloorHeight));
     }
 
     protected override Size ArrangeOverride(Size arrangeBounds)
@@ -702,17 +703,16 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             return;
         }
 
-        double contentLeft = padding.Left - _horizontalOffset;
-        double contentTop = padding.Top - _verticalOffset;
-        int firstVisibleLine = Math.Max(0, (int)Math.Floor(Math.Max(0, _verticalOffset - padding.Top) / _cellSize.Height));
-        int lastVisibleLine = Math.Min(
-            _lines.Count - 1,
-            (int)Math.Ceiling(Math.Max(0, (_verticalOffset - padding.Top) + _viewportHeight) / _cellSize.Height));
+        double contentLeft = padding.Left - HorizontalOffset;
+        double contentTop = padding.Top - VerticalOffset;
+        TerminalScrollLineWindow lineWindow = _scrollState.GetLineWindow(
+            _lines.Count, _cellSize.Height, padding.Top);
+        int firstVisibleLine = lineWindow.FirstVisibleLine;
+        int lastVisibleLine = lineWindow.LastVisibleLine;
 
         // Drop layouts that have scrolled out of view (plus a one-screen margin on each side so
         // small scrolls reuse them) to keep the cache bounded to roughly the viewport.
-        int visibleSpan = lastVisibleLine - firstVisibleLine + 1;
-        _lines.TrimOutsideWindow(firstVisibleLine - visibleSpan, lastVisibleLine + visibleSpan);
+        _lines.TrimOutsideWindow(lineWindow.CacheStartLine, lineWindow.CacheEndLine);
 
         TerminalTextRange? selection = NormalizeSelection(_selection);
         bool sawBlinkingContent = false;
@@ -1281,7 +1281,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         DpiScale dpi = VisualTreeHelper.GetDpi(this);
         double pixelsPerDip = dpi.PixelsPerDip;
         if (!_metricsDirty &&
-            DoubleUtil.AreClose(_pixelsPerDip, pixelsPerDip) &&
+            TerminalScrollState.AreClose(_pixelsPerDip, pixelsPerDip) &&
             _typeface is not null)
         {
             return;
@@ -1321,16 +1321,11 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     private void UpdateViewport(Size size)
     {
-        double nextWidth = double.IsInfinity(size.Width) ? 0 : Math.Max(0, size.Width);
-        double nextHeight = double.IsInfinity(size.Height) ? 0 : Math.Max(0, size.Height);
-        if (DoubleUtil.AreClose(_viewportWidth, nextWidth) &&
-            DoubleUtil.AreClose(_viewportHeight, nextHeight))
+        if (!_scrollState.SetViewport(size.Width, size.Height))
         {
             return;
         }
 
-        _viewportWidth = nextWidth;
-        _viewportHeight = nextHeight;
         // The extent height folds in the viewport's sub-row remainder, so recompute it whenever
         // the viewport size changes rather than only on snapshot/floor updates.
         UpdateScrollMetrics();
@@ -1341,72 +1336,31 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     {
         EnsureMetrics();
         Thickness padding = Padding;
-        _extentWidth = Math.Max(
-            _viewportFloorWidth,
-            padding.Left + padding.Right + (_maxCellLength * _cellSize.Width));
-        // The visible row count is a floor division of the viewport height by the cell height,
-        // so the viewport is usually a few pixels taller than a whole number of rows. Park that
-        // sub-row remainder below the last line by padding the extent with it: scrolling to the
-        // bottom then aligns rows to the viewport's top edge (e.g. after Ctrl+L) instead of
-        // revealing a stale sliver of the line above the active screen.
-        _extentHeight = Math.Max(
-            _viewportFloorHeight,
-            padding.Top + padding.Bottom + (_lines.Count * _cellSize.Height) + ComputeSubCellViewportRemainder(padding));
-        CoerceOffsets();
-        if (!DoubleUtil.AreClose(_extentWidth, _lastReportedExtentWidth) ||
-            !DoubleUtil.AreClose(_extentHeight, _lastReportedExtentHeight))
+        _scrollState.UpdateMetrics(new TerminalScrollContentMetrics(
+            _maxCellLength,
+            _lines.Count,
+            _cellSize.Width,
+            _cellSize.Height,
+            padding.Left,
+            padding.Top,
+            padding.Right,
+            padding.Bottom));
+        if (!TerminalScrollState.AreClose(ExtentWidth, _lastReportedExtentWidth) ||
+            !TerminalScrollState.AreClose(ExtentHeight, _lastReportedExtentHeight))
         {
             if (ScrollOwner is not null)
             {
-                _lastReportedExtentWidth = _extentWidth;
-                _lastReportedExtentHeight = _extentHeight;
+                _lastReportedExtentWidth = ExtentWidth;
+                _lastReportedExtentHeight = ExtentHeight;
                 ScrollOwner.InvalidateScrollInfo();
             }
         }
     }
 
-    private double ComputeSubCellViewportRemainder(Thickness padding)
-    {
-        double cellHeight = _cellSize.Height;
-        if (cellHeight <= 0)
-        {
-            return 0;
-        }
-
-        double contentViewportHeight = _viewportHeight - padding.Top - padding.Bottom;
-        if (contentViewportHeight <= 0)
-        {
-            return 0;
-        }
-
-        double rows = contentViewportHeight / cellHeight;
-        double fraction = rows - Math.Floor(rows);
-        // Treat a viewport that is (within rounding) an exact multiple of the cell height as
-        // having no remainder so floating-point error never inflates the extent by a full row.
-        if (fraction < 1e-6 || fraction > 1 - 1e-6)
-        {
-            return 0;
-        }
-
-        return fraction * cellHeight;
-    }
-
     private Size ResolveViewportSize(Size constraint)
     {
-        return new Size(
-            double.IsInfinity(constraint.Width) ? _viewportFloorWidth : Math.Max(constraint.Width, _viewportFloorWidth),
-            double.IsInfinity(constraint.Height) ? _viewportFloorHeight : Math.Max(constraint.Height, _viewportFloorHeight));
-    }
-
-    private static double NormalizeViewportFloorExtent(double value)
-    {
-        return double.IsFinite(value) && value > 0 ? value : 0;
-    }
-
-    private void CoerceOffsets()
-    {
-        _horizontalOffset = Math.Clamp(_horizontalOffset, 0, Math.Max(0, _extentWidth - _viewportWidth));
-        _verticalOffset = Math.Clamp(_verticalOffset, 0, Math.Max(0, _extentHeight - _viewportHeight));
+        (double width, double height) = _scrollState.ResolveViewport(constraint.Width, constraint.Height);
+        return new Size(width, height);
     }
 
     private void CoerceSelection()
@@ -1773,13 +1727,6 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
-    private static class DoubleUtil
-    {
-        public static bool AreClose(double left, double right)
-        {
-            return Math.Abs(left - right) < 0.01;
-        }
-    }
 }
 
 public sealed class TerminalHyperlinkActivatedEventArgs(string target) : EventArgs
