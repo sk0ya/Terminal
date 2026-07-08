@@ -313,7 +313,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             case Key.Right:
             {
                 int lineIndex = Math.Clamp(pos.LineIndex, 0, _lines.Count - 1);
-                LineLayout line = _lines[lineIndex];
+                TerminalLineLayout line = _lines[lineIndex];
                 if (pos.TextIndex < line.Text.Length)
                     return new TerminalTextPosition(lineIndex, pos.TextIndex + 1);
                 if (lineIndex < _lines.Count - 1)
@@ -390,7 +390,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         var lines = new List<IReadOnlyList<StyledRun>>();
         for (int lineIndex = range.Start.LineIndex; lineIndex <= range.End.LineIndex; lineIndex++)
         {
-            LineLayout line = _lines[lineIndex];
+            TerminalLineLayout line = _lines[lineIndex];
             int start;
             int end;
             if (_blockSelectionMode)
@@ -417,7 +417,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     // 1 行の [startTextIndex, endTextIndex) をセグメント境界で切り出し、各セグメントの解決済み
     // スタイルを持つ装飾付きランへ変換する。line.Text は各セグメント Text の連結なので、文字
     // オフセットを累積してテキストインデックス範囲と交差させる。
-    private static List<StyledRun> BuildStyledRuns(LineLayout line, int startTextIndex, int endTextIndex)
+    private static List<StyledRun> BuildStyledRuns(TerminalLineLayout line, int startTextIndex, int endTextIndex)
     {
         var runs = new List<StyledRun>();
         if (endTextIndex <= startTextIndex)
@@ -426,7 +426,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         }
 
         int charOffset = 0;
-        foreach (SegmentLayout segment in line.Segments)
+        foreach (TerminalLineSegmentLayout segment in line.Segments)
         {
             AnsiTerminalBuffer.TerminalRenderSegmentSnapshot snapshot = segment.Snapshot;
             int segStart = charOffset;
@@ -519,7 +519,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         TerminalSurfaceCoordinateMapper coordinates = CreateCoordinateMapper();
         lineIndex = coordinates.GetLineIndex(point.Y, _lines.Count);
 
-        LineLayout line = _lines[lineIndex];
+        TerminalLineLayout line = _lines[lineIndex];
         textIndex = line.TextCellMap.GetTextIndex(coordinates.GetCellColumn(point.X));
         return true;
     }
@@ -704,7 +704,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         bool sawBlinkingContent = false;
         for (int lineIndex = firstVisibleLine; lineIndex <= lastVisibleLine; lineIndex++)
         {
-            LineLayout line = _lines[lineIndex];
+            TerminalLineLayout line = _lines[lineIndex];
             double top = contentTop + (lineIndex * _cellSize.Height);
             DrawLineBackgrounds(drawingContext, line, top, contentLeft);
             if (_blockSelectionMode && selection.HasValue)
@@ -826,7 +826,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             return;
         }
 
-        LineLayout line = _lines[lineIndex];
+        TerminalLineLayout line = _lines[lineIndex];
         string text = line.Text;
         if (string.IsNullOrEmpty(text))
         {
@@ -870,7 +870,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             return;
         }
 
-        LineLayout line = _lines[lineIndex];
+        TerminalLineLayout line = _lines[lineIndex];
         SelectRange(new TerminalTextRange(
             new TerminalTextPosition(lineIndex, 0),
             new TerminalTextPosition(lineIndex, line.Text.Length)));
@@ -1008,9 +1008,9 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         }
     }
 
-    private void DrawLineBackgrounds(DrawingContext drawingContext, LineLayout line, double top, double contentLeft)
+    private void DrawLineBackgrounds(DrawingContext drawingContext, TerminalLineLayout line, double top, double contentLeft)
     {
-        foreach (SegmentLayout segment in line.Segments)
+        foreach (TerminalLineSegmentLayout segment in line.Segments)
         {
             Rect rect = new(
                 contentLeft + (segment.StartCell * _cellSize.Width),
@@ -1025,7 +1025,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         DrawingContext drawingContext,
         TerminalTextRange? selection,
         int lineIndex,
-        LineLayout line,
+        TerminalLineLayout line,
         double top,
         double contentLeft)
     {
@@ -1084,10 +1084,10 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     // top-left (cell-based X, Y = 0); OnRender translates them by the current scroll/padding offsets.
     // The commands are shaped once and reused across repaints until the line content or font metrics
     // change, so OnRender no longer re-shapes every visible line on every frame.
-    private LineDrawable BuildLineDrawable(LineLayout line)
+    private LineDrawable BuildLineDrawable(TerminalLineLayout line)
     {
         var commands = new List<IDrawCommand>();
-        foreach (SegmentLayout segment in line.Segments)
+        foreach (TerminalLineSegmentLayout segment in line.Segments)
         {
             if (string.IsNullOrEmpty(segment.Snapshot.Text))
             {
@@ -1458,7 +1458,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             return;
         }
 
-        LineLayout line = _lines[range.Start.LineIndex];
+        TerminalLineLayout line = _lines[range.Start.LineIndex];
         int startColumn = line.TextCellMap.GetCellColumn(range.Start.TextIndex, preferTrailingEdge: false);
         int endColumn = range.End.LineIndex == range.Start.LineIndex
             ? line.TextCellMap.GetCellColumn(range.End.TextIndex, preferTrailingEdge: true)
@@ -1498,7 +1498,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             return false;
         }
 
-        LineLayout line = _lines[lineIndex];
+        TerminalLineLayout line = _lines[lineIndex];
         if (!TerminalHyperlinkDetector.TryResolve(
                 line.Text,
                 line.TextCellMap,
@@ -1517,33 +1517,6 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     private static TerminalTextRange? NormalizeSelection(TerminalTextRange? selection)
         => TerminalSelectionSearchModel.Normalize(selection);
-
-    private static LineLayout CreateLineLayout(AnsiTerminalBuffer.TerminalRenderLineSnapshot line, bool ambiguousAsWide)
-    {
-        string text = string.Concat(line.Segments.Select(static segment => segment.Text));
-        var segments = new SegmentLayout[line.Segments.Length];
-        int cellOffset = 0;
-
-        for (int index = 0; index < line.Segments.Length; index++)
-        {
-            AnsiTerminalBuffer.TerminalRenderSegmentSnapshot seg = line.Segments[index];
-            segments[index] = new SegmentLayout(cellOffset, seg);
-
-            cellOffset += seg.CellLength;
-        }
-        return new LineLayout(
-            text,
-            line.CellLength,
-            segments,
-            segments.Select(static segment => new TerminalHyperlinkSegment(
-                segment.StartCell,
-                segment.Snapshot.CellLength,
-                segment.Snapshot.Hyperlink)).ToArray(),
-            TerminalTextCellMap.Create(
-                line.Segments.Select(static segment => (segment.Text, segment.CellLength)),
-                line.CellLength,
-                ambiguousAsWide));
-    }
 
     private Brush GetBrush(Color color)
     {
@@ -1593,9 +1566,9 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     // so it is reused across repaints and discarded together with its layout on eviction.
     private sealed class VirtualLineLayouts
     {
-        private sealed class Entry(LineLayout layout)
+        private sealed class Entry(TerminalLineLayout layout)
         {
-            public LineLayout Layout { get; } = layout;
+            public TerminalLineLayout Layout { get; } = layout;
             public LineDrawable? Drawable { get; set; }
         }
 
@@ -1625,13 +1598,13 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             }
         }
 
-        public LineLayout this[int index] => GetEntry(index).Layout;
+        public TerminalLineLayout this[int index] => GetEntry(index).Layout;
 
         private Entry GetEntry(int index)
         {
             if (!_cache.TryGetValue(index, out Entry? entry))
             {
-                entry = new Entry(CreateLineLayout(_snapshot[index], _ambiguousAsWide));
+                entry = new Entry(TerminalLineLayoutBuilder.Create(_snapshot[index], _ambiguousAsWide));
                 _cache[index] = entry;
             }
 
@@ -1640,7 +1613,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
         // Returns the shaped paint commands for a line, building them once via <paramref name="builder"/>
         // and reusing them on subsequent repaints until the entry is evicted or invalidated.
-        public LineDrawable GetDrawable(int index, Func<LineLayout, LineDrawable> builder)
+        public LineDrawable GetDrawable(int index, Func<TerminalLineLayout, LineDrawable> builder)
         {
             Entry entry = GetEntry(index);
             return entry.Drawable ??= builder(entry.Layout);
@@ -1903,17 +1876,6 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         public override bool StylisticSet20 => false;
     }
 
-    private readonly record struct LineLayout(
-        string Text,
-        int CellLength,
-        SegmentLayout[] Segments,
-        TerminalHyperlinkSegment[] HyperlinkSegments,
-        TerminalTextCellMap TextCellMap);
-
-    private readonly record struct SegmentLayout(
-        int StartCell,
-        AnsiTerminalBuffer.TerminalRenderSegmentSnapshot Snapshot);
-
     private sealed class SelectionLineList(VirtualLineLayouts lines) : IReadOnlyList<TerminalSelectionLine>
     {
         public int Count => lines.Count;
@@ -1922,7 +1884,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         {
             get
             {
-                LineLayout line = lines[index];
+                TerminalLineLayout line = lines[index];
                 return new TerminalSelectionLine(line.Text, line.TextCellMap);
             }
         }
