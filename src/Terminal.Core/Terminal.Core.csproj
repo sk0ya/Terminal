@@ -8,12 +8,11 @@
          sk0ya.Terminal.Controls. -->
     <IsPackable>false</IsPackable>
     <PackageId>sk0ya.Terminal.Core</PackageId>
-    <Version>1.0.9</Version>
     <Authors>shigekazukoya</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/sk0ya/Terminal</RepositoryUrl>
-    <Description>Core terminal engine — ConPty sessions, ANSI buffer, input encoding, and logging for the Terminal project.</Description>
-    <PackageTags>terminal;conpty;wpf;core</PackageTags>
+    <Description>Core services — ConPTY sessions, settings, logging, and Unicode support for the Terminal project.</Description>
+    <PackageTags>terminal;conpty;core</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>

@@ -46,13 +46,28 @@ Terminal/
 └── tests/Terminal.Tests/    # 単体テストとConPTY smoke test
 ```
 
-依存方向は `Terminal.App` → `Terminal.Controls` → `Terminal.Core` です。
-`sk0ya.Terminal.Controls` NuGetパッケージには`Terminal.Core.dll`も同梱されます。
+プロジェクト参照は `Terminal.App` → `Terminal.Controls`、`Terminal.App` →
+`Terminal.Core`、`Terminal.Controls` → `Terminal.Core` の一方向です。CoreはWPFに依存せず、
+ControlsがWPF境界を所有します。内部公開はテスト用の`Terminal.Tests`に加え、依存方向に
+沿ったCore→Controls/AppおよびControls→Appだけに限定しています。
+
+`sk0ya.Terminal.Controls` NuGetパッケージには、同じバージョンの
+`Terminal.Controls.dll`と`Terminal.Core.dll`が同梱されます。Core単体のパッケージは
+公開しません。
 
 パッケージ生成:
 
 ```powershell
 dotnet pack src/Terminal.Controls/Terminal.Controls.csproj -c Release -o artifacts/packages
+```
+
+生成パッケージを新規WPFプロジェクトで検証する例:
+
+```powershell
+dotnet new wpf -n Terminal.PackageConsumer -o artifacts/Terminal.PackageConsumer -f net9.0
+dotnet add artifacts/Terminal.PackageConsumer package sk0ya.Terminal.Controls `
+  --version 1.0.26 --source artifacts/packages
+dotnet build artifacts/Terminal.PackageConsumer --no-restore
 ```
 
 ## 検証対象アプリ
