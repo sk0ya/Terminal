@@ -26,7 +26,8 @@ public partial class TerminalTabView : UserControl
     private static readonly TimeSpan InitialOutputTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan IdleOutputTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan CursorBlinkInterval = TimeSpan.FromMilliseconds(530);
-    private static readonly TimeSpan MinDocumentRenderInterval = TimeSpan.FromMilliseconds(33);
+    private static readonly TimeSpan MinDocumentRenderInterval = TimeSpan.FromMilliseconds(16);
+    private const int MaxOutputBatchCharacters = 64 * 1024;
     private static readonly TimeSpan SynchronizedUpdateRenderTimeout = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan ExitOutputDrainInterval = TimeSpan.FromMilliseconds(50);
     private static readonly TimeSpan CloseShutdownTimeout = TimeSpan.FromSeconds(2);
@@ -1110,6 +1111,9 @@ public partial class TerminalTabView : UserControl
         {
             _session.Write(text);
             _cursorBlinkVisible = true;
+            // The next output is normally the shell's echo for this input. Render that echo
+            // immediately instead of making interactive typing wait for the output throttle.
+            _outputBatch.SetPrioritizeNextRender(true);
             return true;
         }
         catch (Exception ex)
@@ -1139,7 +1143,10 @@ public partial class TerminalTabView : UserControl
 
     private void FlushPendingOutput(bool forceEndTransientModes)
     {
-        string? nextBatch = _outputBatch.Drain();
+        // Bound the parser/render work performed by one dispatcher callback. A command can emit
+        // megabytes in a single pipe read; processing all of it here would starve keyboard and IME
+        // messages on the UI thread. VtParser preserves partial sequences across chunks.
+        string? nextBatch = _outputBatch.Drain(MaxOutputBatchCharacters);
 
         if (!string.IsNullOrEmpty(nextBatch))
         {
@@ -1854,7 +1861,7 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        _ = Dispatcher.BeginInvoke(FlushPendingProxyTextAfterImeConfirm, DispatcherPriority.Background);
+        _ = Dispatcher.BeginInvoke(FlushPendingProxyTextAfterImeConfirm, DispatcherPriority.Input);
     }
 
     private void FlushPendingProxyTextAfterImeConfirm()

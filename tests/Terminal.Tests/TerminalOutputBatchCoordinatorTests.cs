@@ -29,6 +29,28 @@ public sealed class TerminalOutputBatchCoordinatorTests
     }
 
     [Fact]
+    public void BoundedDrainPreservesTheRemainderForAFollowingDispatcherPass()
+    {
+        var coordinator = new TerminalOutputBatchCoordinator();
+        Assert.True(coordinator.Enqueue("abcdef"));
+
+        Assert.Equal("abc", coordinator.Drain(3));
+        Assert.True(coordinator.EnsureFlushScheduled());
+        Assert.Equal("def", coordinator.Drain(3));
+        Assert.Null(coordinator.Drain(3));
+    }
+
+    [Fact]
+    public void DrainRejectsANonPositiveLimitWithoutConsumingOutput()
+    {
+        var coordinator = new TerminalOutputBatchCoordinator();
+        Assert.True(coordinator.Enqueue("pending"));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => coordinator.Drain(0));
+        Assert.Equal("pending", coordinator.Drain());
+    }
+
+    [Fact]
     public void ClearDropsPendingOutputAndAllowsNewSchedule()
     {
         var coordinator = new TerminalOutputBatchCoordinator();

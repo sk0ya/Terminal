@@ -29,12 +29,18 @@ internal sealed class TerminalOutputBatchCoordinator
         }
     }
 
-    public string? Drain()
+    public string? Drain(int maximumCharacters = int.MaxValue)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCharacters);
+
         lock (_syncRoot)
         {
-            string? batch = _pending.Length > 0 ? _pending.ToString() : null;
-            _pending.Clear();
+            int count = Math.Min(_pending.Length, maximumCharacters);
+            string? batch = count > 0 ? _pending.ToString(0, count) : null;
+            if (count > 0)
+            {
+                _pending.Remove(0, count);
+            }
             _flushScheduled = false;
             return batch;
         }
