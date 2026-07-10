@@ -1,3 +1,4 @@
+using System.IO;
 using Terminal;
 
 namespace Terminal.Tests;
@@ -25,5 +26,39 @@ public sealed class TerminalAppCoordinatorTests
     {
         Assert.True(TerminalSettingsEditor.TryNormalizeFontSize(raw, out double actual));
         Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("top", true, true, "Bottom", -8, 4, 4)]
+    [InlineData("bottom", false, true, "Top", -8, -4, -4)]
+    [InlineData("left", false, false, "Right", 4, -8, -6)]
+    [InlineData("right", false, false, "Left", -4, -8, -6)]
+    [InlineData("invalid", true, true, "Bottom", -8, 4, 4)]
+    public void ResolvesWindowLayout(
+        string placement,
+        bool isTop,
+        bool isHorizontal,
+        string popupEdge,
+        double horizontalOffset,
+        double profileOffset,
+        double appMenuOffset)
+    {
+        TerminalWindowLayout layout = TerminalWindowLayout.Resolve(placement);
+
+        Assert.Equal(isTop, layout.IsTop);
+        Assert.Equal(isHorizontal, layout.IsHorizontal);
+        Assert.Equal(popupEdge, layout.PopupEdge.ToString());
+        Assert.Equal(horizontalOffset, layout.HorizontalOffset);
+        Assert.Equal(profileOffset, layout.ProfilePickerVerticalOffset);
+        Assert.Equal(appMenuOffset, layout.AppMenuVerticalOffset);
+    }
+
+    [Fact]
+    public void InvalidWorkingDirectoryDoesNotLeakUnusablePath()
+    {
+        string missing = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+
+        Assert.False(TerminalSettingsEditor.TryNormalizeWorkingDirectory(missing, out string normalized));
+        Assert.Empty(normalized);
     }
 }

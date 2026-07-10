@@ -465,9 +465,9 @@ public partial class MainWindow : Window
 
     private void ApplyTabStripPlacement(string? rawPlacement)
     {
-        string placement = TerminalTabStripPlacementCatalog.Normalize(rawPlacement);
+        TerminalWindowLayout layout = TerminalWindowLayout.Resolve(rawPlacement);
+        string placement = layout.Placement;
         _settings.TabStripPlacement = placement;
-        bool isTop = placement == TerminalTabStripPlacementCatalog.Top;
 
         TopTabHost.Content = null;
         LeftTabHost.Content = null;
@@ -497,22 +497,21 @@ public partial class MainWindow : Window
         }
 
         WindowTitleText.Visibility = Visibility.Collapsed;
-        TopChromeBar.Visibility = isTop ? Visibility.Visible : Visibility.Collapsed;
-        TopChromeRow.Height = isTop ? new GridLength(40) : new GridLength(0);
+        TopChromeBar.Visibility = layout.IsTop ? Visibility.Visible : Visibility.Collapsed;
+        TopChromeRow.Height = layout.IsTop ? new GridLength(40) : new GridLength(0);
         if (WindowChrome.GetWindowChrome(this) is WindowChrome chrome)
         {
-            chrome.CaptionHeight = isTop ? 40 : 0;
+            chrome.CaptionHeight = layout.IsTop ? 40 : 0;
         }
 
-        ConfigureChromePanelLayout(placement);
-        ConfigureProfilePickerPlacement(placement);
-        ConfigureAppMenuPlacement(placement);
+        ConfigureChromePanelLayout(layout.IsHorizontal);
+        ConfigurePopupPlacement(ProfilePickerPopup, layout.PopupEdge, layout.HorizontalOffset, layout.ProfilePickerVerticalOffset);
+        ConfigurePopupPlacement(AppMenuPopup, layout.PopupEdge, layout.HorizontalOffset, layout.AppMenuVerticalOffset);
         UpdateTabVisuals();
     }
 
-    private void ConfigureChromePanelLayout(string placement)
+    private void ConfigureChromePanelLayout(bool isHorizontal)
     {
-        bool isHorizontal = TerminalTabStripPlacementCatalog.IsHorizontal(placement);
         bool isVertical = !isHorizontal;
 
         Grid.SetRow(AppMenuButton, 0);
@@ -572,58 +571,21 @@ public partial class MainWindow : Window
         NewTabButton.VerticalAlignment = isHorizontal ? VerticalAlignment.Stretch : VerticalAlignment.Top;
     }
 
-    private void ConfigureProfilePickerPlacement(string placement)
+    private static void ConfigurePopupPlacement(
+        Popup popup,
+        TerminalPopupEdge edge,
+        double horizontalOffset,
+        double verticalOffset)
     {
-        switch (TerminalTabStripPlacementCatalog.Normalize(placement))
+        popup.Placement = edge switch
         {
-            case TerminalTabStripPlacementCatalog.Bottom:
-                ProfilePickerPopup.Placement = PlacementMode.Top;
-                ProfilePickerPopup.HorizontalOffset = -8;
-                ProfilePickerPopup.VerticalOffset = -4;
-                break;
-            case TerminalTabStripPlacementCatalog.Left:
-                ProfilePickerPopup.Placement = PlacementMode.Right;
-                ProfilePickerPopup.HorizontalOffset = 4;
-                ProfilePickerPopup.VerticalOffset = -8;
-                break;
-            case TerminalTabStripPlacementCatalog.Right:
-                ProfilePickerPopup.Placement = PlacementMode.Left;
-                ProfilePickerPopup.HorizontalOffset = -4;
-                ProfilePickerPopup.VerticalOffset = -8;
-                break;
-            default:
-                ProfilePickerPopup.Placement = PlacementMode.Bottom;
-                ProfilePickerPopup.HorizontalOffset = -8;
-                ProfilePickerPopup.VerticalOffset = 4;
-                break;
-        }
-    }
-
-    private void ConfigureAppMenuPlacement(string placement)
-    {
-        switch (TerminalTabStripPlacementCatalog.Normalize(placement))
-        {
-            case TerminalTabStripPlacementCatalog.Bottom:
-                AppMenuPopup.Placement = PlacementMode.Top;
-                AppMenuPopup.HorizontalOffset = -8;
-                AppMenuPopup.VerticalOffset = -4;
-                break;
-            case TerminalTabStripPlacementCatalog.Left:
-                AppMenuPopup.Placement = PlacementMode.Right;
-                AppMenuPopup.HorizontalOffset = 4;
-                AppMenuPopup.VerticalOffset = -6;
-                break;
-            case TerminalTabStripPlacementCatalog.Right:
-                AppMenuPopup.Placement = PlacementMode.Left;
-                AppMenuPopup.HorizontalOffset = -4;
-                AppMenuPopup.VerticalOffset = -6;
-                break;
-            default:
-                AppMenuPopup.Placement = PlacementMode.Bottom;
-                AppMenuPopup.HorizontalOffset = -8;
-                AppMenuPopup.VerticalOffset = 4;
-                break;
-        }
+            TerminalPopupEdge.Top => PlacementMode.Top,
+            TerminalPopupEdge.Left => PlacementMode.Left,
+            TerminalPopupEdge.Right => PlacementMode.Right,
+            _ => PlacementMode.Bottom
+        };
+        popup.HorizontalOffset = horizontalOffset;
+        popup.VerticalOffset = verticalOffset;
     }
 
     private void ChromePanelLayoutGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)

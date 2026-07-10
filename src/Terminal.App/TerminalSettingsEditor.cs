@@ -12,8 +12,15 @@ internal static class TerminalSettingsEditor
             string candidate = string.IsNullOrWhiteSpace(rawPath)
                 ? Environment.CurrentDirectory
                 : Environment.ExpandEnvironmentVariables(rawPath.Trim());
-            workingDirectory = Path.GetFullPath(candidate);
-            return Directory.Exists(workingDirectory);
+            string fullPath = Path.GetFullPath(candidate);
+            if (!Directory.Exists(fullPath))
+            {
+                workingDirectory = string.Empty;
+                return false;
+            }
+
+            workingDirectory = fullPath;
+            return true;
         }
         catch
         {
@@ -24,14 +31,24 @@ internal static class TerminalSettingsEditor
 
     internal static bool TryNormalizeFontSize(string? rawValue, out double fontSize)
     {
-        if (!double.TryParse(rawValue?.Trim(), out double parsed)) { fontSize = 0; return false; }
+        if (!double.TryParse(rawValue?.Trim(), out double parsed))
+        {
+            fontSize = 0;
+            return false;
+        }
+
         fontSize = Math.Round(Math.Clamp(parsed, 11, 24));
         return true;
     }
 
     internal static bool TryNormalizeScrollbackLimit(string? rawValue, out int scrollbackLimit)
     {
-        if (!int.TryParse(rawValue?.Trim(), out int parsed)) { scrollbackLimit = 0; return false; }
+        if (!int.TryParse(rawValue?.Trim(), out int parsed))
+        {
+            scrollbackLimit = 0;
+            return false;
+        }
+
         scrollbackLimit = TerminalAppSettings.ClampScrollbackLimit(parsed);
         return true;
     }
