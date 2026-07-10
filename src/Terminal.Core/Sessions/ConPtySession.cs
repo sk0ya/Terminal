@@ -1,33 +1,18 @@
 using Microsoft.Win32.SafeHandles;
-using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Text;
 
 namespace Terminal.Sessions;
 
 public sealed class ConPtySession : ITerminalSession
 {
-    private const uint ExtendedStartupInfoPresent = 0x00080000;
-    private const uint CreateUnicodeEnvironment = 0x00000400;
-    private const int StartfUseStdHandles = 0x00000100;
-    private const int ProcThreadAttributePseudoConsole = 0x00020016;
-    private const int JobObjectExtendedLimitInformation = 9;
-    private const uint JobObjectLimitKillOnJobClose = 0x00002000;
-    private const uint WaitTimeout = 0x00000102;
-
     private readonly object _syncRoot = new();
     private readonly string? _workingDirectory;
     private readonly IReadOnlyDictionary<string, string?>? _environmentVariables;
     private readonly ConPtyHandleOwner _handles = new();
     private int _processId;
-    private Stream? _inputStream;
-    private StreamWriter? _inputWriter;
-    private StreamReader? _outputReader;
-    private CancellationTokenSource? _readCancellation;
-    private Task? _readTask;
-    private CancellationTokenSource? _exitMonitorCancellation;
-    private Task? _exitMonitorTask;
+    private ConPtyIoPump? _ioPump;
+    private ConPtyProcessLifetime? _processLifetime;
     private bool _started;
     private DateTime _startedAtUtc;
     private DateTime _lastOutputAtUtc;
@@ -80,7 +65,12 @@ public sealed class ConPtySession : ITerminalSession
         {
             new ConPtyPseudoConsoleFactory(WindowsConPtyPseudoConsoleApi.Instance)
                 .Create(columns, rows, _handles);
-            LaunchProcess(commandLine);
+            _processId = new ConPtyProcessLauncher(WindowsConPtyProcessApi.Instance)
+                .Launch(commandLine, _workingDirectory, _environmentVariables, _handles);
+            _processLifetime = new ConPtyProcessLifetime(
+                WindowsConPtyProcessLifetimeApi.Instance,
+                _handles.Process,
+                _handles.Job);
         }
         catch
         {
@@ -107,7 +97,10 @@ public sealed class ConPtySession : ITerminalSession
         }
 
         StartOutputReadLoop();
-        StartExitMonitor();
+        _processLifetime!.StartMonitoring(exitCode =>
+        {
+            if (!_disposed) Exited?.Invoke(this, exitCode);
+        });
     }
 
     public void Write(string input)
@@ -116,8 +109,7 @@ public sealed class ConPtySession : ITerminalSession
 
         lock (_syncRoot)
         {
-            _inputWriter?.Write(input);
-            _inputWriter?.Flush();
+            _ioPump?.Write(input);
         }
     }
 
@@ -131,9 +123,7 @@ public sealed class ConPtySession : ITerminalSession
 
         lock (_syncRoot)
         {
-            _inputWriter?.Flush();
-            _inputStream?.Write(input, 0, input.Length);
-            _inputStream?.Flush();
+            _ioPump?.Write(input);
         }
     }
 
@@ -152,13 +142,12 @@ public sealed class ConPtySession : ITerminalSession
     {
         _ = idleOutputTimeout;
 
-        IntPtr processHandle = _handles.Process;
-        if (_disposed || !_started || processHandle == IntPtr.Zero)
+        if (_disposed || !_started || _processLifetime is null)
         {
             return false;
         }
 
-        if (WaitForSingleObject(processHandle, 0) != WaitTimeout)
+        if (!_processLifetime.IsRunning)
         {
             return false;
         }
@@ -172,23 +161,7 @@ public sealed class ConPtySession : ITerminalSession
 
     public bool TryForceUnlock(uint exitCode = 1)
     {
-        IntPtr processHandle = _handles.Process;
-        if (_disposed || processHandle == IntPtr.Zero)
-        {
-            return false;
-        }
-
-        if (WaitForSingleObject(processHandle, 0) != WaitTimeout)
-        {
-            return false;
-        }
-
-        if (_handles.Job != IntPtr.Zero)
-        {
-            return TerminateJobObject(_handles.Job, exitCode);
-        }
-
-        return TerminateProcess(processHandle, exitCode);
+        return !_disposed && _processLifetime?.TryTerminate(exitCode) == true;
     }
 
     public void Dispose()
@@ -198,13 +171,8 @@ public sealed class ConPtySession : ITerminalSession
 
     public async ValueTask DisposeAsync()
     {
-        StreamWriter? inputWriter;
-        Stream? inputStream;
-        StreamReader? outputReader;
-        CancellationTokenSource? readCancellation;
-        Task? readTask;
-        CancellationTokenSource? exitMonitorCancellation;
-        Task? exitMonitorTask;
+        ConPtyIoPump? ioPump;
+        ConPtyProcessLifetime? processLifetime;
         ConPtyOwnedHandles? handles;
 
         lock (_syncRoot)
@@ -216,164 +184,30 @@ public sealed class ConPtySession : ITerminalSession
 
             _disposed = true;
 
-            inputWriter = _inputWriter;
-            inputStream = _inputStream;
-            outputReader = _outputReader;
-            readCancellation = _readCancellation;
-            readTask = _readTask;
-            exitMonitorCancellation = _exitMonitorCancellation;
-            exitMonitorTask = _exitMonitorTask;
+            ioPump = _ioPump;
+            processLifetime = _processLifetime;
             handles = _handles.DetachForShutdown();
 
-            _inputWriter = null;
-            _inputStream = null;
-            _outputReader = null;
-            _readCancellation = null;
-            _readTask = null;
-            _exitMonitorCancellation = null;
-            _exitMonitorTask = null;
+            _ioPump = null;
+            _processLifetime = null;
         }
 
-        TryWriteExit(inputStream, inputWriter);
-
-        readCancellation?.Cancel();
-        exitMonitorCancellation?.Cancel();
-
-        DisposeQuietly(inputWriter);
-        DisposeQuietly(inputStream);
-        DisposeQuietly(outputReader);
-        handles?.CloseCommunicationHandles(ClosePseudoConsoleHandle);
-
-        await WaitForTaskAsync(readTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
-        await WaitForTaskAsync(exitMonitorTask, TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
-
-        IntPtr processHandle = handles?.Process ?? IntPtr.Zero;
-        IntPtr jobHandle = handles?.Job ?? IntPtr.Zero;
-        if (processHandle != IntPtr.Zero && !await WaitForProcessExitAsync(processHandle, TimeSpan.FromMilliseconds(250)).ConfigureAwait(false))
+        ioPump?.TryRequestShellExit();
+        if (ioPump is not null)
         {
-            if (jobHandle != IntPtr.Zero)
-            {
-                _ = TerminateJobObject(jobHandle, 1);
-            }
-            else
-            {
-                _ = TerminateProcess(processHandle, 1);
-            }
-
-            _ = await WaitForProcessExitAsync(processHandle, TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+            await ioPump.DisposeAsync().ConfigureAwait(false);
         }
-
-        await WaitForTaskAsync(readTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
-        await WaitForTaskAsync(exitMonitorTask, TimeSpan.FromMilliseconds(200)).ConfigureAwait(false);
-
-        handles?.CloseProcessHandles(static handle => _ = CloseHandle(handle));
-
-        DisposeQuietly(readCancellation);
-        DisposeQuietly(exitMonitorCancellation);
+        if (processLifetime is not null)
+        {
+            await processLifetime.ShutdownAsync(handles, ClosePseudoConsoleHandle).ConfigureAwait(false);
+        }
+        else
+        {
+            handles?.CloseCommunicationHandles(ClosePseudoConsoleHandle);
+            handles?.CloseProcessHandles(WindowsConPtyProcessLifetimeApi.Instance.CloseHandle);
+        }
 
         GC.SuppressFinalize(this);
-    }
-
-    private void LaunchProcess(string commandLine)
-    {
-        IntPtr attributeList = IntPtr.Zero;
-        IntPtr attributeListSize = IntPtr.Zero;
-        IntPtr environmentBlock = IntPtr.Zero;
-        _ = InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeListSize);
-
-        if (attributeListSize == IntPtr.Zero)
-        {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to get attribute list size.");
-        }
-
-        try
-        {
-            attributeList = Marshal.AllocHGlobal(attributeListSize);
-
-            if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeListSize))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to initialize attribute list.");
-            }
-
-            IntPtr pseudoConsoleValue = _handles.PseudoConsole;
-
-            if (!UpdateProcThreadAttribute(
-                    attributeList,
-                    0,
-                    (IntPtr)ProcThreadAttributePseudoConsole,
-                    pseudoConsoleValue,
-                    (IntPtr)IntPtr.Size,
-                    IntPtr.Zero,
-                    IntPtr.Zero))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to update pseudo console attribute.");
-            }
-
-            var startupInfo = new StartupInfoEx
-            {
-                StartupInfo = new StartupInfo
-                {
-                    cb = Marshal.SizeOf<StartupInfoEx>(),
-                    dwFlags = StartfUseStdHandles,
-                    hStdInput = IntPtr.Zero,
-                    hStdOutput = IntPtr.Zero,
-                    hStdError = IntPtr.Zero
-                },
-                lpAttributeList = attributeList
-            };
-            var commandLineBuffer = new StringBuilder(commandLine);
-            environmentBlock = AllocateEnvironmentBlock(_environmentVariables);
-            uint creationFlags = ExtendedStartupInfoPresent;
-            if (environmentBlock != IntPtr.Zero)
-            {
-                creationFlags |= CreateUnicodeEnvironment;
-            }
-
-            if (!CreateProcess(
-                    null,
-                    commandLineBuffer,
-                    IntPtr.Zero,
-                    IntPtr.Zero,
-                    false,
-                    creationFlags,
-                    environmentBlock,
-                    _workingDirectory,
-                    ref startupInfo,
-                    out ProcessInformation processInfo))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), $"Failed to launch command: {commandLine}");
-            }
-
-            _handles.SetProcess(processInfo.hProcess, processInfo.hThread);
-            _processId = processInfo.dwProcessId;
-            ConfigureProcessJob(processInfo.hProcess);
-
-            _handles.ReleasePseudoConsoleEndpoints();
-        }
-        finally
-        {
-            if (attributeList != IntPtr.Zero)
-            {
-                DeleteProcThreadAttributeList(attributeList);
-                Marshal.FreeHGlobal(attributeList);
-            }
-
-            if (environmentBlock != IntPtr.Zero)
-            {
-                Marshal.FreeHGlobal(environmentBlock);
-            }
-        }
-    }
-
-    private static IntPtr AllocateEnvironmentBlock(IReadOnlyDictionary<string, string?>? overrides)
-    {
-        string[] variables = ConPtyProcessEnvironment.Build(overrides);
-        if (variables.Length == 0)
-        {
-            return IntPtr.Zero;
-        }
-
-        return Marshal.StringToHGlobalUni(string.Join('\0', variables) + "\0\0");
     }
 
     private void StartOutputReadLoop()
@@ -383,218 +217,13 @@ public sealed class ConPtySession : ITerminalSession
             throw new InvalidOperationException("ConPTY pipes are not initialized.");
         }
 
-        _inputStream = new FileStream(_handles.InputWrite, FileAccess.Write, 4096, isAsync: false);
-        _inputWriter = new StreamWriter(
-            _inputStream,
-            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            bufferSize: 4096,
-            leaveOpen: true)
+        _ioPump = new ConPtyIoPump(_handles.InputWrite, _handles.OutputRead);
+        _ = _ioPump.Start(output =>
         {
-            AutoFlush = true
-        };
-
-        _outputReader = new StreamReader(
-            new FileStream(_handles.OutputRead, FileAccess.Read, 4096, isAsync: false),
-            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-
-        _readCancellation = new CancellationTokenSource();
-        CancellationToken cancellationToken = _readCancellation.Token;
-
-        _readTask = Task.Run(() =>
-        {
-            char[] buffer = new char[4096];
-
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                int read;
-                try
-                {
-                    read = _outputReader.Read(buffer, 0, buffer.Length);
-                }
-                catch
-                {
-                    break;
-                }
-
-                if (read == 0)
-                {
-                    break;
-                }
-
-                _hasOutput = true;
-                _lastOutputAtUtc = DateTime.UtcNow;
-                OutputReceived?.Invoke(this, new string(buffer, 0, read));
-            }
-        }, cancellationToken);
-    }
-
-    private void StartExitMonitor()
-    {
-        _exitMonitorCancellation = new CancellationTokenSource();
-        CancellationToken cancellationToken = _exitMonitorCancellation.Token;
-
-        _exitMonitorTask = Task.Run(() =>
-        {
-            IntPtr processHandle = _handles.Process;
-            if (processHandle == IntPtr.Zero)
-            {
-                return;
-            }
-
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                uint wait = WaitForSingleObject(processHandle, 100);
-                if (wait == WaitTimeout)
-                {
-                    continue;
-                }
-
-                if (wait == 0 && !_disposed && GetExitCodeProcess(processHandle, out uint exitCode))
-                {
-                    Exited?.Invoke(this, unchecked((int)exitCode));
-                }
-
-                return;
-            }
-        }, cancellationToken);
-    }
-
-    private void ConfigureProcessJob(IntPtr processHandle)
-    {
-        if (processHandle == IntPtr.Zero)
-        {
-            return;
-        }
-
-        if (!IsProcessInJob(processHandle, IntPtr.Zero, out bool isInJob))
-        {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to query process job membership.");
-        }
-
-        if (isInJob)
-        {
-            return;
-        }
-
-        IntPtr jobHandle = CreateJobObject(IntPtr.Zero, null);
-        if (jobHandle == IntPtr.Zero)
-        {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to create process job.");
-        }
-
-        try
-        {
-            var jobInfo = new JobObjectExtendedLimitInformationState
-            {
-                BasicLimitInformation = new JobObjectBasicLimitInformation
-                {
-                    LimitFlags = JobObjectLimitKillOnJobClose
-                }
-            };
-
-            if (!SetInformationJobObject(
-                    jobHandle,
-                    JobObjectExtendedLimitInformation,
-                    ref jobInfo,
-                    (uint)Marshal.SizeOf<JobObjectExtendedLimitInformationState>()))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to configure process job.");
-            }
-
-            if (!AssignProcessToJobObject(jobHandle, processHandle))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to assign process to job.");
-            }
-
-            _handles.SetJob(jobHandle);
-            jobHandle = IntPtr.Zero;
-        }
-        finally
-        {
-            if (jobHandle != IntPtr.Zero)
-            {
-                CloseHandle(jobHandle);
-            }
-        }
-    }
-
-    private static void TryWriteExit(Stream? inputStream, TextWriter? writer)
-    {
-        if (inputStream is null || writer is null)
-        {
-            return;
-        }
-
-        try
-        {
-            // Ctrl+C to interrupt any running command before requesting shell exit
-            inputStream.WriteByte(0x03);
-            inputStream.Flush();
-            writer.Write("exit\r\n");
-            writer.Flush();
-        }
-        catch
-        {
-        }
-    }
-
-    private static async Task WaitForTaskAsync(Task? task, TimeSpan timeout)
-    {
-        if (task is null)
-        {
-            return;
-        }
-
-        try
-        {
-            await task.WaitAsync(timeout).ConfigureAwait(false);
-        }
-        catch
-        {
-        }
-    }
-
-    private static async Task<bool> WaitForProcessExitAsync(IntPtr processHandle, TimeSpan timeout)
-    {
-        if (processHandle == IntPtr.Zero)
-        {
-            return true;
-        }
-
-        DateTime deadlineUtc = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadlineUtc)
-        {
-            uint wait = WaitForSingleObject(processHandle, 50);
-            if (wait == 0)
-            {
-                return true;
-            }
-
-            if (wait != WaitTimeout)
-            {
-                return false;
-            }
-
-            await Task.Delay(25).ConfigureAwait(false);
-        }
-
-        return WaitForSingleObject(processHandle, 0) == 0;
-    }
-
-    private static void DisposeQuietly(IDisposable? disposable)
-    {
-        if (disposable is null)
-        {
-            return;
-        }
-
-        try
-        {
-            disposable.Dispose();
-        }
-        catch
-        {
-        }
+            _hasOutput = true;
+            _lastOutputAtUtc = DateTime.UtcNow;
+            OutputReceived?.Invoke(this, output);
+        });
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -604,77 +233,6 @@ public sealed class ConPtySession : ITerminalSession
 
     [DllImport("kernel32.dll", SetLastError = false, EntryPoint = "ClosePseudoConsole")]
     private static extern void ClosePseudoConsoleHandle(IntPtr hPC);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool InitializeProcThreadAttributeList(
-        IntPtr lpAttributeList,
-        int dwAttributeCount,
-        int dwFlags,
-        ref IntPtr lpSize);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool UpdateProcThreadAttribute(
-        IntPtr lpAttributeList,
-        uint dwFlags,
-        IntPtr attribute,
-        IntPtr lpValue,
-        IntPtr cbSize,
-        IntPtr lpPreviousValue,
-        IntPtr lpReturnSize);
-
-    [DllImport("kernel32.dll", SetLastError = false)]
-    private static extern void DeleteProcThreadAttributeList(IntPtr lpAttributeList);
-
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "CreateProcessW")]
-    private static extern bool CreateProcess(
-        string? lpApplicationName,
-        StringBuilder lpCommandLine,
-        IntPtr lpProcessAttributes,
-        IntPtr lpThreadAttributes,
-        bool bInheritHandles,
-        uint dwCreationFlags,
-        IntPtr lpEnvironment,
-        string? lpCurrentDirectory,
-        ref StartupInfoEx lpStartupInfo,
-        out ProcessInformation lpProcessInformation);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool TerminateProcess(IntPtr hProcess, uint uExitCode);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CloseHandle(IntPtr hObject);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string? lpName);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetInformationJobObject(
-        IntPtr hJob,
-        int jobObjectInfoClass,
-        ref JobObjectExtendedLimitInformationState lpJobObjectInfo,
-        uint cbJobObjectInfoLength);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool TerminateJobObject(IntPtr hJob, uint uExitCode);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool IsProcessInJob(IntPtr processHandle, IntPtr jobHandle, out bool result);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Coord
@@ -689,78 +247,4 @@ public sealed class ConPtySession : ITerminalSession
         }
     }
 
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct StartupInfo
-    {
-        public int cb;
-        public string? lpReserved;
-        public string? lpDesktop;
-        public string? lpTitle;
-        public int dwX;
-        public int dwY;
-        public int dwXSize;
-        public int dwYSize;
-        public int dwXCountChars;
-        public int dwYCountChars;
-        public int dwFillAttribute;
-        public int dwFlags;
-        public short wShowWindow;
-        public short cbReserved2;
-        public IntPtr lpReserved2;
-        public IntPtr hStdInput;
-        public IntPtr hStdOutput;
-        public IntPtr hStdError;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct StartupInfoEx
-    {
-        public StartupInfo StartupInfo;
-        public IntPtr lpAttributeList;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct ProcessInformation
-    {
-        public IntPtr hProcess;
-        public IntPtr hThread;
-        public int dwProcessId;
-        public int dwThreadId;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct JobObjectBasicLimitInformation
-    {
-        public long PerProcessUserTimeLimit;
-        public long PerJobUserTimeLimit;
-        public uint LimitFlags;
-        public UIntPtr MinimumWorkingSetSize;
-        public UIntPtr MaximumWorkingSetSize;
-        public uint ActiveProcessLimit;
-        public UIntPtr Affinity;
-        public uint PriorityClass;
-        public uint SchedulingClass;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct IoCounters
-    {
-        public ulong ReadOperationCount;
-        public ulong WriteOperationCount;
-        public ulong OtherOperationCount;
-        public ulong ReadTransferCount;
-        public ulong WriteTransferCount;
-        public ulong OtherTransferCount;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct JobObjectExtendedLimitInformationState
-    {
-        public JobObjectBasicLimitInformation BasicLimitInformation;
-        public IoCounters IoInfo;
-        public UIntPtr ProcessMemoryLimit;
-        public UIntPtr JobMemoryLimit;
-        public UIntPtr PeakProcessMemoryUsed;
-        public UIntPtr PeakJobMemoryUsed;
-    }
 }
