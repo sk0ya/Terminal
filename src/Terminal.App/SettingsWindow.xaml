@@ -211,6 +211,10 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="10" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="14" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="14" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="90" />
@@ -332,6 +336,24 @@
                       Content="Enable programming font ligatures (=&gt;, !=, -&gt;)"
                       Checked="FontLigaturesCheckBox_Toggled"
                       Unchecked="FontLigaturesCheckBox_Toggled" />
+
+            <TextBlock Grid.Row="18"
+                       Grid.ColumnSpan="2"
+                       Foreground="{StaticResource MutedBrush}"
+                       Text="Changes are not saved until you choose Apply or Save."
+                       TextWrapping="Wrap" />
+
+            <StackPanel Grid.Row="20"
+                        Grid.ColumnSpan="2"
+                        Orientation="Horizontal"
+                        HorizontalAlignment="Right">
+                <Button Width="84" Height="32" Margin="0,0,8,0"
+                        Content="Cancel" Click="CancelButton_Click" />
+                <Button Width="84" Height="32" Margin="0,0,8,0"
+                        Content="Apply" Click="ApplyButton_Click" />
+                <Button Width="84" Height="32"
+                        Content="Save" IsDefault="True" Click="SaveButton_Click" />
+            </StackPanel>
         </Grid>
     </Border>
 </Window>

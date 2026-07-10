@@ -366,7 +366,8 @@ public partial class SettingsWindow : Window
 
     private void PublishSettingsChanged()
     {
-        SettingsChanged?.Invoke(TerminalSettingsEditor.Clone(_currentSettings));
+        // Editing is staged locally. The settings are published only from the
+        // explicit Apply and Save actions.
     }
 
     private void RestartTimer(DispatcherTimer timer)
@@ -414,6 +415,42 @@ public partial class SettingsWindow : Window
     private void SetInputValidationState(Control control, bool isValid)
     {
         control.BorderBrush = (Brush)FindResource(isValid ? "BorderBrush" : "InvalidBrush");
+    }
+
+    private bool TryCommitAllInputs()
+    {
+        CommitWorkingDirectorySetting();
+        CommitFontSizeSetting();
+        CommitScrollbackLimitSetting();
+
+        bool isValid = TerminalSettingsEditor.TryNormalizeWorkingDirectory(WorkingDirectoryTextBox.Text, out _)
+            && TerminalSettingsEditor.TryNormalizeFontSize(FontSizeTextBox.Text, out _)
+            && TerminalSettingsEditor.TryNormalizeScrollbackLimit(ScrollbackLimitTextBox.Text, out _);
+        return isValid;
+    }
+
+    private void ApplyButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (TryCommitAllInputs())
+        {
+            SettingsChanged?.Invoke(TerminalSettingsEditor.Clone(_currentSettings));
+        }
+    }
+
+    private void SaveButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryCommitAllInputs())
+        {
+            return;
+        }
+
+        SettingsChanged?.Invoke(TerminalSettingsEditor.Clone(_currentSettings));
+        Close();
+    }
+
+    private void CancelButton_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
     }
 
 }

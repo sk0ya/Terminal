@@ -70,6 +70,8 @@ internal static class TerminalSettingsEditor
         CjkAmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide,
         BackdropType = settings.BackdropType,
         EnableFontLigatures = settings.EnableFontLigatures,
+        VerticalTabWidth = TerminalAppSettings.ClampVerticalTabWidth(settings.VerticalTabWidth),
+        VerticalTabsCollapsed = settings.VerticalTabsCollapsed,
         ScrollbackLimit = settings.ScrollbackLimit
     };
 }

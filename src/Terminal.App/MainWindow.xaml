@@ -273,14 +273,19 @@
         <Border x:Name="LeftTabChrome"
                 Grid.Row="1"
                 Grid.Column="0"
-                MinWidth="190"
+                Width="190"
                 Background="{StaticResource ChromeBrush}"
                 BorderBrush="{StaticResource ChromeBorderBrush}"
                 BorderThickness="0,0,1,0"
                 Visibility="Collapsed">
-            <ContentControl x:Name="LeftTabHost"
-                            HorizontalContentAlignment="Stretch"
-                            VerticalContentAlignment="Stretch" />
+            <Grid>
+                <ContentControl x:Name="LeftTabHost"
+                                HorizontalContentAlignment="Stretch"
+                                VerticalContentAlignment="Stretch" />
+                <Thumb Width="5" HorizontalAlignment="Right" Cursor="SizeWE"
+                       Background="Transparent" DragDelta="LeftTabResizeThumb_DragDelta"
+                       DragCompleted="VerticalTabResizeThumb_DragCompleted" />
+            </Grid>
         </Border>
 
         <ContentControl x:Name="ActiveTabHost"
@@ -292,14 +297,19 @@
         <Border x:Name="RightTabChrome"
                 Grid.Row="1"
                 Grid.Column="2"
-                MinWidth="190"
+                Width="190"
                 Background="{StaticResource ChromeBrush}"
                 BorderBrush="{StaticResource ChromeBorderBrush}"
                 BorderThickness="1,0,0,0"
                 Visibility="Collapsed">
-            <ContentControl x:Name="RightTabHost"
-                            HorizontalContentAlignment="Stretch"
-                            VerticalContentAlignment="Stretch" />
+            <Grid>
+                <ContentControl x:Name="RightTabHost"
+                                HorizontalContentAlignment="Stretch"
+                                VerticalContentAlignment="Stretch" />
+                <Thumb Width="5" HorizontalAlignment="Left" Cursor="SizeWE"
+                       Background="Transparent" DragDelta="RightTabResizeThumb_DragDelta"
+                       DragCompleted="VerticalTabResizeThumb_DragCompleted" />
+            </Grid>
         </Border>
 
         <Border x:Name="BottomTabChrome"
@@ -356,6 +366,14 @@
                             Padding="10,8"
                             Content="Settings"
                             Click="AppMenuSettingsButton_Click" />
+                    <Button x:Name="ToggleVerticalTabsButton"
+                            DockPanel.Dock="Bottom"
+                            Style="{StaticResource ProfilePickerButtonStyle}"
+                            Margin="0"
+                            Padding="10,8"
+                            Content="Collapse vertical tabs"
+                            Click="ToggleVerticalTabsButton_Click"
+                            Visibility="Collapsed" />
                 </DockPanel>
             </Border>
         </Popup>

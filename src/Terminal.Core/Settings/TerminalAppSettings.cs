@@ -8,6 +8,9 @@ public sealed class TerminalAppSettings
     public const int DefaultScrollbackLimit = 10000;
     public const int MinScrollbackLimit = 100;
     public const int MaxScrollbackLimit = 1_000_000;
+    public const double DefaultVerticalTabWidth = 190;
+    public const double MinVerticalTabWidth = 120;
+    public const double MaxVerticalTabWidth = 420;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -29,6 +32,8 @@ public sealed class TerminalAppSettings
     public bool CjkAmbiguousWidthIsWide { get; set; } = false;
     public string BackdropType { get; set; } = "none";
     public bool EnableFontLigatures { get; set; } = false;
+    public double VerticalTabWidth { get; set; } = DefaultVerticalTabWidth;
+    public bool VerticalTabsCollapsed { get; set; } = false;
 
     /// <summary>
     /// Maximum number of scrollback lines a terminal buffer keeps. Applied to
@@ -39,6 +44,11 @@ public sealed class TerminalAppSettings
     /// <summary>Clamps a scrollback limit to the supported range.</summary>
     public static int ClampScrollbackLimit(int value)
         => Math.Clamp(value, MinScrollbackLimit, MaxScrollbackLimit);
+
+    public static double ClampVerticalTabWidth(double value)
+        => double.IsFinite(value)
+            ? Math.Clamp(value, MinVerticalTabWidth, MaxVerticalTabWidth)
+            : DefaultVerticalTabWidth;
 
     public static TerminalAppSettings Load()
     {
@@ -59,6 +69,7 @@ public sealed class TerminalAppSettings
 
             settings.TabStripPlacement = TerminalTabStripPlacementCatalog.Normalize(settings.TabStripPlacement);
             settings.ScrollbackLimit = ClampScrollbackLimit(settings.ScrollbackLimit);
+            settings.VerticalTabWidth = ClampVerticalTabWidth(settings.VerticalTabWidth);
 
             return settings;
         }

@@ -56,4 +56,31 @@ public sealed class TerminalAppSettingsTests
     {
         Assert.Equal(expected, TerminalAppSettings.ClampScrollbackLimit(value));
     }
+
+    [Theory]
+    [InlineData(0, TerminalAppSettings.MinVerticalTabWidth)]
+    [InlineData(120, 120)]
+    [InlineData(240, 240)]
+    [InlineData(500, TerminalAppSettings.MaxVerticalTabWidth)]
+    public void ClampVerticalTabWidthClampsToSupportedRange(double value, double expected)
+    {
+        Assert.Equal(expected, TerminalAppSettings.ClampVerticalTabWidth(value));
+    }
+
+    [Fact]
+    public void VerticalTabPreferencesSurviveJsonRoundTrip()
+    {
+        var settings = new TerminalAppSettings
+        {
+            VerticalTabWidth = 260,
+            VerticalTabsCollapsed = true
+        };
+
+        string json = JsonSerializer.Serialize(settings);
+        TerminalAppSettings? restored = JsonSerializer.Deserialize<TerminalAppSettings>(json);
+
+        Assert.NotNull(restored);
+        Assert.Equal(260, restored!.VerticalTabWidth);
+        Assert.True(restored.VerticalTabsCollapsed);
+    }
 }

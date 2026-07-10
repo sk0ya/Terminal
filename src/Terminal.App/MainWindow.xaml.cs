@@ -272,6 +272,14 @@ public partial class MainWindow : Window
 
     private TerminalTabItem CreateTabItem(TerminalTabView view)
     {
+        var iconText = new TextBlock
+        {
+            Text = "❯",
+            Width = 24,
+            TextAlignment = TextAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xA7, 0xA7, 0xA7))
+        };
         var titleText = new TextBlock
         {
             Text = "Terminal",
@@ -298,6 +306,7 @@ public partial class MainWindow : Window
             Orientation = Orientation.Horizontal,
             VerticalAlignment = VerticalAlignment.Center
         };
+        headerPanel.Children.Add(iconText);
         headerPanel.Children.Add(titleText);
         headerPanel.Children.Add(closeButton);
 
@@ -319,7 +328,8 @@ public partial class MainWindow : Window
             VerticalContentAlignment = VerticalAlignment.Stretch
         };
 
-        var tab = new TerminalTabItem(view, listBoxItem, border, titleText, closeButton);
+        var tab = new TerminalTabItem(view, listBoxItem, border, iconText, titleText, closeButton);
+        WindowChrome.SetIsHitTestVisibleInChrome(iconText, true);
         WindowChrome.SetIsHitTestVisibleInChrome(titleText, true);
         WindowChrome.SetIsHitTestVisibleInChrome(closeButton, true);
         WindowChrome.SetIsHitTestVisibleInChrome(headerPanel, true);
@@ -505,9 +515,54 @@ public partial class MainWindow : Window
         }
 
         ConfigureChromePanelLayout(layout.IsHorizontal);
+        ConfigureVerticalTabChrome(layout.IsHorizontal);
         ConfigurePopupPlacement(ProfilePickerPopup, layout.PopupEdge, layout.HorizontalOffset, layout.ProfilePickerVerticalOffset);
         ConfigurePopupPlacement(AppMenuPopup, layout.PopupEdge, layout.HorizontalOffset, layout.AppMenuVerticalOffset);
         UpdateTabVisuals();
+    }
+
+    private void ConfigureVerticalTabChrome(bool isHorizontal)
+    {
+        bool isCollapsed = !isHorizontal && _settings.VerticalTabsCollapsed;
+        double width = isCollapsed
+            ? 52
+            : TerminalAppSettings.ClampVerticalTabWidth(_settings.VerticalTabWidth);
+        LeftTabChrome.Width = width;
+        RightTabChrome.Width = width;
+        ToggleVerticalTabsButton.Visibility = isHorizontal ? Visibility.Collapsed : Visibility.Visible;
+        ToggleVerticalTabsButton.Content = isCollapsed ? "Expand vertical tabs" : "Collapse vertical tabs";
+    }
+
+    private void ToggleVerticalTabsButton_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.VerticalTabsCollapsed = !_settings.VerticalTabsCollapsed;
+        ConfigureVerticalTabChrome(TerminalTabStripPlacementCatalog.IsHorizontal(_settings.TabStripPlacement));
+        UpdateTabVisuals();
+        _settings.Save();
+        AppMenuPopup.IsOpen = false;
+    }
+
+    private void LeftTabResizeThumb_DragDelta(object sender, DragDeltaEventArgs e)
+        => ResizeVerticalTabs(e.HorizontalChange);
+
+    private void RightTabResizeThumb_DragDelta(object sender, DragDeltaEventArgs e)
+        => ResizeVerticalTabs(-e.HorizontalChange);
+
+    private void ResizeVerticalTabs(double delta)
+    {
+        if (_settings.VerticalTabsCollapsed)
+        {
+            return;
+        }
+
+        _settings.VerticalTabWidth = TerminalAppSettings.ClampVerticalTabWidth(
+            _settings.VerticalTabWidth + delta);
+        ConfigureVerticalTabChrome(isHorizontal: false);
+    }
+
+    private void VerticalTabResizeThumb_DragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        _settings.Save();
     }
 
     private void ConfigureChromePanelLayout(bool isHorizontal)
@@ -678,6 +733,7 @@ public partial class MainWindow : Window
     private void UpdateTabVisuals()
     {
         bool isHorizontal = TerminalTabStripPlacementCatalog.IsHorizontal(_settings.TabStripPlacement);
+        bool showIconOnly = !isHorizontal && _settings.VerticalTabsCollapsed;
 
         foreach (TerminalTabItem tab in _tabs)
         {
@@ -691,6 +747,14 @@ public partial class MainWindow : Window
             tab.TitleText.Foreground = new SolidColorBrush(isSelected
                 ? Color.FromRgb(0xED, 0xED, 0xED)
                 : Color.FromRgb(0xA7, 0xA7, 0xA7));
+            tab.IconText.Foreground = tab.TitleText.Foreground;
+            tab.IconText.Visibility = isHorizontal ? Visibility.Collapsed : Visibility.Visible;
+            tab.TitleText.Visibility = showIconOnly ? Visibility.Collapsed : Visibility.Visible;
+            tab.CloseButton.Visibility = showIconOnly ? Visibility.Collapsed : Visibility.Visible;
+            tab.HeaderBorder.Padding = showIconOnly
+                ? new Thickness(8, 0, 8, 0)
+                : new Thickness(8, 0, 6, 0);
+            tab.ListBoxItem.ToolTip = showIconOnly ? tab.View.HeaderTitle : null;
         }
     }
 
@@ -775,6 +839,9 @@ public partial class MainWindow : Window
             SessionLogDirectory = _settings.SessionLogDirectory,
             CjkAmbiguousWidthIsWide = tabSettings.CjkAmbiguousWidthIsWide,
             BackdropType = _settings.BackdropType,
+            EnableFontLigatures = tabSettings.EnableFontLigatures,
+            VerticalTabWidth = _settings.VerticalTabWidth,
+            VerticalTabsCollapsed = _settings.VerticalTabsCollapsed,
             ScrollbackLimit = tabSettings.ScrollbackLimit
         };
     }
@@ -830,6 +897,7 @@ public partial class MainWindow : Window
         TerminalTabView View,
         ListBoxItem ListBoxItem,
         Border HeaderBorder,
+        TextBlock IconText,
         TextBlock TitleText,
         Button CloseButton);
 }
