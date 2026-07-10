@@ -30,7 +30,7 @@ public partial class SettingsWindow : Window
 
     public SettingsWindow(TerminalAppSettings settings)
     {
-        _currentSettings = CloneSettings(settings);
+        _currentSettings = TerminalSettingsEditor.Clone(settings);
         InitializeComponent();
         _workingDirectoryApplyTimer.Interval = AutoApplyDelay;
         _workingDirectoryApplyTimer.Tick += WorkingDirectoryApplyTimer_Tick;
@@ -168,7 +168,7 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        SetInputValidationState(WorkingDirectoryTextBox, TryNormalizeWorkingDirectory(WorkingDirectoryTextBox.Text, out _));
+        SetInputValidationState(WorkingDirectoryTextBox, TerminalSettingsEditor.TryNormalizeWorkingDirectory(WorkingDirectoryTextBox.Text, out _));
         RestartTimer(_workingDirectoryApplyTimer);
     }
 
@@ -184,7 +184,7 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        SetInputValidationState(FontSizeTextBox, TryNormalizeFontSize(FontSizeTextBox.Text, out _));
+        SetInputValidationState(FontSizeTextBox, TerminalSettingsEditor.TryNormalizeFontSize(FontSizeTextBox.Text, out _));
         RestartTimer(_fontSizeApplyTimer);
     }
 
@@ -220,7 +220,7 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        SetInputValidationState(ScrollbackLimitTextBox, TryNormalizeScrollbackLimit(ScrollbackLimitTextBox.Text, out _));
+        SetInputValidationState(ScrollbackLimitTextBox, TerminalSettingsEditor.TryNormalizeScrollbackLimit(ScrollbackLimitTextBox.Text, out _));
         RestartTimer(_scrollbackLimitApplyTimer);
     }
 
@@ -261,7 +261,7 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        if (!TryNormalizeWorkingDirectory(WorkingDirectoryTextBox.Text, out string workingDirectory))
+        if (!TerminalSettingsEditor.TryNormalizeWorkingDirectory(WorkingDirectoryTextBox.Text, out string workingDirectory))
         {
             SetInputValidationState(WorkingDirectoryTextBox, isValid: false);
             return;
@@ -294,7 +294,7 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        if (!TryNormalizeFontSize(FontSizeTextBox.Text, out double fontSize))
+        if (!TerminalSettingsEditor.TryNormalizeFontSize(FontSizeTextBox.Text, out double fontSize))
         {
             SetInputValidationState(FontSizeTextBox, isValid: false);
             return;
@@ -314,7 +314,7 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        if (!TryNormalizeScrollbackLimit(ScrollbackLimitTextBox.Text, out int scrollbackLimit))
+        if (!TerminalSettingsEditor.TryNormalizeScrollbackLimit(ScrollbackLimitTextBox.Text, out int scrollbackLimit))
         {
             SetInputValidationState(ScrollbackLimitTextBox, isValid: false);
             return;
@@ -366,7 +366,7 @@ public partial class SettingsWindow : Window
 
     private void PublishSettingsChanged()
     {
-        SettingsChanged?.Invoke(CloneSettings(_currentSettings));
+        SettingsChanged?.Invoke(TerminalSettingsEditor.Clone(_currentSettings));
     }
 
     private void RestartTimer(DispatcherTimer timer)
@@ -416,78 +416,4 @@ public partial class SettingsWindow : Window
         control.BorderBrush = (Brush)FindResource(isValid ? "BorderBrush" : "InvalidBrush");
     }
 
-    private static bool TryNormalizeWorkingDirectory(string? rawPath, out string workingDirectory)
-    {
-        try
-        {
-            workingDirectory = NormalizeWorkingDirectory(rawPath);
-            return true;
-        }
-        catch
-        {
-            workingDirectory = string.Empty;
-            return false;
-        }
-    }
-
-    private static bool TryNormalizeFontSize(string? rawValue, out double fontSize)
-    {
-        if (!double.TryParse(rawValue?.Trim(), out double parsedValue))
-        {
-            fontSize = 0;
-            return false;
-        }
-
-        fontSize = Math.Round(Math.Clamp(parsedValue, 11, 24));
-        return true;
-    }
-
-    private static bool TryNormalizeScrollbackLimit(string? rawValue, out int scrollbackLimit)
-    {
-        if (!int.TryParse(rawValue?.Trim(), out int parsedValue))
-        {
-            scrollbackLimit = 0;
-            return false;
-        }
-
-        scrollbackLimit = TerminalAppSettings.ClampScrollbackLimit(parsedValue);
-        return true;
-    }
-
-    private static TerminalAppSettings CloneSettings(TerminalAppSettings settings)
-    {
-        return new TerminalAppSettings
-        {
-            SelectedProfileId = settings.SelectedProfileId,
-            CommandLine = settings.CommandLine,
-            WorkingDirectory = settings.WorkingDirectory,
-            FontFamilyName = settings.FontFamilyName,
-            FontSize = settings.FontSize,
-            TabStripPlacement = TerminalTabStripPlacementCatalog.Normalize(settings.TabStripPlacement),
-            WindowWidth = settings.WindowWidth,
-            WindowHeight = settings.WindowHeight,
-            EnableSessionLogging = settings.EnableSessionLogging,
-            EnableShellIntegrationInjection = settings.EnableShellIntegrationInjection,
-            ShowStatusBar = settings.ShowStatusBar,
-            SessionLogDirectory = settings.SessionLogDirectory,
-            CjkAmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide,
-            BackdropType = settings.BackdropType,
-            EnableFontLigatures = settings.EnableFontLigatures,
-            ScrollbackLimit = settings.ScrollbackLimit
-        };
-    }
-
-    private static string NormalizeWorkingDirectory(string? rawPath)
-    {
-        string candidate = string.IsNullOrWhiteSpace(rawPath)
-            ? Environment.CurrentDirectory
-            : Environment.ExpandEnvironmentVariables(rawPath.Trim());
-        string fullPath = Path.GetFullPath(candidate);
-        if (!Directory.Exists(fullPath))
-        {
-            throw new DirectoryNotFoundException(fullPath);
-        }
-
-        return fullPath;
-    }
 }

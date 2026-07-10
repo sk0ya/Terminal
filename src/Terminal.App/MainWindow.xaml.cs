@@ -350,7 +350,7 @@ public partial class MainWindow : Window
 
         if (wasSelected)
         {
-            int nextIndex = Math.Clamp(tabIndex, 0, _tabs.Count - 1);
+            int nextIndex = TerminalTabCollectionState.GetSelectionAfterClose(tabIndex, _tabs.Count, wasSelected);
             TabStrip.SelectedItem = _tabs[nextIndex].ListBoxItem;
         }
 
@@ -667,7 +667,7 @@ public partial class MainWindow : Window
         }
 
         int currentIndex = Math.Max(0, _tabs.FindIndex(tab => ReferenceEquals(tab.ListBoxItem, TabStrip.SelectedItem)));
-        int nextIndex = (currentIndex + delta + _tabs.Count) % _tabs.Count;
+        int nextIndex = TerminalTabCollectionState.MoveSelection(currentIndex, _tabs.Count, delta);
         TabStrip.SelectedItem = _tabs[nextIndex].ListBoxItem;
     }
 
