@@ -24,30 +24,35 @@ Windows 向けの WPF ターミナルエミュレーター。ConPTY（Pseudo Con
 
 ## ビルド
 
-```bash
-dotnet build
-dotnet run
+```powershell
+dotnet restore Terminal.sln
+dotnet build Terminal.sln
+dotnet run --project src/Terminal.App/Terminal.App.csproj
 ```
 
 テストの実行:
 
-```bash
-dotnet test Terminal.Tests/
+```powershell
+dotnet test Terminal.sln
 ```
 
 ## プロジェクト構成
 
 ```
 Terminal/
-├── Sessions/          # ConPTY session と ITerminalSession 抽象
-├── Buffer/            # ANSI/VT パーサとターミナルバッファ
-├── Rendering/         # TerminalSurfaceControl（カスタム描画）
-├── Input/             # キー・マウス入力エンコーダ
-├── Tabs/              # タブビューとワークベンチ
-├── Settings/          # アプリ設定・プロファイル・フォントカタログ
-├── Terminal.Tests/    # 自動テスト
-├── MainWindow.xaml    # メインウィンドウ
-└── SettingsWindow.xaml
+├── src/Terminal.Core/       # ConPTY session、設定、ログ、Unicode
+├── src/Terminal.Controls/   # WPF terminal surface、buffer、tabs、input
+├── src/Terminal.App/        # 実行アプリとWindow code-behind
+└── tests/Terminal.Tests/    # 単体テストとConPTY smoke test
+```
+
+依存方向は `Terminal.App` → `Terminal.Controls` → `Terminal.Core` です。
+`sk0ya.Terminal.Controls` NuGetパッケージには`Terminal.Core.dll`も同梱されます。
+
+パッケージ生成:
+
+```powershell
+dotnet pack src/Terminal.Controls/Terminal.Controls.csproj -c Release -o artifacts/packages
 ```
 
 ## 検証対象アプリ

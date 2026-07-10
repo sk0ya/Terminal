@@ -4,7 +4,6 @@
     <TargetFramework>net9.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <UseWPF>true</UseWPF>
     <!-- Not published as a standalone package; its DLL ships bundled inside
          sk0ya.Terminal.Controls. -->
     <IsPackable>false</IsPackable>

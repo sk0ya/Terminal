@@ -13,13 +13,7 @@ internal static class TerminalEnterActionResolver
 {
     public static TerminalEnterAction ResolveForProxy(Key key, bool hasPendingProxyText)
     {
-        if (key != Key.Enter)
-        {
-            return TerminalEnterAction.None;
-        }
-
-        return hasPendingProxyText
-            ? TerminalEnterAction.FlushPendingProxyText
-            : TerminalEnterAction.SendToTerminal;
+        if (key != Key.Enter) return TerminalEnterAction.None;
+        return hasPendingProxyText ? TerminalEnterAction.FlushPendingProxyText : TerminalEnterAction.SendToTerminal;
     }
 }
