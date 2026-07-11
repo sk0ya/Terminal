@@ -23,6 +23,7 @@ public sealed class UnicodeWidthTests
     [InlineData(0xFF21, 2)]  // Ａ (Fullwidth)
     [InlineData(0x1F600, 2)] // 😀 (Emoji)
     [InlineData(0x1F1EF, 2)] // 🇯 (Regional Indicator J)
+    [InlineData(0x1FAE9, 2)] // Unicode 17.0 emoji (face with bags under eyes)
     public void WideChars_AreWidth2(int codepoint, int expected)
     {
         Assert.Equal(expected, UnicodeWidth.GetWidth(new Rune(codepoint)));
@@ -92,5 +93,11 @@ public sealed class UnicodeWidthTests
         buffer.Process("Α");
 
         Assert.Equal(1, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void GeneratedDataIsPinnedToUnicode17()
+    {
+        Assert.Equal("17.0.0", UnicodeWidthData.UnicodeVersion);
     }
 }

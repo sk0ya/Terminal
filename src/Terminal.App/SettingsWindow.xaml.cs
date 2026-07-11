@@ -87,6 +87,7 @@ public partial class SettingsWindow : Window
             SetSelectedProfile(settings.SelectedProfileId, commandLine);
             StatusBarCheckBox.IsChecked = settings.ShowStatusBar;
             FontLigaturesCheckBox.IsChecked = settings.EnableFontLigatures;
+            CloseConfirmationCheckBox.IsChecked = settings.ConfirmCloseWithRunningProcesses;
             ScrollbackLimitTextBox.Text = TerminalAppSettings.ClampScrollbackLimit(settings.ScrollbackLimit).ToString();
             SetInputValidationState(WorkingDirectoryTextBox, isValid: true);
             SetInputValidationState(FontSizeTextBox, isValid: true);
@@ -451,6 +452,26 @@ public partial class SettingsWindow : Window
     private void CancelButton_Click(object sender, RoutedEventArgs e)
     {
         Close();
+    }
+
+    private void KeyBindingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new KeyBindingsWindow(_currentSettings.KeyBindings) { Owner = this };
+        if (dialog.ShowDialog() == true)
+        {
+            _currentSettings.KeyBindings = dialog.Bindings;
+        }
+    }
+
+    private void ColorSchemeButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ColorSchemeWindow(_currentSettings) { Owner = this };
+        if (dialog.ShowDialog() == true) dialog.ApplyTo(_currentSettings);
+    }
+
+    private void CloseConfirmationCheckBox_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!_suppressAutoApply) _currentSettings.ConfirmCloseWithRunningProcesses = CloseConfirmationCheckBox.IsChecked == true;
     }
 
 }

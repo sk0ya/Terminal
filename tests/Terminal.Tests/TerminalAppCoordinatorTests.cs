@@ -5,6 +5,14 @@ namespace Terminal.Tests;
 
 public sealed class TerminalAppCoordinatorTests
 {
+    [Fact]
+    public void TabsCanBeReorderedWithoutLosingItems()
+    {
+        var tabs = new List<string> { "one", "two", "three" };
+        Assert.True(TerminalTabCollectionState.MoveItem(tabs, 0, 2));
+        Assert.Equal(["two", "three", "one"], tabs);
+        Assert.False(TerminalTabCollectionState.MoveItem(tabs, -1, 1));
+    }
     [Theory]
     [InlineData(1, 2, true, 1)]
     [InlineData(2, 2, true, 1)]

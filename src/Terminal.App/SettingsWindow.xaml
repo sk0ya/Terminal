@@ -215,6 +215,12 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="14" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="14" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="14" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="14" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="90" />
@@ -337,13 +343,29 @@
                       Checked="FontLigaturesCheckBox_Toggled"
                       Unchecked="FontLigaturesCheckBox_Toggled" />
 
-            <TextBlock Grid.Row="18"
+            <TextBlock Grid.Row="18" Grid.Column="0" VerticalAlignment="Center"
+                       Foreground="{StaticResource MutedBrush}" Text="Close warning" />
+            <CheckBox x:Name="CloseConfirmationCheckBox" Grid.Row="18" Grid.Column="1"
+                      Foreground="#F0F0F0" Content="Confirm before stopping running processes"
+                      Checked="CloseConfirmationCheckBox_Toggled" Unchecked="CloseConfirmationCheckBox_Toggled" />
+
+            <TextBlock Grid.Row="20" Grid.Column="0" VerticalAlignment="Center"
+                       Foreground="{StaticResource MutedBrush}" Text="Keyboard" />
+            <Button Grid.Row="20" Grid.Column="1" Width="160" Height="32" HorizontalAlignment="Left"
+                    Content="Edit key bindings…" Click="KeyBindingsButton_Click" />
+
+            <TextBlock Grid.Row="22" Grid.Column="0" VerticalAlignment="Center"
+                       Foreground="{StaticResource MutedBrush}" Text="Colors" />
+            <Button Grid.Row="22" Grid.Column="1" Width="160" Height="32" HorizontalAlignment="Left"
+                    Content="Edit color scheme…" Click="ColorSchemeButton_Click" />
+
+            <TextBlock Grid.Row="24"
                        Grid.ColumnSpan="2"
                        Foreground="{StaticResource MutedBrush}"
                        Text="Changes are not saved until you choose Apply or Save."
                        TextWrapping="Wrap" />
 
-            <StackPanel Grid.Row="20"
+            <StackPanel Grid.Row="26"
                         Grid.ColumnSpan="2"
                         Orientation="Horizontal"
                         HorizontalAlignment="Right">

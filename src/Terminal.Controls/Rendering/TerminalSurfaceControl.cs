@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.TextFormatting;
 using System.Windows.Threading;
+using System.Windows.Automation.Peers;
 
 using Terminal.Buffer;
 using Terminal.Tabs;
@@ -109,6 +110,10 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             DisposableResourceOwner.ExecuteAllBestEffort(cleanup);
         };
     }
+
+    protected override AutomationPeer OnCreateAutomationPeer() => new TerminalSurfaceAutomationPeer(this);
+
+    internal string GetAutomationText() => string.Join("\r\n", SelectionLines.Select(static line => line.Text));
 
     private void OnBlinkTimerTick(object? sender, EventArgs e)
     {

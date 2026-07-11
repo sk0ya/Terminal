@@ -37,6 +37,7 @@ public partial class TerminalTabView : UserControl
 
     private readonly TerminalSessionOrchestrator _sessionOrchestrator = new();
     private readonly TerminalKeyboardCoordinator _keyboardState = new();
+    private readonly TerminalKeyBindings _keyBindings = new();
     private readonly TerminalMouseCoordinator _mouseState = new();
     private readonly TerminalClipboardCoordinator _clipboardState = new();
     private ITerminalSession? _session => _sessionOrchestrator.Current;
@@ -63,6 +64,7 @@ public partial class TerminalTabView : UserControl
     private bool _hasStartedInitialSession;
     private readonly TerminalCommandNavigationCoordinator _commandNavigation = new();
     private readonly TerminalTaskbarProgressCoordinator _taskbarProgress = new();
+    private bool _isShellCommandExecuting;
 
     // Command lines reported via OSC 633;E, most-recent last. Backs the Ctrl+R
     // history overlay and the public CommandHistory API. Capped to keep memory bounded.
@@ -176,6 +178,14 @@ public partial class TerminalTabView : UserControl
     /// ベルインジケータ表示に用い、タブがアクティブになったら <see cref="ClearPendingBell"/> でクリアする。
     /// </summary>
     public bool HasPendingBell { get; private set; }
+
+    /// <summary>
+    /// Whether closing this view can interrupt useful work. Integrated shells only report busy
+    /// while a command is between OSC 133 C/D markers; an unintegrated live session is treated
+    /// conservatively because prompt-idle state cannot be distinguished from a running command.
+    /// </summary>
+    public bool RequiresCloseConfirmation =>
+        _session is not null && (!IsShellIntegrationActive || _isShellCommandExecuting);
 
     /// <summary>未確認ベル状態をクリアする。ホストがタブをアクティブ表示した時点で呼ぶ。</summary>
     public void ClearPendingBell()
@@ -656,7 +666,20 @@ public partial class TerminalTabView : UserControl
             _terminalBuffer.ApplicationKeypadEnabled,
             controlSequence,
             enterSequence,
-            specialSequence);
+            specialSequence,
+            ResolveConfiguredTerminalShortcut(key, Keyboard.Modifiers),
+            UseConfiguredShortcuts: true);
+    }
+
+    private TerminalKeyboardActionKind? ResolveConfiguredTerminalShortcut(Key key, ModifierKeys modifiers)
+    {
+        if (_keyBindings.Matches("Copy", key, modifiers)) return TerminalKeyboardActionKind.Copy;
+        if (_keyBindings.Matches("Paste", key, modifiers)) return TerminalKeyboardActionKind.Paste;
+        if (_keyBindings.Matches("Find", key, modifiers)) return TerminalKeyboardActionKind.OpenFind;
+        if (_keyBindings.Matches("History", key, modifiers)) return TerminalKeyboardActionKind.OpenHistory;
+        if (_keyBindings.Matches("PreviousCommand", key, modifiers)) return TerminalKeyboardActionKind.ScrollPreviousCommand;
+        if (_keyBindings.Matches("NextCommand", key, modifiers)) return TerminalKeyboardActionKind.ScrollNextCommand;
+        return null;
     }
 
     private bool ExecuteKeyboardAction(TerminalKeyboardAction action, KeyEventArgs e)
@@ -2084,6 +2107,12 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalBuffer_ShellCommandZoneReceived(object? sender, ShellCommandZoneEventArgs e)
     {
+        _isShellCommandExecuting = e.ZoneType switch
+        {
+            ShellCommandZoneType.CommandExecuted => true,
+            ShellCommandZoneType.CommandDone or ShellCommandZoneType.PromptStart => false,
+            _ => _isShellCommandExecuting
+        };
         OnAgentShellCommandZone(e);
         RaiseShellCommandActivity(e);
         _commandNavigation.Observe(e.ZoneType, e.AbsoluteLine);

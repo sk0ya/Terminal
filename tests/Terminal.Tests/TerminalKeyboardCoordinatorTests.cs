@@ -133,6 +133,28 @@ public sealed class TerminalKeyboardCoordinatorTests
         Assert.True(action.FlushProxyFirst);
     }
 
+    [Fact]
+    public void ConfiguredShortcutsReplaceBuiltInChordRatherThanAddingToIt()
+    {
+        TerminalKeyboardAction oldChord = _coordinator.Resolve(new(
+            TerminalKeyboardSource.Output, TerminalKeyboardKey.V, TerminalKeyboardKey.V,
+            TerminalKeyboardModifiers.Control, TerminalKeyboardModifiers.Control,
+            HasSession: true, HasPendingProxyText: false, IsImeInput: false,
+            SupportsTerminalInput: true, ApplicationKeypadEnabled: false,
+            ControlSequence: "\u0016", EnterSequence: null, SpecialSequence: null,
+            ConfiguredShortcut: null, UseConfiguredShortcuts: true));
+        Assert.Equal(TerminalKeyboardActionKind.SendText, oldChord.Kind);
+
+        TerminalKeyboardAction newChord = _coordinator.Resolve(new(
+            TerminalKeyboardSource.Output, TerminalKeyboardKey.Other, TerminalKeyboardKey.Other,
+            TerminalKeyboardModifiers.Alt, TerminalKeyboardModifiers.Alt,
+            HasSession: true, HasPendingProxyText: false, IsImeInput: false,
+            SupportsTerminalInput: true, ApplicationKeypadEnabled: false,
+            ControlSequence: null, EnterSequence: null, SpecialSequence: null,
+            ConfiguredShortcut: TerminalKeyboardActionKind.Paste, UseConfiguredShortcuts: true));
+        Assert.Equal(TerminalKeyboardActionKind.Paste, newChord.Kind);
+    }
+
     private TerminalKeyboardAction Resolve(
         TerminalKeyboardSource source,
         TerminalKeyboardKey key,

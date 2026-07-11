@@ -28,7 +28,9 @@ internal sealed record TerminalKeyboardRequest(
     bool ApplicationKeypadEnabled,
     string? ControlSequence,
     string? EnterSequence,
-    string? SpecialSequence);
+    string? SpecialSequence,
+    TerminalKeyboardActionKind? ConfiguredShortcut = null,
+    bool UseConfiguredShortcuts = false);
 
 internal sealed record TerminalKeyboardAction(
     TerminalKeyboardActionKind Kind,
@@ -44,7 +46,9 @@ internal sealed class TerminalKeyboardCoordinator
             return Pass();
         }
 
-        TerminalKeyboardAction? clipboard = ResolveClipboard(request.ShortcutKey, request.Modifiers);
+        TerminalKeyboardAction? clipboard = request.UseConfiguredShortcuts
+            ? ResolveConfiguredShortcut(request.ConfiguredShortcut, request.ShortcutKey, request.Modifiers)
+            : ResolveClipboard(request.ShortcutKey, request.Modifiers);
         if (clipboard is not null)
         {
             if (clipboard.Kind is TerminalKeyboardActionKind.ScrollPreviousCommand or
@@ -136,6 +140,20 @@ internal sealed class TerminalKeyboardCoordinator
         (TerminalKeyboardKey.F, TerminalKeyboardModifiers.Control | TerminalKeyboardModifiers.Shift) => new(TerminalKeyboardActionKind.OpenFind),
         _ => null
     };
+
+    private static TerminalKeyboardAction? ResolveConfiguredShortcut(
+        TerminalKeyboardActionKind? configured,
+        TerminalKeyboardKey key,
+        TerminalKeyboardModifiers modifiers)
+    {
+        if (configured.HasValue) return new(configured.Value);
+        return (key, modifiers) switch
+        {
+            (TerminalKeyboardKey.Insert, TerminalKeyboardModifiers.Control) => new(TerminalKeyboardActionKind.Copy),
+            (TerminalKeyboardKey.Insert, TerminalKeyboardModifiers.Shift) => new(TerminalKeyboardActionKind.Paste),
+            _ => null
+        };
+    }
 
     private static TerminalKeyboardAction Pass(bool flush = false) =>
         new(TerminalKeyboardActionKind.PassThrough, FlushProxyFirst: flush);

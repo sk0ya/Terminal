@@ -106,6 +106,8 @@ public partial class TerminalTabView
     private void ApplySavedWorkbenchSettings()
     {
         TerminalAppSettings settings = TerminalAppSettings.Load();
+        _keyBindings.Update(settings.KeyBindings);
+        ApplyColorTheme(TerminalColorThemeCatalog.Resolve(settings));
 
         string commandLine = string.IsNullOrWhiteSpace(settings.CommandLine)
             ? TerminalProfileCatalog.BuildDefaultCommandLine()
@@ -380,9 +382,7 @@ public partial class TerminalTabView
         ModifierKeys modifiers = Keyboard.Modifiers;
         Key key = GetEffectiveKey(e);
 
-        TerminalWorkbenchShortcutAction shortcutAction = TerminalWorkbenchShortcutCoordinator.Resolve(
-            MapWorkbenchShortcutKey(key),
-            MapWorkbenchShortcutModifiers(modifiers));
+        TerminalWorkbenchShortcutAction shortcutAction = ResolveConfiguredWorkbenchShortcut(key, modifiers);
         switch (shortcutAction)
         {
             case TerminalWorkbenchShortcutAction.SaveTranscript:
@@ -426,6 +426,16 @@ public partial class TerminalTabView
         {
             e.Handled = true;
         }
+    }
+
+    private TerminalWorkbenchShortcutAction ResolveConfiguredWorkbenchShortcut(Key key, ModifierKeys modifiers)
+    {
+        if (_keyBindings.Matches("SaveTranscript", key, modifiers)) return TerminalWorkbenchShortcutAction.SaveTranscript;
+        if (_keyBindings.Matches("Restart", key, modifiers)) return TerminalWorkbenchShortcutAction.Restart;
+        if (_keyBindings.Matches("IncreaseFontSize", key, modifiers)) return TerminalWorkbenchShortcutAction.IncreaseFontSize;
+        if (_keyBindings.Matches("DecreaseFontSize", key, modifiers)) return TerminalWorkbenchShortcutAction.DecreaseFontSize;
+        if (_keyBindings.Matches("ResetFontSize", key, modifiers)) return TerminalWorkbenchShortcutAction.ResetFontSize;
+        return TerminalWorkbenchShortcutAction.None;
     }
 
     private static TerminalWorkbenchShortcutKey MapWorkbenchShortcutKey(Key key) => key switch
@@ -544,6 +554,8 @@ public partial class TerminalTabView
 
     public void ApplySettings(TerminalAppSettings settings)
     {
+        _keyBindings.Update(settings.KeyBindings);
+        ApplyColorTheme(TerminalColorThemeCatalog.Resolve(settings));
         string commandLine = string.IsNullOrWhiteSpace(settings.CommandLine)
             ? TerminalProfileCatalog.BuildDefaultCommandLine()
             : settings.CommandLine.Trim();

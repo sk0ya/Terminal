@@ -216,6 +216,9 @@
                                      BorderThickness="0"
                                      Background="Transparent"
                                      SelectionChanged="TabStrip_SelectionChanged"
+                                     PreviewMouseLeftButtonDown="TabStrip_PreviewMouseLeftButtonDown"
+                                     PreviewMouseLeftButtonUp="TabStrip_PreviewMouseLeftButtonUp"
+                                     PreviewMouseMove="TabStrip_PreviewMouseMove"
                                      ScrollViewer.HorizontalScrollBarVisibility="Hidden"
                                      ScrollViewer.VerticalScrollBarVisibility="Disabled"
                                      shell:WindowChrome.IsHitTestVisibleInChrome="True" />
@@ -374,6 +377,12 @@
                             Content="Collapse vertical tabs"
                             Click="ToggleVerticalTabsButton_Click"
                             Visibility="Collapsed" />
+                    <Button DockPanel.Dock="Top" Style="{StaticResource ProfilePickerButtonStyle}" Margin="0" Padding="10,8"
+                            Content="Split horizontally" Click="SplitHorizontalButton_Click" />
+                    <Button DockPanel.Dock="Top" Style="{StaticResource ProfilePickerButtonStyle}" Margin="0" Padding="10,8"
+                            Content="Split vertically" Click="SplitVerticalButton_Click" />
+                    <Button DockPanel.Dock="Top" Style="{StaticResource ProfilePickerButtonStyle}" Margin="0" Padding="10,8"
+                            Content="Close active pane" Click="ClosePaneButton_Click" />
                 </DockPanel>
             </Border>
         </Popup>

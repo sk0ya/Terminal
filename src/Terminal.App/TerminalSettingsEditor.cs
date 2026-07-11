@@ -72,6 +72,16 @@ internal static class TerminalSettingsEditor
         EnableFontLigatures = settings.EnableFontLigatures,
         VerticalTabWidth = TerminalAppSettings.ClampVerticalTabWidth(settings.VerticalTabWidth),
         VerticalTabsCollapsed = settings.VerticalTabsCollapsed,
-        ScrollbackLimit = settings.ScrollbackLimit
+        ScrollbackLimit = settings.ScrollbackLimit,
+        KeyBindings = TerminalKeyBindingCatalog.Normalize(settings.KeyBindings),
+        ColorScheme = settings.ColorScheme,
+        CustomForeground = settings.CustomForeground,
+        CustomBackground = settings.CustomBackground,
+        CustomCursorColor = settings.CustomCursorColor,
+        CustomSelectionColor = settings.CustomSelectionColor,
+        CustomAnsiPalette = settings.CustomAnsiPalette?.ToArray(),
+        SavedTabs = settings.SavedTabs.ToList(),
+        ActiveTabIndex = settings.ActiveTabIndex,
+        ConfirmCloseWithRunningProcesses = settings.ConfirmCloseWithRunningProcesses
     };
 }

@@ -10,6 +10,7 @@ using System.Windows.Threading;
 
 using Terminal.Settings;
 using Terminal.Tabs;
+using Terminal.Input;
 
 namespace Terminal;
 
@@ -20,11 +21,15 @@ public partial class MainWindow : Window
     private SettingsWindow? _settingsWindow;
     private bool _isClosing;
     private bool _allowClose;
+    private readonly TerminalKeyBindings _keyBindings;
+    private Point? _tabDragStart;
+    private TerminalTabItem? _draggedTab;
 
     public MainWindow()
     {
         InitializeComponent();
         _settings = TerminalAppSettings.Load();
+        _keyBindings = new(_settings.KeyBindings);
         ApplyWindowSettings(_settings);
         ApplyTabStripPlacement(_settings.TabStripPlacement);
         UpdateMaximizeRestoreButton();
@@ -37,8 +42,19 @@ public partial class MainWindow : Window
         ApplyBackdrop(_settings);
         if (_tabs.Count == 0)
         {
-            AddNewTabFromSettings();
+            RestoreSavedTabs();
         }
+    }
+
+    private void RestoreSavedTabs()
+    {
+        foreach (TerminalSavedTab saved in _settings.SavedTabs.Where(tab => !string.IsNullOrWhiteSpace(tab.CommandLine)))
+        {
+            string directory = Directory.Exists(saved.WorkingDirectory) ? saved.WorkingDirectory : GetWorkingDirectoryOrDefault();
+            AddNewTab(saved.CommandLine, directory);
+        }
+        if (_tabs.Count == 0) AddNewTabFromSettings();
+        else TabStrip.SelectedIndex = Math.Clamp(_settings.ActiveTabIndex, 0, _tabs.Count - 1);
     }
 
     private void ApplyBackdrop(TerminalAppSettings settings)
@@ -60,7 +76,7 @@ public partial class MainWindow : Window
 
         foreach (TerminalTabItem tab in _tabs)
         {
-            tab.View.SetBackdropActive(active);
+            foreach (TerminalTabView pane in tab.Panes) pane.SetBackdropActive(active);
         }
     }
 
@@ -77,13 +93,27 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_settings.ConfirmCloseWithRunningProcesses &&
+            TerminalCloseConfirmation.NeedsConfirmation(_tabs.SelectMany(tab => tab.Panes).Select(pane => pane.RequiresCloseConfirmation)) &&
+            MessageBox.Show(
+                this,
+                "実行中の処理があります。すべてのタブを終了しますか？",
+                "Terminal を終了",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning,
+                MessageBoxResult.No) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
         _isClosing = true;
         try
         {
             SaveWindowSettings();
+            _settings.Save();
             foreach (TerminalTabItem tab in _tabs.ToArray())
             {
-                await tab.View.CloseAsync();
+                foreach (TerminalTabView pane in tab.Panes.ToArray()) await pane.CloseAsync();
             }
         }
         finally
@@ -109,6 +139,83 @@ public partial class MainWindow : Window
     {
         AppMenuPopup.IsOpen = false;
         OpenSettings();
+    }
+
+    private void SplitHorizontalButton_Click(object sender, RoutedEventArgs e) { AppMenuPopup.IsOpen = false; SplitActivePane(true); }
+    private void SplitVerticalButton_Click(object sender, RoutedEventArgs e) { AppMenuPopup.IsOpen = false; SplitActivePane(false); }
+    private void ClosePaneButton_Click(object sender, RoutedEventArgs e) { AppMenuPopup.IsOpen = false; _ = CloseActivePaneAsync(); }
+
+    private void SplitActivePane(bool horizontal)
+    {
+        TerminalTabItem? tab = GetActiveTab();
+        if (tab is null) return;
+        TerminalTabView existing = tab.ActivePane;
+        var added = new TerminalTabView(existing.CommandLine, existing.WorkingDirectory);
+        WirePane(tab, added); tab.Panes.Add(added);
+        var grid = new Grid();
+        if (horizontal)
+        {
+            grid.RowDefinitions.Add(new RowDefinition()); grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(5) }); grid.RowDefinitions.Add(new RowDefinition());
+            Grid.SetRow(existing, 0); Grid.SetRow(added, 2);
+        }
+        else
+        {
+            grid.ColumnDefinitions.Add(new ColumnDefinition()); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(5) }); grid.ColumnDefinitions.Add(new ColumnDefinition());
+            Grid.SetColumn(existing, 0); Grid.SetColumn(added, 2);
+        }
+        var splitter = new GridSplitter
+        {
+            Background = new SolidColorBrush(Color.FromRgb(0x2A, 0x2A, 0x2A)),
+            HorizontalAlignment = horizontal ? HorizontalAlignment.Stretch : HorizontalAlignment.Center,
+            VerticalAlignment = horizontal ? VerticalAlignment.Center : VerticalAlignment.Stretch,
+            ResizeDirection = horizontal ? GridResizeDirection.Rows : GridResizeDirection.Columns,
+            ShowsPreview = true
+        };
+        if (horizontal) Grid.SetRow(splitter, 1); else Grid.SetColumn(splitter, 1);
+
+        if (ReferenceEquals(tab.Content, existing))
+        {
+            ActiveTabHost.Content = null;
+            tab.Content = grid;
+        }
+        else if (VisualTreeHelper.GetParent(existing) is Grid parent)
+        {
+            int row = Grid.GetRow(existing), column = Grid.GetColumn(existing);
+            parent.Children.Remove(existing); parent.Children.Add(grid); Grid.SetRow(grid, row); Grid.SetColumn(grid, column);
+        }
+        grid.Children.Add(existing); grid.Children.Add(splitter); grid.Children.Add(added);
+        tab.ActivePane = added; ActiveTabHost.Content = tab.Content;
+        _ = Dispatcher.BeginInvoke(added.FocusTerminal, DispatcherPriority.Input);
+    }
+
+    private async Task CloseActivePaneAsync()
+    {
+        TerminalTabItem? tab = GetActiveTab();
+        if (tab is null) return;
+        if (tab.Panes.Count == 1) { await CloseTabAsync(tab); return; }
+        TerminalTabView pane = tab.ActivePane;
+        if (_settings.ConfirmCloseWithRunningProcesses && pane.RequiresCloseConfirmation && MessageBox.Show(this, "このペインでは処理が実行中です。終了しますか？", "ペインを終了", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        if (VisualTreeHelper.GetParent(pane) is not Grid parent) return;
+        TerminalTabView sibling = parent.Children.OfType<TerminalTabView>().FirstOrDefault(candidate => !ReferenceEquals(candidate, pane))!;
+        DependencyObject? grandParent = VisualTreeHelper.GetParent(parent);
+        parent.Children.Clear();
+        if (ReferenceEquals(tab.Content, parent)) { ActiveTabHost.Content = null; tab.Content = sibling; }
+        else if (grandParent is Grid grandGrid)
+        {
+            int row = Grid.GetRow(parent), column = Grid.GetColumn(parent); grandGrid.Children.Remove(parent); grandGrid.Children.Add(sibling); Grid.SetRow(sibling, row); Grid.SetColumn(sibling, column);
+        }
+        tab.Panes.Remove(pane); tab.ActivePane = sibling; ActiveTabHost.Content = tab.Content;
+        await pane.CloseAsync(); sibling.FocusTerminal();
+    }
+
+    private void MovePaneFocus(int delta)
+    {
+        TerminalTabItem? tab = GetActiveTab();
+        if (tab is null || tab.Panes.Count == 0) return;
+        int current = Math.Max(0, tab.Panes.IndexOf(tab.ActivePane));
+        int next = TerminalTabCollectionState.MoveSelection(current, tab.Panes.Count, delta);
+        tab.ActivePane = tab.Panes[next];
+        tab.ActivePane.FocusTerminal();
     }
 
     private void MinimizeButton_Click(object sender, RoutedEventArgs e)
@@ -157,6 +264,7 @@ public partial class MainWindow : Window
         var tab = CreateTabItem(view);
         _tabs.Add(tab);
         TabStrip.Items.Add(tab.ListBoxItem);
+        WirePane(tab, view);
         view.HeaderTitleChanged += (_, title) => UpdateTabHeader(tab, title);
         view.TaskbarProgressChanged += (_, e) =>
         {
@@ -179,6 +287,22 @@ public partial class MainWindow : Window
         };
         UpdateTabHeader(tab, view.HeaderTitle);
         TabStrip.SelectedItem = tab.ListBoxItem;
+    }
+
+    private void WirePane(TerminalTabItem tab, TerminalTabView view)
+    {
+        view.GotKeyboardFocus += (_, _) => tab.ActivePane = view;
+        view.HeaderTitleChanged += (_, title) => { if (ReferenceEquals(tab.ActivePane, view)) UpdateTabHeader(tab, title); };
+        view.TaskbarProgressChanged += (_, e) =>
+        {
+            if (ReferenceEquals(GetActiveTab()?.View, view)) ApplyTaskbarProgress(e.State, e.Progress);
+        };
+        view.BellRang += (_, _) =>
+        {
+            if (ReferenceEquals(GetActiveTab()?.View, view)) view.ClearPendingBell();
+            UpdateTabHeader(tab, tab.View.HeaderTitle);
+        };
+        view.ApplySettings(_settings);
     }
 
     private string GetWorkingDirectoryOrDefault()
@@ -347,10 +471,22 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_settings.ConfirmCloseWithRunningProcesses && tab.Panes.Any(pane => pane.RequiresCloseConfirmation) &&
+            MessageBox.Show(
+                this,
+                "このタブでは処理が実行中です。タブを終了しますか？",
+                "タブを終了",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning,
+                MessageBoxResult.No) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
         bool wasSelected = ReferenceEquals(TabStrip.SelectedItem, tab.ListBoxItem);
         TabStrip.Items.Remove(tab.ListBoxItem);
         _tabs.RemoveAt(tabIndex);
-        await tab.View.CloseAsync();
+        foreach (TerminalTabView pane in tab.Panes.ToArray()) await pane.CloseAsync();
 
         if (_tabs.Count == 0)
         {
@@ -381,7 +517,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        ActiveTabHost.Content = tab.View;
+        ActiveTabHost.Content = tab.Content;
         // アクティブになったタブの未確認ベルをクリアし、ヘッダのベルインジケータを消す。
         tab.View.ClearPendingBell();
         UpdateTabHeader(tab, tab.View.HeaderTitle);
@@ -397,21 +533,27 @@ public partial class MainWindow : Window
         ModifierKeys modifiers = Keyboard.Modifiers;
         Key key = e.Key == Key.System ? e.SystemKey : e.Key;
 
-        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.T)
+        if (_keyBindings.Matches("SplitHorizontal", key, modifiers)) { SplitActivePane(horizontal: true); e.Handled = true; return; }
+        if (_keyBindings.Matches("SplitVertical", key, modifiers)) { SplitActivePane(horizontal: false); e.Handled = true; return; }
+        if (_keyBindings.Matches("ClosePane", key, modifiers)) { _ = CloseActivePaneAsync(); e.Handled = true; return; }
+        if (_keyBindings.Matches("NextPane", key, modifiers)) { MovePaneFocus(1); e.Handled = true; return; }
+        if (_keyBindings.Matches("PreviousPane", key, modifiers)) { MovePaneFocus(-1); e.Handled = true; return; }
+
+        if (_keyBindings.Matches("NewTab", key, modifiers))
         {
             AddNewTabFromSettings();
             e.Handled = true;
             return;
         }
 
-        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.D)
+        if (_keyBindings.Matches("NewTabHere", key, modifiers))
         {
             AddNewTabInSameDirectory();
             e.Handled = true;
             return;
         }
 
-        if (modifiers == ModifierKeys.Control && key == Key.OemComma)
+        if (_keyBindings.Matches("OpenSettings", key, modifiers))
         {
             OpenSettings();
             e.Handled = true;
@@ -432,7 +574,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.W)
+        if (_keyBindings.Matches("CloseTab", key, modifiers))
         {
             if (GetActiveTab() is TerminalTabItem activeTab)
             {
@@ -443,14 +585,14 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (modifiers == ModifierKeys.Control && key == Key.Tab)
+        if (_keyBindings.Matches("NextTab", key, modifiers))
         {
             MoveSelection(1);
             e.Handled = true;
             return;
         }
 
-        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.Tab)
+        if (_keyBindings.Matches("PreviousTab", key, modifiers))
         {
             MoveSelection(-1);
             e.Handled = true;
@@ -519,6 +661,34 @@ public partial class MainWindow : Window
         ConfigurePopupPlacement(ProfilePickerPopup, layout.PopupEdge, layout.HorizontalOffset, layout.ProfilePickerVerticalOffset);
         ConfigurePopupPlacement(AppMenuPopup, layout.PopupEdge, layout.HorizontalOffset, layout.AppMenuVerticalOffset);
         UpdateTabVisuals();
+    }
+
+    private void TabStrip_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _tabDragStart = e.GetPosition(TabStrip);
+        ListBoxItem? item = FindVisualAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
+        _draggedTab = item is null ? null : _tabs.FirstOrDefault(tab => ReferenceEquals(tab.ListBoxItem, item));
+    }
+
+    private void TabStrip_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        _tabDragStart = null; _draggedTab = null;
+    }
+
+    private void TabStrip_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed || !_tabDragStart.HasValue || _draggedTab is null) return;
+        Point current = e.GetPosition(TabStrip);
+        if (Math.Abs(current.X - _tabDragStart.Value.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(current.Y - _tabDragStart.Value.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+        ListBoxItem? targetItem = FindVisualAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
+        TerminalTabItem? target = targetItem is null ? null : _tabs.FirstOrDefault(tab => ReferenceEquals(tab.ListBoxItem, targetItem));
+        if (target is null || ReferenceEquals(target, _draggedTab)) return;
+        int from = _tabs.IndexOf(_draggedTab), to = _tabs.IndexOf(target);
+        ListBoxItem selected = _draggedTab.ListBoxItem;
+        if (!TerminalTabCollectionState.MoveItem(_tabs, from, to)) return;
+        TabStrip.Items.Remove(selected); TabStrip.Items.Insert(to, selected); TabStrip.SelectedItem = selected;
+        _tabDragStart = current;
     }
 
     private void ConfigureVerticalTabChrome(bool isHorizontal)
@@ -790,6 +960,7 @@ public partial class MainWindow : Window
     private void ApplyUpdatedSettings(TerminalAppSettings settings)
     {
         _settings = settings;
+        _keyBindings.Update(_settings.KeyBindings);
         ApplyTabStripPlacement(_settings.TabStripPlacement);
         ApplyBackdrop(_settings);
         SaveWindowSettings();
@@ -797,7 +968,7 @@ public partial class MainWindow : Window
 
         foreach (TerminalTabItem tab in _tabs)
         {
-            tab.View.ApplySettings(_settings);
+            foreach (TerminalTabView pane in tab.Panes) pane.ApplySettings(_settings);
             UpdateTabHeader(tab, tab.View.HeaderTitle);
         }
     }
@@ -842,7 +1013,17 @@ public partial class MainWindow : Window
             EnableFontLigatures = tabSettings.EnableFontLigatures,
             VerticalTabWidth = _settings.VerticalTabWidth,
             VerticalTabsCollapsed = _settings.VerticalTabsCollapsed,
-            ScrollbackLimit = tabSettings.ScrollbackLimit
+            ScrollbackLimit = tabSettings.ScrollbackLimit,
+            KeyBindings = TerminalKeyBindingCatalog.Normalize(_settings.KeyBindings),
+            ColorScheme = _settings.ColorScheme,
+            CustomForeground = _settings.CustomForeground,
+            CustomBackground = _settings.CustomBackground,
+            CustomCursorColor = _settings.CustomCursorColor,
+            CustomSelectionColor = _settings.CustomSelectionColor,
+            CustomAnsiPalette = _settings.CustomAnsiPalette?.ToArray(),
+            SavedTabs = _settings.SavedTabs.ToList(),
+            ActiveTabIndex = _settings.ActiveTabIndex,
+            ConfirmCloseWithRunningProcesses = _settings.ConfirmCloseWithRunningProcesses
         };
     }
 
@@ -863,6 +1044,8 @@ public partial class MainWindow : Window
     {
         _settings.WindowWidth = ActualWidth;
         _settings.WindowHeight = ActualHeight;
+        _settings.SavedTabs = _tabs.Select(tab => new TerminalSavedTab(tab.View.CommandLine, tab.View.WorkingDirectory)).ToList();
+        _settings.ActiveTabIndex = Math.Max(0, TabStrip.SelectedIndex);
     }
 
     private void UpdateMaximizeRestoreButton()
@@ -893,11 +1076,18 @@ public partial class MainWindow : Window
         return null;
     }
 
-    private sealed record TerminalTabItem(
-        TerminalTabView View,
-        ListBoxItem ListBoxItem,
-        Border HeaderBorder,
-        TextBlock IconText,
-        TextBlock TitleText,
-        Button CloseButton);
+    private sealed class TerminalTabItem
+    {
+        internal TerminalTabItem(TerminalTabView view, ListBoxItem listBoxItem, Border headerBorder, TextBlock iconText, TextBlock titleText, Button closeButton)
+        { ActivePane = view; Content = view; Panes.Add(view); ListBoxItem = listBoxItem; HeaderBorder = headerBorder; IconText = iconText; TitleText = titleText; CloseButton = closeButton; }
+        internal TerminalTabView View => ActivePane;
+        internal TerminalTabView ActivePane { get; set; }
+        internal UIElement Content { get; set; }
+        internal List<TerminalTabView> Panes { get; } = [];
+        internal ListBoxItem ListBoxItem { get; }
+        internal Border HeaderBorder { get; }
+        internal TextBlock IconText { get; }
+        internal TextBlock TitleText { get; }
+        internal Button CloseButton { get; }
+    }
 }

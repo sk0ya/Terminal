@@ -34,6 +34,16 @@ public sealed class TerminalAppSettings
     public bool EnableFontLigatures { get; set; } = false;
     public double VerticalTabWidth { get; set; } = DefaultVerticalTabWidth;
     public bool VerticalTabsCollapsed { get; set; } = false;
+    public Dictionary<string, string> KeyBindings { get; set; } = TerminalKeyBindingCatalog.CreateDefaults();
+    public string ColorScheme { get; set; } = "Dark";
+    public string? CustomForeground { get; set; }
+    public string? CustomBackground { get; set; }
+    public string? CustomCursorColor { get; set; }
+    public string? CustomSelectionColor { get; set; }
+    public string[]? CustomAnsiPalette { get; set; }
+    public List<TerminalSavedTab> SavedTabs { get; set; } = [];
+    public int ActiveTabIndex { get; set; }
+    public bool ConfirmCloseWithRunningProcesses { get; set; } = true;
 
     /// <summary>
     /// Maximum number of scrollback lines a terminal buffer keeps. Applied to
@@ -70,6 +80,8 @@ public sealed class TerminalAppSettings
             settings.TabStripPlacement = TerminalTabStripPlacementCatalog.Normalize(settings.TabStripPlacement);
             settings.ScrollbackLimit = ClampScrollbackLimit(settings.ScrollbackLimit);
             settings.VerticalTabWidth = ClampVerticalTabWidth(settings.VerticalTabWidth);
+            settings.KeyBindings = TerminalKeyBindingCatalog.Normalize(settings.KeyBindings);
+            settings.SavedTabs ??= [];
 
             return settings;
         }
@@ -93,3 +105,5 @@ public sealed class TerminalAppSettings
         return Path.Combine(localAppData, "Terminal", "settings.json");
     }
 }
+
+public sealed record TerminalSavedTab(string CommandLine, string WorkingDirectory);
