@@ -42,16 +42,32 @@ public partial class SettingsWindow : Window
         BuildFontFamilyCatalog();
         BuildTabStripPlacementCatalog();
         ApplySettings(_currentSettings);
+        TerminalProfileCatalog.ProfilesChanged += TerminalProfilesChanged;
+        Closed += SettingsWindowClosed;
     }
 
     public event Action<TerminalAppSettings>? SettingsChanged;
 
+    private void TerminalProfilesChanged(object? sender, EventArgs e)
+        => _ = Dispatcher.BeginInvoke(BuildProfileCatalog);
+
+    private void SettingsWindowClosed(object? sender, EventArgs e)
+    {
+        TerminalProfileCatalog.ProfilesChanged -= TerminalProfilesChanged;
+        Closed -= SettingsWindowClosed;
+    }
+
     private void BuildProfileCatalog()
     {
+        string? selectedId = (ProfileComboBox.SelectedItem as TerminalProfileDefinition)?.Id;
+        string commandLine = CommandTextBox.Text ?? string.Empty;
         _profiles.Clear();
         _profiles.AddRange(TerminalProfileCatalog.CreateProfiles());
         _profiles.Add(_customProfile);
         ProfileComboBox.ItemsSource = _profiles;
+        ProfileComboBox.Items.Refresh();
+        if (selectedId is not null || commandLine.Length > 0)
+            SetSelectedProfile(selectedId, commandLine);
     }
 
     private void BuildFontFamilyCatalog()

@@ -96,6 +96,9 @@ public partial class TerminalTabView
 
     private void InitializeTerminalWorkbench()
     {
+        TerminalProfileCatalog.ProfilesChanged += TerminalProfilesChanged;
+        Loaded += TerminalTabViewLoaded;
+        Unloaded += TerminalTabViewUnloaded;
         WorkingDirectoryTextBox.Text = Environment.CurrentDirectory;
         BuildProfileCatalog();
         ApplySavedWorkbenchSettings();
@@ -432,6 +435,26 @@ public partial class TerminalTabView
         {
             e.Handled = true;
         }
+    }
+
+    private void TerminalProfilesChanged(object? sender, EventArgs e)
+        => _ = Dispatcher.BeginInvoke(() =>
+        {
+            _launchState.ReplaceProfiles(TerminalProfileCatalog.CreateProfiles());
+            BuildProfileCatalog();
+        });
+
+    private void TerminalTabViewUnloaded(object sender, RoutedEventArgs e)
+    {
+        TerminalProfileCatalog.ProfilesChanged -= TerminalProfilesChanged;
+    }
+
+    private void TerminalTabViewLoaded(object sender, RoutedEventArgs e)
+    {
+        TerminalProfileCatalog.ProfilesChanged -= TerminalProfilesChanged;
+        TerminalProfileCatalog.ProfilesChanged += TerminalProfilesChanged;
+        _launchState.ReplaceProfiles(TerminalProfileCatalog.CreateProfiles());
+        BuildProfileCatalog();
     }
 
     private TerminalWorkbenchShortcutAction ResolveConfiguredWorkbenchShortcut(Key key, ModifierKeys modifiers)

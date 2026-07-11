@@ -41,6 +41,7 @@ public partial class MainWindow : Window
         Closing += OnClosing;
         Closed += OnClosed;
         SystemParameters.StaticPropertyChanged += SystemParameters_StaticPropertyChanged;
+        TerminalProfileCatalog.ProfilesChanged += TerminalProfilesChanged;
         _highContrastActive = SystemParameters.HighContrast;
     }
 
@@ -56,7 +57,11 @@ public partial class MainWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         SystemParameters.StaticPropertyChanged -= SystemParameters_StaticPropertyChanged;
+        TerminalProfileCatalog.ProfilesChanged -= TerminalProfilesChanged;
     }
+
+    private void TerminalProfilesChanged(object? sender, EventArgs e)
+        => _ = Dispatcher.BeginInvoke(PopulateProfilePicker);
 
     private void SystemParameters_StaticPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {

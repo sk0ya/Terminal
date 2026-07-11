@@ -1,4 +1,6 @@
 using System.IO;
+using System.Diagnostics;
+using System.Text;
 
 using Terminal.Sessions;
 
@@ -6,6 +8,11 @@ namespace Terminal.Settings;
 
 public static class TerminalProfileCatalog
 {
+    private static readonly object WslSync = new();
+    private static WslDiscoverySnapshot _wslSnapshot = new(ResolveWslExecutable(), [], DateTimeOffset.MinValue);
+    private static Task? _wslRefreshTask;
+    private static readonly TimeSpan WslCacheTtl = TimeSpan.FromMinutes(5);
+    public static event EventHandler? ProfilesChanged;
     public static IReadOnlyList<TerminalProfileDefinition> CreateProfiles()
     {
         var profiles = new List<TerminalProfileDefinition>
@@ -44,7 +51,135 @@ public static class TerminalProfileCatalog
                 "Git for Windows bash login shell."));
         }
 
+        AddWslProfiles(profiles);
+
         return profiles;
+    }
+
+    private static void AddWslProfiles(List<TerminalProfileDefinition> profiles)
+    {
+        WslDiscoverySnapshot snapshot;
+        lock (WslSync)
+        {
+            snapshot = _wslSnapshot;
+            if (ShouldRefreshWsl(snapshot.RefreshedAt, DateTimeOffset.UtcNow))
+                _wslRefreshTask ??= Task.Run(RefreshWslAsync);
+        }
+        if (snapshot.Executable is null) return;
+        profiles.Add(new TerminalProfileDefinition(
+            "wsl", "WSL", QuoteCommand(snapshot.Executable), "Default Windows Subsystem for Linux distribution."));
+        foreach (string distribution in snapshot.Distributions)
+        {
+            profiles.Add(new TerminalProfileDefinition(
+                BuildWslProfileId(distribution),
+                distribution,
+                BuildWslCommandLine(snapshot.Executable, distribution),
+                $"WSL distribution: {distribution}."));
+        }
+    }
+
+    internal static bool ShouldRefreshWsl(DateTimeOffset refreshedAt, DateTimeOffset now)
+        => now - refreshedAt >= WslCacheTtl;
+
+    public static void RefreshWslProfiles()
+    {
+        lock (WslSync) _wslRefreshTask ??= Task.Run(RefreshWslAsync);
+    }
+
+    private static async Task RefreshWslAsync()
+    {
+        string? executable = ResolveWslExecutable();
+        WslDistributionQueryResult result = executable is null
+            ? new(false, string.Empty)
+            : await QueryWslDistributionsAsync(executable, TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+        var next = new WslDiscoverySnapshot(executable,
+            result.Succeeded ? ParseWslDistributions(result.Output) : [], DateTimeOffset.UtcNow);
+        lock (WslSync) { _wslSnapshot = next; _wslRefreshTask = null; }
+        NotifyProfilesChanged();
+    }
+
+    internal static void NotifyProfilesChanged()
+    {
+        Delegate[] handlers = ProfilesChanged?.GetInvocationList() ?? [];
+        foreach (EventHandler handler in handlers)
+        {
+            try { handler(null, EventArgs.Empty); }
+            catch { /* One UI subscriber must not prevent the others from refreshing. */ }
+        }
+    }
+
+    internal static IReadOnlyList<string> ParseWslDistributions(string? output)
+    {
+        if (string.IsNullOrWhiteSpace(output)) return [];
+        return output.Replace("\0", string.Empty, StringComparison.Ordinal).Replace("\uFEFF", string.Empty, StringComparison.Ordinal)
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(name => name.Length > 0 && !name.Any(char.IsControl))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    internal static async Task<WslDistributionQueryResult> QueryWslDistributionsAsync(string executable, TimeSpan timeout)
+    {
+        try
+        {
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo(executable, "--list --quiet")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.Unicode,
+                    StandardErrorEncoding = Encoding.Unicode
+                }
+            };
+            if (!process.Start()) return new(false, string.Empty);
+            Task<string> output = process.StandardOutput.ReadToEndAsync();
+            Task<string> error = process.StandardError.ReadToEndAsync();
+            using var cts = new CancellationTokenSource(timeout);
+            try { await process.WaitForExitAsync(cts.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+                try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false); } catch { }
+                await Task.WhenAll(output, error).WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+                return new(false, string.Empty);
+            }
+            await Task.WhenAll(output, error).ConfigureAwait(false);
+            return process.ExitCode == 0 ? new(true, output.Result) : new(false, string.Empty);
+        }
+        catch
+        {
+            return new(false, string.Empty);
+        }
+    }
+
+    private static string? ResolveWslExecutable()
+    {
+        string system = Path.Combine(Environment.SystemDirectory, "wsl.exe");
+        return File.Exists(system) ? system : TryFindExecutable("wsl.exe");
+    }
+
+    internal static string BuildWslProfileId(string distribution)
+        => "wsl-" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(distribution)))[..12].ToLowerInvariant();
+
+    internal static string BuildWslCommandLine(string executable, string distribution)
+        => $"{QuoteCommand(executable)} --distribution {QuoteArgument(distribution)}";
+
+    private static string QuoteArgument(string value)
+    {
+        var result = new StringBuilder("\"");
+        int slashes = 0;
+        foreach (char ch in value)
+        {
+            if (ch == '\\') { slashes++; continue; }
+            if (ch == '"') result.Append('\\', slashes * 2 + 1).Append(ch);
+            else { result.Append('\\', slashes).Append(ch); }
+            slashes = 0;
+        }
+        result.Append('\\', slashes * 2).Append('"');
+        return result.ToString();
     }
 
     public static string BuildDefaultCommandLine()
@@ -335,4 +470,7 @@ public static class TerminalProfileCatalog
     }
 
     private sealed record ParsedCommandLine(string ExecutablePath, string[] Arguments);
+
+    internal sealed record WslDistributionQueryResult(bool Succeeded, string Output);
+    private sealed record WslDiscoverySnapshot(string? Executable, IReadOnlyList<string> Distributions, DateTimeOffset RefreshedAt);
 }

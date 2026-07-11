@@ -8,6 +8,66 @@ namespace Terminal.Tests;
 public sealed class TerminalProfileCatalogTests
 {
     [Fact]
+    public void ParseWslDistributionsHandlesUtf16NullsDuplicatesAndBlankLines()
+    {
+        IReadOnlyList<string> names = TerminalProfileCatalog.ParseWslDistributions(
+            "\uFEFFUbuntu\0\r\n Debian \0\r\nubuntu\r\n\r\n");
+
+        Assert.Equal(["Ubuntu", "Debian"], names);
+    }
+
+    [Fact]
+    public void WslProfileIdentityAndCommandLineAreStableAndSafelyQuoted()
+    {
+        string first = TerminalProfileCatalog.BuildWslProfileId("Ubuntu 24.04");
+        string second = TerminalProfileCatalog.BuildWslProfileId("Ubuntu 24.04");
+
+        Assert.Equal(first, second);
+        Assert.StartsWith("wsl-", first);
+        Assert.Equal("\"C:\\Program Files\\WSL\\wsl.exe\" --distribution \"Ubuntu 24.04\"",
+            TerminalProfileCatalog.BuildWslCommandLine("C:\\Program Files\\WSL\\wsl.exe", "Ubuntu 24.04"));
+        Assert.EndsWith("--distribution \"quote\\\"and-path\\\\\"",
+            TerminalProfileCatalog.BuildWslCommandLine("wsl.exe", "quote\"and-path\\"));
+    }
+
+    [Fact]
+    public async Task QueryWslDistributionsFailsCleanlyForMissingExecutable()
+    {
+        TerminalProfileCatalog.WslDistributionQueryResult result = await TerminalProfileCatalog.QueryWslDistributionsAsync(
+            Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".exe"), TimeSpan.FromMilliseconds(50));
+
+        Assert.False(result.Succeeded);
+        Assert.Empty(result.Output);
+    }
+
+    [Fact]
+    public void ProfilesChangedNotifiesRemainingSubscribersWhenOneThrows()
+    {
+        int called = 0;
+        EventHandler broken = (_, _) => throw new InvalidOperationException();
+        EventHandler healthy = (_, _) => called++;
+        TerminalProfileCatalog.ProfilesChanged += broken;
+        TerminalProfileCatalog.ProfilesChanged += healthy;
+        try
+        {
+            TerminalProfileCatalog.NotifyProfilesChanged();
+            Assert.Equal(1, called);
+        }
+        finally
+        {
+            TerminalProfileCatalog.ProfilesChanged -= broken;
+            TerminalProfileCatalog.ProfilesChanged -= healthy;
+        }
+    }
+
+    [Fact]
+    public void WslCacheRefreshesExpiredMissingExecutableSnapshot()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        Assert.True(TerminalProfileCatalog.ShouldRefreshWsl(DateTimeOffset.MinValue, now));
+        Assert.False(TerminalProfileCatalog.ShouldRefreshWsl(now, now));
+    }
+    [Fact]
     public void ResolveSelectedProfilePrefersMatchingCandidateOverStoredCustomId()
     {
         TerminalProfileDefinition candidateProfile = new(

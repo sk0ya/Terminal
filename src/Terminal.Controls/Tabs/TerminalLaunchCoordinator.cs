@@ -36,9 +36,17 @@ internal sealed class TerminalLaunchCoordinator
         ActiveWorkingDirectory = string.Empty;
     }
 
-    public IReadOnlyList<TerminalProfileDefinition> Profiles { get; }
+    public IReadOnlyList<TerminalProfileDefinition> Profiles { get; private set; }
     public TerminalProfileDefinition CustomProfile { get; }
     public TerminalProfileDefinition SelectedProfile { get; private set; }
+
+    public void ReplaceProfiles(IReadOnlyList<TerminalProfileDefinition> profiles)
+    {
+        string selectedId = SelectedProfile.Id;
+        Profiles = [.. profiles, CustomProfile];
+        SelectedProfile = Profiles.FirstOrDefault(p => string.Equals(p.Id, selectedId, StringComparison.OrdinalIgnoreCase))
+            ?? TerminalProfileCatalog.MatchProfileByCommandLine(Profiles, CommandLine) ?? CustomProfile;
+    }
     public string CommandLine { get; private set; }
     public string WorkingDirectory { get; private set; }
     public string ActiveCommandLine { get; private set; } = string.Empty;
