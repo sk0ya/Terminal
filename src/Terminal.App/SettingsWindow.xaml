@@ -10,6 +10,7 @@
         SizeToContent="Height"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
+        MaxHeight="800"
         Background="#131313"
         Foreground="#F0F0F0">
     <Window.Resources>
@@ -187,6 +188,7 @@
 
     </Window.Resources>
 
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <Border Background="{StaticResource PanelBrush}"
             BorderBrush="{StaticResource BorderBrush}"
             BorderThickness="1"
@@ -343,11 +345,46 @@
                       Checked="FontLigaturesCheckBox_Toggled"
                       Unchecked="FontLigaturesCheckBox_Toggled" />
 
-            <TextBlock Grid.Row="18" Grid.Column="0" VerticalAlignment="Center"
-                       Foreground="{StaticResource MutedBrush}" Text="Close warning" />
-            <CheckBox x:Name="CloseConfirmationCheckBox" Grid.Row="18" Grid.Column="1"
-                      Foreground="#F0F0F0" Content="Confirm before stopping running processes"
-                      Checked="CloseConfirmationCheckBox_Toggled" Unchecked="CloseConfirmationCheckBox_Toggled" />
+            <Grid Grid.Row="18" Grid.ColumnSpan="2">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="90" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" /><RowDefinition Height="8" /><RowDefinition Height="Auto" />
+                    <RowDefinition Height="8" /><RowDefinition Height="Auto" /><RowDefinition Height="8" />
+                    <RowDefinition Height="Auto" /><RowDefinition Height="8" /><RowDefinition Height="Auto" />
+                    <RowDefinition Height="8" /><RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <TextBlock Grid.Row="0" Foreground="{StaticResource MutedBrush}" Text="Close warning" />
+                <CheckBox x:Name="CloseConfirmationCheckBox" Grid.Row="0" Grid.Column="1" Foreground="#F0F0F0"
+                          Content="Confirm before stopping running processes"
+                          Checked="CloseConfirmationCheckBox_Toggled" Unchecked="CloseConfirmationCheckBox_Toggled" />
+                <TextBlock Grid.Row="2" Foreground="{StaticResource MutedBrush}" Text="Session logs" />
+                <StackPanel Grid.Row="2" Grid.Column="1">
+                    <CheckBox x:Name="SessionLoggingCheckBox" Foreground="#F0F0F0" Content="Write session output logs"
+                              Checked="SessionLoggingCheckBox_Toggled" Unchecked="SessionLoggingCheckBox_Toggled" />
+                    <TextBox x:Name="SessionLogDirectoryTextBox" Margin="0,5,0,0" Style="{StaticResource InputTextBoxStyle}"
+                             ToolTip="Leave empty to use the default log directory" LostKeyboardFocus="SessionLogDirectoryTextBox_LostKeyboardFocus" />
+                </StackPanel>
+                <TextBlock Grid.Row="4" Foreground="{StaticResource MutedBrush}" Text="Integration" />
+                <StackPanel Grid.Row="4" Grid.Column="1">
+                    <CheckBox x:Name="ShellIntegrationCheckBox" Foreground="#F0F0F0" Content="Inject shell integration into supported shells"
+                              Checked="ShellIntegrationCheckBox_Toggled" Unchecked="ShellIntegrationCheckBox_Toggled" />
+                    <TextBlock Foreground="{StaticResource MutedBrush}" FontSize="11" Text="Applies to newly started sessions only." />
+                </StackPanel>
+                <TextBlock Grid.Row="6" Foreground="{StaticResource MutedBrush}" Text="CJK width" />
+                <StackPanel Grid.Row="6" Grid.Column="1">
+                    <CheckBox x:Name="CjkWidthCheckBox" Foreground="#F0F0F0" Content="Treat ambiguous-width characters as wide"
+                              Checked="CjkWidthCheckBox_Toggled" Unchecked="CjkWidthCheckBox_Toggled" />
+                    <TextBlock Foreground="{StaticResource MutedBrush}" FontSize="11" Text="Applies to new output and newly started sessions." />
+                </StackPanel>
+                <TextBlock Grid.Row="8" Foreground="{StaticResource MutedBrush}" Text="Backdrop" />
+                <ComboBox x:Name="BackdropComboBox" Grid.Row="8" Grid.Column="1" Style="{StaticResource InputComboBoxStyle}"
+                          SelectionChanged="BackdropComboBox_SelectionChanged">
+                    <ComboBoxItem Content="None" Tag="none" /><ComboBoxItem Content="Mica" Tag="mica" />
+                    <ComboBoxItem Content="Acrylic" Tag="acrylic" /><ComboBoxItem Content="Mica Alt" Tag="mica-alt" />
+                </ComboBox>
+                <TextBlock Grid.Row="10" Grid.ColumnSpan="2" Foreground="{StaticResource MutedBrush}" FontSize="11"
+                           Text="Apply updates the current window; session logging and shell options affect newly started sessions." TextWrapping="Wrap" />
+            </Grid>
 
             <TextBlock Grid.Row="20" Grid.Column="0" VerticalAlignment="Center"
                        Foreground="{StaticResource MutedBrush}" Text="Keyboard" />
@@ -378,4 +415,5 @@
             </StackPanel>
         </Grid>
     </Border>
+    </ScrollViewer>
 </Window>

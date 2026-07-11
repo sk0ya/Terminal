@@ -5,6 +5,50 @@ namespace Terminal.Tests;
 
 public sealed class TerminalAppCoordinatorTests
 {
+    [Theory]
+    [InlineData("mica", "mica")]
+    [InlineData("acrylic", "acrylic")]
+    [InlineData("mica-alt", "mica-alt")]
+    [InlineData("  MICA  ", "mica")]
+    [InlineData("AcrYLic", "acrylic")]
+    [InlineData("invalid", "none")]
+    [InlineData(null, "none")]
+    public void NormalizeBackdropTypeUsesSupportedAllowList(string? input, string expected)
+        => Assert.Equal(expected, TerminalSettingsEditor.NormalizeBackdropType(input));
+
+    [Fact]
+    public void EmptySessionLogDirectorySelectsDefaultWithoutCreatingDirectory()
+    {
+        Assert.True(TerminalSettingsEditor.TryNormalizeSessionLogDirectory("  ", out string? directory));
+        Assert.Null(directory);
+    }
+
+    [Fact]
+    public void SessionLogDirectoryNormalizesPathWithoutCreatingIt()
+    {
+        string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "logs");
+        Assert.True(TerminalSettingsEditor.TryNormalizeSessionLogDirectory(path, out string? normalized));
+        Assert.Equal(Path.GetFullPath(path), normalized);
+        Assert.False(Directory.Exists(path));
+    }
+
+    [Fact]
+    public void SessionLogDirectoryRejectsExistingFileButAllowsMissingDirectory()
+    {
+        string root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string file = Path.Combine(root, "not-a-directory");
+        File.WriteAllText(file, "x");
+        try
+        {
+            Assert.False(TerminalSettingsEditor.TryNormalizeSessionLogDirectory(file, out _));
+            string missing = Path.Combine(root, "future-directory");
+            Assert.True(TerminalSettingsEditor.TryNormalizeSessionLogDirectory(missing, out string? normalized));
+            Assert.Equal(Path.GetFullPath(missing), normalized);
+            Assert.False(Directory.Exists(missing));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
     [Fact]
     public void TabsCanBeReorderedWithoutLosingItems()
     {

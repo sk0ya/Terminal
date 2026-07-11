@@ -53,6 +53,24 @@ internal static class TerminalSettingsEditor
         return true;
     }
 
+    internal static bool TryNormalizeSessionLogDirectory(string? rawPath, out string? directory)
+    {
+        if (string.IsNullOrWhiteSpace(rawPath)) { directory = null; return true; }
+        try
+        {
+            directory = Path.GetFullPath(Environment.ExpandEnvironmentVariables(rawPath.Trim()));
+            if (File.Exists(directory)) { directory = null; return false; }
+            return true;
+        }
+        catch { directory = null; return false; }
+    }
+
+    internal static string NormalizeBackdropType(string? value)
+    {
+        string normalized = value?.Trim().ToLowerInvariant() ?? string.Empty;
+        return normalized is "mica" or "acrylic" or "mica-alt" ? normalized : "none";
+    }
+
     internal static TerminalAppSettings Clone(TerminalAppSettings settings) => new()
     {
         SelectedProfileId = settings.SelectedProfileId,

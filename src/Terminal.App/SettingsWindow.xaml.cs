@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Input;
 using System.Windows.Threading;
 
 using Terminal.Settings;
@@ -104,10 +105,17 @@ public partial class SettingsWindow : Window
             StatusBarCheckBox.IsChecked = settings.ShowStatusBar;
             FontLigaturesCheckBox.IsChecked = settings.EnableFontLigatures;
             CloseConfirmationCheckBox.IsChecked = settings.ConfirmCloseWithRunningProcesses;
+            SessionLoggingCheckBox.IsChecked = settings.EnableSessionLogging;
+            SessionLogDirectoryTextBox.Text = settings.SessionLogDirectory ?? string.Empty;
+            ShellIntegrationCheckBox.IsChecked = settings.EnableShellIntegrationInjection;
+            CjkWidthCheckBox.IsChecked = settings.CjkAmbiguousWidthIsWide;
+            string backdrop = TerminalSettingsEditor.NormalizeBackdropType(settings.BackdropType);
+            BackdropComboBox.SelectedItem = BackdropComboBox.Items.OfType<ComboBoxItem>().First(item => Equals(item.Tag, backdrop));
             ScrollbackLimitTextBox.Text = TerminalAppSettings.ClampScrollbackLimit(settings.ScrollbackLimit).ToString();
             SetInputValidationState(WorkingDirectoryTextBox, isValid: true);
             SetInputValidationState(FontSizeTextBox, isValid: true);
             SetInputValidationState(ScrollbackLimitTextBox, isValid: true);
+            SetInputValidationState(SessionLogDirectoryTextBox, isValid: true);
         }
         finally
         {
@@ -439,10 +447,12 @@ public partial class SettingsWindow : Window
         CommitWorkingDirectorySetting();
         CommitFontSizeSetting();
         CommitScrollbackLimitSetting();
+        bool validLogDirectory = CommitSessionLogDirectorySetting();
 
         bool isValid = TerminalSettingsEditor.TryNormalizeWorkingDirectory(WorkingDirectoryTextBox.Text, out _)
             && TerminalSettingsEditor.TryNormalizeFontSize(FontSizeTextBox.Text, out _)
-            && TerminalSettingsEditor.TryNormalizeScrollbackLimit(ScrollbackLimitTextBox.Text, out _);
+            && TerminalSettingsEditor.TryNormalizeScrollbackLimit(ScrollbackLimitTextBox.Text, out _)
+            && validLogDirectory;
         return isValid;
     }
 
@@ -490,6 +500,46 @@ public partial class SettingsWindow : Window
     private void CloseConfirmationCheckBox_Toggled(object sender, RoutedEventArgs e)
     {
         if (!_suppressAutoApply) _currentSettings.ConfirmCloseWithRunningProcesses = CloseConfirmationCheckBox.IsChecked == true;
+    }
+
+    private void SessionLoggingCheckBox_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!_suppressAutoApply) _currentSettings.EnableSessionLogging = SessionLoggingCheckBox.IsChecked == true;
+    }
+
+    private void SessionLogDirectoryTextBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        CommitSessionLogDirectorySetting();
+    }
+
+    private bool CommitSessionLogDirectorySetting()
+    {
+        if (_suppressAutoApply) return true;
+        if (!TerminalSettingsEditor.TryNormalizeSessionLogDirectory(SessionLogDirectoryTextBox.Text, out string? directory))
+        {
+            SetInputValidationState(SessionLogDirectoryTextBox, false);
+            return false;
+        }
+        _currentSettings.SessionLogDirectory = directory;
+        SetInputValidationState(SessionLogDirectoryTextBox, true);
+        SetTextSilently(SessionLogDirectoryTextBox, directory ?? string.Empty);
+        return true;
+    }
+
+    private void ShellIntegrationCheckBox_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!_suppressAutoApply) _currentSettings.EnableShellIntegrationInjection = ShellIntegrationCheckBox.IsChecked == true;
+    }
+
+    private void CjkWidthCheckBox_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!_suppressAutoApply) _currentSettings.CjkAmbiguousWidthIsWide = CjkWidthCheckBox.IsChecked == true;
+    }
+
+    private void BackdropComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_suppressAutoApply)
+            _currentSettings.BackdropType = TerminalSettingsEditor.NormalizeBackdropType((BackdropComboBox.SelectedItem as ComboBoxItem)?.Tag as string);
     }
 
 }
