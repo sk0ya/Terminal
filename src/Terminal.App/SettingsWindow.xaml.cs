@@ -457,6 +457,7 @@ public partial class SettingsWindow : Window
     private void KeyBindingsButton_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new KeyBindingsWindow(_currentSettings.KeyBindings) { Owner = this };
+        HighContrastAppearance.Apply(dialog, SystemParameters.HighContrast);
         if (dialog.ShowDialog() == true)
         {
             _currentSettings.KeyBindings = dialog.Bindings;
@@ -466,6 +467,7 @@ public partial class SettingsWindow : Window
     private void ColorSchemeButton_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new ColorSchemeWindow(_currentSettings) { Owner = this };
+        HighContrastAppearance.Apply(dialog, SystemParameters.HighContrast);
         if (dialog.ShowDialog() == true) dialog.ApplyTo(_currentSettings);
     }
 

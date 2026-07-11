@@ -32,6 +32,12 @@
         <SolidColorBrush x:Key="TabTextBrush" Color="#EDEDED" />
         <SolidColorBrush x:Key="TabTextMutedBrush" Color="#A7A7A7" />
         <SolidColorBrush x:Key="AccentBrush" Color="#4BA3FF" />
+        <SolidColorBrush x:Key="CommandHoverBrush" Color="#242424" />
+        <SolidColorBrush x:Key="CommandPressedBrush" Color="#2D2D2D" />
+        <SolidColorBrush x:Key="CloseHoverBrush" Color="#C42B1C" />
+        <SolidColorBrush x:Key="ClosePressedBrush" Color="#A52619" />
+        <SolidColorBrush x:Key="ProfilePressedBrush" Color="#2B2B2B" />
+        <SolidColorBrush x:Key="StateTextBrush" Color="#EDEDED" />
 
         <ItemsPanelTemplate x:Key="HorizontalTabItemsPanelTemplate">
             <StackPanel Orientation="Horizontal" />
@@ -81,10 +87,12 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="Background" Value="#242424" />
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource CommandHoverBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource StateTextBrush}" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="Background" Value="#2D2D2D" />
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource CommandPressedBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource StateTextBrush}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -104,10 +112,12 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="Background" Value="#C42B1C" />
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource CloseHoverBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource StateTextBrush}" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="Background" Value="#A52619" />
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource ClosePressedBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource StateTextBrush}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -135,13 +145,16 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="Background" Value="#232323" />
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource TabHoverBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource StateTextBrush}" />
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="Background" Value="#232323" />
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource TabHoverBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource StateTextBrush}" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="Background" Value="#2B2B2B" />
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource ProfilePressedBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource StateTextBrush}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>

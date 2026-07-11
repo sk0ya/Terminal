@@ -67,6 +67,12 @@ public partial class TerminalTabView
         ApplyColorTheme(theme);
     }
 
+    public void SetHighContrastMode(bool active)
+    {
+        TerminalOutput.HighContrastMode = active;
+        TerminalOutput.InvalidateVisual();
+    }
+
     public void SetFont(string? fontFamilyName, double fontSize)
     {
         ApplyTerminalFontFamily(fontFamilyName, persist: false);

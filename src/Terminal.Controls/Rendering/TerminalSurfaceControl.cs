@@ -17,6 +17,13 @@ namespace Terminal.Rendering;
 
 public sealed class TerminalSurfaceControl : Control, IScrollInfo
 {
+    public bool HighContrastMode { get; set; }
+
+    internal Color ResolveForegroundColor(Color requested) => HighContrastMode
+        ? (Foreground as SolidColorBrush)?.Color ?? SystemColors.WindowTextColor : requested;
+
+    internal Color ResolveBackgroundColor(Color requested) => HighContrastMode
+        ? (Background as SolidColorBrush)?.Color ?? SystemColors.WindowColor : requested;
     private static readonly Color DefaultBackgroundColor = Color.FromRgb(0x0E, 0x0C, 0x0A);
     private static readonly Color DefaultForegroundColor = Color.FromRgb(0xE8, 0xE0, 0xD2);
     private static readonly Brush DefaultSelectionBrush = CreateFrozenBrush(Color.FromArgb(0x66, 0xE1, 0x9A, 0x4A));
@@ -1036,7 +1043,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 top,
                 Math.Max(0, segment.Snapshot.CellLength * _cellSize.Width),
                 _cellSize.Height);
-            drawingContext.DrawRectangle(GetBrush(segment.Snapshot.Background), null, rect);
+            drawingContext.DrawRectangle(GetBrush(ResolveBackgroundColor(segment.Snapshot.Background)), null, rect);
         }
     }
 
@@ -1118,7 +1125,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 string segText = segment.Snapshot.Text;
                 Typeface primaryTypeface = segment.Snapshot.Italic ? _italicTypeface! : _typeface!;
                 FontWeight fontWeight = segment.Snapshot.Bold ? FontWeights.SemiBold : FontWeights.Regular;
-                Brush foreground = GetBrush(segment.Snapshot.Foreground);
+                Brush foreground = GetBrush(ResolveForegroundColor(segment.Snapshot.Foreground));
                 TextDecorationCollection? decorations = BuildDecorations(segment.Snapshot);
                 FontFallbackResolver? fallback = _fontFallback;
                 bool ambiguousAsWide = _ambiguousAsWide;

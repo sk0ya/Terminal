@@ -21,6 +21,9 @@ public partial class MainWindow : Window
     private SettingsWindow? _settingsWindow;
     private bool _isClosing;
     private bool _allowClose;
+    private bool _highContrastActive;
+    private readonly Dictionary<object, object> _normalChromeResources = [];
+    private readonly Brush _normalWindowForeground;
     private readonly TerminalKeyBindings _keyBindings;
     private Point? _tabDragStart;
     private TerminalTabItem? _draggedTab;
@@ -28,6 +31,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _normalWindowForeground = Foreground;
         _settings = TerminalAppSettings.Load();
         _keyBindings = new(_settings.KeyBindings);
         ApplyWindowSettings(_settings);
@@ -35,15 +39,91 @@ public partial class MainWindow : Window
         UpdateMaximizeRestoreButton();
         Loaded += OnLoaded;
         Closing += OnClosing;
+        Closed += OnClosed;
+        SystemParameters.StaticPropertyChanged += SystemParameters_StaticPropertyChanged;
+        _highContrastActive = SystemParameters.HighContrast;
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        ApplyBackdrop(_settings);
+        ApplyHighContrastState(_highContrastActive);
         if (_tabs.Count == 0)
         {
             RestoreSavedTabs();
         }
+    }
+
+    private void OnClosed(object? sender, EventArgs e)
+    {
+        SystemParameters.StaticPropertyChanged -= SystemParameters_StaticPropertyChanged;
+    }
+
+    private void SystemParameters_StaticPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(SystemParameters.HighContrast)) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.BeginInvoke(() => ApplyHighContrastState(SystemParameters.HighContrast));
+            return;
+        }
+
+        ApplyHighContrastState(SystemParameters.HighContrast);
+    }
+
+    private void ApplyHighContrastState(bool active)
+    {
+        _highContrastActive = active;
+        ApplyBackdrop(_settings);
+        ApplyChromeTheme(active);
+        foreach (Window window in Application.Current.Windows)
+            if (!ReferenceEquals(window, this)) HighContrastAppearance.Apply(window, active);
+        foreach (TerminalTabItem tab in _tabs)
+        {
+            foreach (TerminalTabView pane in tab.Panes) ApplyAccessibilityTheme(pane);
+            UpdateTabHeader(tab, tab.View.HeaderTitle);
+        }
+    }
+
+    private void ApplyChromeTheme(bool active)
+    {
+        string[] keys = ["ChromeBrush", "ChromeBorderBrush", "TabIdleBrush", "TabActiveBrush",
+            "TabHoverBrush", "TabTextBrush", "TabTextMutedBrush", "AccentBrush", "CommandHoverBrush",
+            "CommandPressedBrush", "CloseHoverBrush", "ClosePressedBrush", "ProfilePressedBrush", "StateTextBrush"];
+        foreach (string key in keys)
+        {
+            if (active)
+            {
+                if (!_normalChromeResources.ContainsKey(key)) _normalChromeResources[key] = Resources[key];
+                Resources[key] = key is "CommandPressedBrush" or "ClosePressedBrush" or "ProfilePressedBrush"
+                    ? SystemColors.HotTrackBrush : key is "AccentBrush" or "TabActiveBrush" or "TabHoverBrush" or "CommandHoverBrush" or "CloseHoverBrush"
+                    ? SystemColors.HighlightBrush : key is "StateTextBrush"
+                        ? SystemColors.HighlightTextBrush : key.Contains("Text", StringComparison.Ordinal)
+                        ? SystemColors.WindowTextBrush : key.Contains("Border", StringComparison.Ordinal)
+                            ? SystemColors.WindowTextBrush : SystemColors.WindowBrush;
+            }
+            else if (_normalChromeResources.Remove(key, out object? value)) Resources[key] = value;
+        }
+        foreach (GridSplitter splitter in FindVisualChildren<GridSplitter>(ActiveTabHost))
+            splitter.Background = active ? SystemColors.WindowTextBrush : (Brush)Resources["ChromeBorderBrush"];
+        UpdateTabVisuals();
+    }
+
+    private static IEnumerable<T> FindVisualChildren<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match) yield return match;
+            foreach (T descendant in FindVisualChildren<T>(child)) yield return descendant;
+        }
+    }
+
+    private void ApplyAccessibilityTheme(TerminalTabView pane)
+    {
+        pane.SetHighContrastMode(_highContrastActive);
+        pane.SetColorTheme(TerminalColorThemeCatalog.ResolveEffective(
+            _settings, _highContrastActive, SystemColors.WindowTextColor,
+            SystemColors.WindowColor, SystemColors.HighlightColor));
     }
 
     private void RestoreSavedTabs()
@@ -59,7 +139,8 @@ public partial class MainWindow : Window
 
     private void ApplyBackdrop(TerminalAppSettings settings)
     {
-        bool active = DwmBackdrop.Apply(this, settings.BackdropType);
+        if (_highContrastActive) DwmBackdrop.Clear(this);
+        bool active = !_highContrastActive && DwmBackdrop.Apply(this, settings.BackdropType);
         var transparent = new SolidColorBrush(Colors.Transparent);
         var opaque = new SolidColorBrush(Color.FromRgb(0x0E, 0x0E, 0x0E));
         Background = active ? transparent : opaque;
@@ -78,6 +159,18 @@ public partial class MainWindow : Window
         {
             foreach (TerminalTabView pane in tab.Panes) pane.SetBackdropActive(active);
         }
+
+        if (_highContrastActive)
+        {
+            Background = SystemColors.WindowBrush;
+            Foreground = SystemColors.WindowTextBrush;
+            ActiveTabHost.Background = SystemColors.WindowBrush;
+            TopChromeBar.Background = SystemColors.WindowBrush;
+            LeftTabChrome.Background = SystemColors.WindowBrush;
+            RightTabChrome.Background = SystemColors.WindowBrush;
+            BottomTabChrome.Background = SystemColors.WindowBrush;
+        }
+        else Foreground = _normalWindowForeground;
     }
 
     private async void OnClosing(object? sender, CancelEventArgs e)
@@ -165,7 +258,7 @@ public partial class MainWindow : Window
         }
         var splitter = new GridSplitter
         {
-            Background = new SolidColorBrush(Color.FromRgb(0x2A, 0x2A, 0x2A)),
+            Background = _highContrastActive ? SystemColors.WindowTextBrush : (Brush)Resources["ChromeBorderBrush"],
             HorizontalAlignment = horizontal ? HorizontalAlignment.Stretch : HorizontalAlignment.Center,
             VerticalAlignment = horizontal ? VerticalAlignment.Center : VerticalAlignment.Stretch,
             ResizeDirection = horizontal ? GridResizeDirection.Rows : GridResizeDirection.Columns,
@@ -303,6 +396,7 @@ public partial class MainWindow : Window
             UpdateTabHeader(tab, tab.View.HeaderTitle);
         };
         view.ApplySettings(_settings);
+        ApplyAccessibilityTheme(view);
     }
 
     private string GetWorkingDirectoryOrDefault()
@@ -436,8 +530,8 @@ public partial class MainWindow : Window
 
         var border = new Border
         {
-            Background = new SolidColorBrush(Color.FromRgb(0x1B, 0x1B, 0x1B)),
-            BorderBrush = new SolidColorBrush(Color.FromRgb(0x2A, 0x2A, 0x2A)),
+            Background = (Brush)Resources["TabIdleBrush"],
+            BorderBrush = (Brush)Resources["ChromeBorderBrush"],
             BorderThickness = new Thickness(0, 0, 1, 0),
             Padding = new Thickness(8, 0, 6, 0),
             Child = headerPanel
@@ -908,13 +1002,19 @@ public partial class MainWindow : Window
         foreach (TerminalTabItem tab in _tabs)
         {
             bool isSelected = ReferenceEquals(TabStrip.SelectedItem, tab.ListBoxItem);
-            tab.HeaderBorder.Background = new SolidColorBrush(isSelected
+            tab.HeaderBorder.Background = _highContrastActive
+                ? (isSelected ? SystemColors.HighlightBrush : SystemColors.WindowBrush)
+                : new SolidColorBrush(isSelected
                 ? Color.FromRgb(0x0E, 0x0E, 0x0E)
                 : Color.FromRgb(0x1B, 0x1B, 0x1B));
             tab.HeaderBorder.BorderThickness = isHorizontal
                 ? new Thickness(0, 0, 1, 0)
                 : new Thickness(0, 0, 0, 1);
-            tab.TitleText.Foreground = new SolidColorBrush(isSelected
+            tab.HeaderBorder.BorderBrush = _highContrastActive
+                ? SystemColors.WindowTextBrush : (Brush)Resources["ChromeBorderBrush"];
+            tab.TitleText.Foreground = _highContrastActive
+                ? (isSelected ? SystemColors.HighlightTextBrush : SystemColors.WindowTextBrush)
+                : new SolidColorBrush(isSelected
                 ? Color.FromRgb(0xED, 0xED, 0xED)
                 : Color.FromRgb(0xA7, 0xA7, 0xA7));
             tab.IconText.Foreground = tab.TitleText.Foreground;
@@ -954,6 +1054,7 @@ public partial class MainWindow : Window
         _settingsWindow.SettingsChanged += ApplyUpdatedSettings;
         _settingsWindow.Closed += SettingsWindow_Closed;
         _settingsWindow.Show();
+        HighContrastAppearance.Apply(_settingsWindow, _highContrastActive);
         _settingsWindow.Activate();
     }
 
@@ -968,7 +1069,11 @@ public partial class MainWindow : Window
 
         foreach (TerminalTabItem tab in _tabs)
         {
-            foreach (TerminalTabView pane in tab.Panes) pane.ApplySettings(_settings);
+            foreach (TerminalTabView pane in tab.Panes)
+            {
+                pane.ApplySettings(_settings);
+                ApplyAccessibilityTheme(pane);
+            }
             UpdateTabHeader(tab, tab.View.HeaderTitle);
         }
     }

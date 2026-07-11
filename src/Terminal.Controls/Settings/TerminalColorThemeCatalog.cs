@@ -46,4 +46,23 @@ public static class TerminalColorThemeCatalog
          Color.FromRgb(0x76,0x76,0x76), Color.FromRgb(0xD1,0x34,0x38), Color.FromRgb(0x16,0x98,0x0C), Color.FromRgb(0xA0,0x78,0),
          Color.FromRgb(0x3B,0x68,0xDF), Color.FromRgb(0xA4,0,0x8E), Color.FromRgb(0x20,0xA6,0xA6), Color.FromRgb(0x22,0x22,0x22)],
         Color.FromRgb(0, 0x66, 0xCC), Color.FromArgb(0x55, 0, 0x78, 0xD4));
+
+    public static TerminalColorTheme CreateHighContrast(
+        TerminalColorTheme baseTheme,
+        Color foreground,
+        Color background,
+        Color accent) => new(
+            foreground,
+            background,
+            baseTheme.AnsiPalette,
+            accent,
+            Color.FromArgb(0x99, accent.R, accent.G, accent.B));
+
+    public static TerminalColorTheme ResolveEffective(
+        TerminalAppSettings settings, bool highContrast,
+        Color foreground, Color background, Color accent)
+    {
+        TerminalColorTheme configured = Resolve(settings);
+        return highContrast ? CreateHighContrast(configured, foreground, background, accent) : configured;
+    }
 }

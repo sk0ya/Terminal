@@ -12,4 +12,12 @@ public partial class App : Application
         base.OnStartup(e);
         _ = Task.Run(() => SessionLogWriter.CompressOldDayFiles());
     }
+
+    protected override void OnActivated(EventArgs e)
+    {
+        base.OnActivated(e);
+        if (!SystemParameters.HighContrast) return;
+        foreach (Window window in Windows)
+            if (window is not global::Terminal.MainWindow) HighContrastAppearance.Apply(window, active: true);
+    }
 }

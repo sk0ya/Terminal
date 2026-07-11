@@ -78,4 +78,23 @@ internal static class DwmBackdrop
             return false;
         }
     }
+
+    internal static void Clear(Window window)
+    {
+        try
+        {
+            nint hwnd = new WindowInteropHelper(window).Handle;
+            if (hwnd == nint.Zero) return;
+            int value = (int)DWMSBT.DWMSBT_NONE;
+            DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref value, sizeof(int));
+            int micaOff = 0;
+            DwmSetWindowAttribute(hwnd, DWMWA_MICA_EFFECT, ref micaOff, sizeof(int));
+            if (WindowChrome.GetWindowChrome(window) is WindowChrome chrome)
+                chrome.GlassFrameThickness = new Thickness(0);
+        }
+        catch
+        {
+            // DWM attributes are best-effort on unsupported Windows versions.
+        }
+    }
 }
