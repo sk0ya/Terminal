@@ -3,7 +3,7 @@ using System.IO;
 namespace Terminal.Sessions;
 
 /// <summary>
-/// Rewrites a pwsh (PowerShell 7+) launch so the shell emits OSC 133
+/// Rewrites an interactive PowerShell 5.1 or PowerShell 7 launch so the shell emits OSC 133
 /// shell-integration markers (prompt / command / output zones) without the
 /// user editing their profile. Other shells launch unchanged. Failures fall
 /// back to the original launch so a session always starts even when the
@@ -12,16 +12,17 @@ namespace Terminal.Sessions;
 public static class ShellIntegration
 {
     private const string ScriptFileName = "shell-integration.ps1";
+    private static readonly object ScriptProvisioningSync = new();
 
     /// <summary>
     /// Arguments that mean pwsh is being launched to run something rather
     /// than as an interactive shell; injecting -Command there would override
     /// or conflict with the caller's intent.
     /// </summary>
-    private static readonly string[] PowerShellNonInteractiveArguments =
-    [
-        "-command", "-c", "-encodedcommand", "-enc", "-e", "-ec", "-file", "-f"
-    ];
+    private static readonly HashSet<string> PowerShellInteractiveSwitches = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "-nologo", "-noprofile", "-noexit", "-sta", "-mta"
+    };
 
     /// <summary>
     /// Dot-sourced into pwsh at startup. Wraps the active prompt function to
@@ -125,7 +126,9 @@ public static class ShellIntegration
 
     /// <summary>
     /// True when <see cref="PrepareLaunch(string)"/> would rewrite the given
-    /// command line: an interactive pwsh launch without -Command/-File style
+    /// command line: an interactive PowerShell launch containing only known
+    /// value-less interactive switches. Unknown or execution-mode arguments
+    /// are rejected rather than risking a change to the caller's intent.
     /// arguments.
     /// </summary>
     public static bool CanInject(string? commandLine)
@@ -146,22 +149,12 @@ public static class ShellIntegration
 
     internal static string PrepareLaunch(string commandLine, string? scriptDirectory)
     {
-        if (!TryParseInjectablePowerShell(commandLine))
-        {
-            return commandLine;
-        }
-
-        string scriptPath;
-        try
-        {
-            scriptPath = EnsurePowerShellScript(scriptDirectory);
-        }
+        if (!TryParseInjectablePowerShell(commandLine)) return commandLine;
+        try { return AppendPowerShellInjection(commandLine, EnsurePowerShellScript(scriptDirectory)); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return commandLine;
         }
-
-        return AppendPowerShellInjection(commandLine, scriptPath);
     }
 
     private static bool TryParseInjectablePowerShell(string? commandLine)
@@ -183,22 +176,30 @@ public static class ShellIntegration
         }
 
         string executable = Path.GetFileNameWithoutExtension(fileName.Trim('"'));
-        return executable.Equals("pwsh", StringComparison.OrdinalIgnoreCase) &&
+        return (executable.Equals("pwsh", StringComparison.OrdinalIgnoreCase) ||
+                executable.Equals("powershell", StringComparison.OrdinalIgnoreCase)) &&
             ShouldInjectPowerShell(arguments);
     }
+
 
     internal static bool ShouldInjectPowerShell(IReadOnlyList<string> arguments)
     {
         foreach (string argument in arguments)
         {
             string normalized = argument.Trim().ToLowerInvariant();
-            if (PowerShellNonInteractiveArguments.Contains(normalized))
-            {
-                return false;
-            }
+            if (IsPowerShellExecutionSwitch(normalized) || !PowerShellInteractiveSwitches.Contains(normalized)) return false;
         }
 
         return true;
+    }
+
+    private static bool IsPowerShellExecutionSwitch(string argument)
+    {
+        if (!argument.StartsWith("-", StringComparison.Ordinal)) return true;
+        string name = argument[1..];
+        return name.Length >= 1 && "command".StartsWith(name, StringComparison.OrdinalIgnoreCase) ||
+            name.Length >= 1 && "file".StartsWith(name, StringComparison.OrdinalIgnoreCase) ||
+            name.Length >= 1 && "encodedcommand".StartsWith(name, StringComparison.OrdinalIgnoreCase);
     }
 
     internal static string AppendPowerShellInjection(string commandLine, string scriptPath)
@@ -212,12 +213,25 @@ public static class ShellIntegration
         string path = scriptDirectory is null
             ? DefaultScriptPath
             : Path.Combine(scriptDirectory, ScriptFileName);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        if (!File.Exists(path) || File.ReadAllText(path) != PowerShellScript)
+        lock (ScriptProvisioningSync)
         {
-            File.WriteAllText(path, PowerShellScript);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            if (!File.Exists(path) || File.ReadAllText(path) != PowerShellScript)
+            {
+                string temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    File.WriteAllText(temporaryPath, PowerShellScript);
+                    File.Move(temporaryPath, path, overwrite: true);
+                }
+                finally
+                {
+                    try { File.Delete(temporaryPath); } catch { }
+                }
+            }
         }
 
         return path;
     }
+
 }

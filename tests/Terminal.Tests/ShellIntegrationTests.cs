@@ -7,6 +7,27 @@ namespace Terminal.Tests;
 public sealed class ShellIntegrationTests
 {
     [Theory]
+    [InlineData("powershell.exe -NoLogo")]
+    public void PrepareLaunchInjectsAdditionalInteractiveShells(string commandLine)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            string result = ShellIntegration.PrepareLaunch(commandLine, directory);
+            Assert.NotEqual(commandLine, result);
+            Assert.Contains("-NoExit -Command", result);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Theory]
+    [InlineData("powershell.exe -Command Get-Date")]
+    [InlineData("bash.exe -c ls")]
+    [InlineData("bash.exe script.sh")]
+    public void PrepareLaunchDoesNotAlterAdditionalNonInteractiveShells(string commandLine)
+        => Assert.Equal(commandLine, ShellIntegration.PrepareLaunch(commandLine, null));
+
+    [Theory]
     [InlineData("pwsh.exe -NoLogo")]
     [InlineData("\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoLogo")]
     [InlineData("pwsh")]
@@ -35,6 +56,10 @@ public sealed class ShellIntegrationTests
     [InlineData("pwsh.exe -c Get-Date")]
     [InlineData("pwsh.exe -File script.ps1")]
     [InlineData("pwsh.exe -EncodedCommand ZQBjAGgAbwA=")]
+    [InlineData("powershell.exe -Com Get-Date")]
+    [InlineData("powershell.exe -Fi script.ps1")]
+    [InlineData("powershell.exe -Encoded ZQBjAGgAbwA=")]
+    [InlineData("powershell.exe -UnknownSwitch")]
     public void PrepareLaunchSkipsNonInteractivePwsh(string commandLine)
     {
         // Skipping happens before any script provisioning, so no directory is needed.
@@ -44,9 +69,7 @@ public sealed class ShellIntegrationTests
     }
 
     [Theory]
-    [InlineData("powershell.exe -NoLogo")]
     [InlineData("cmd.exe /K")]
-    [InlineData(@"C:\Program Files\Git\bin\bash.exe --login -i")]
     [InlineData("wsl.exe")]
     public void PrepareLaunchLeavesOtherShellsUnchanged(string commandLine)
     {
@@ -58,7 +81,8 @@ public sealed class ShellIntegrationTests
     [Theory]
     [InlineData("pwsh.exe -NoLogo", true)]
     [InlineData("pwsh.exe -Command Get-Date", false)]
-    [InlineData("powershell.exe -NoLogo", false)]
+    [InlineData("powershell.exe -NoLogo", true)]
+    [InlineData("bash.exe --login -i", false)]
     [InlineData("cmd.exe /K", false)]
     [InlineData("", false)]
     [InlineData(null, false)]
@@ -89,6 +113,27 @@ public sealed class ShellIntegrationTests
             ShellIntegration.EnsurePowerShellScript(scriptDirectory);
 
             Assert.Equal(ShellIntegration.PowerShellScript, File.ReadAllText(path));
+        }
+        finally
+        {
+            Directory.Delete(scriptDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsurePowerShellScriptConcurrentlyConvergesOnCompleteContent()
+    {
+        string scriptDirectory = CreateTempDirectory();
+        try
+        {
+            Task<string>[] writes = Enumerable.Range(0, 16)
+                .Select(_ => Task.Run(() => ShellIntegration.EnsurePowerShellScript(scriptDirectory)))
+                .ToArray();
+            string[] paths = await Task.WhenAll(writes);
+
+            Assert.Single(paths.Distinct(StringComparer.OrdinalIgnoreCase));
+            Assert.Equal(ShellIntegration.PowerShellScript, File.ReadAllText(paths[0]));
+            Assert.Empty(Directory.EnumerateFiles(scriptDirectory, "*.tmp"));
         }
         finally
         {
