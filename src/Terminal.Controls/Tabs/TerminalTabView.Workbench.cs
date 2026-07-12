@@ -109,7 +109,22 @@ public partial class TerminalTabView
 
     private void BuildProfileCatalog()
     {
-        ProfileComboBox.ItemsSource = _launchState.Profiles;
+        _suppressProfileSelectionChanged = true;
+        try
+        {
+            ProfileComboBox.ItemsSource = _launchState.Profiles;
+            // Profile discovery replaces the catalog with new record instances.  Restore
+            // the corresponding instance explicitly; otherwise WPF can leave the picker
+            // unselected while the launch coordinator still points at a profile from the
+            // refreshed collection.
+            ProfileComboBox.SelectedItem = _launchState.SelectedProfile;
+        }
+        finally
+        {
+            _suppressProfileSelectionChanged = false;
+        }
+
+        UpdateProfileHint();
     }
 
     private void ApplySavedWorkbenchSettings()

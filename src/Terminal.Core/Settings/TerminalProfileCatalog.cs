@@ -91,7 +91,7 @@ public static class TerminalProfileCatalog
         string? executable = ResolveWslExecutable();
         WslDistributionQueryResult result = executable is null
             ? new(false, string.Empty)
-            : await QueryWslDistributionsAsync(executable, TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            : await QueryWslDistributionsAsync(executable, TimeSpan.FromSeconds(10)).ConfigureAwait(false);
         var next = new WslDiscoverySnapshot(executable,
             result.Succeeded ? ParseWslDistributions(result.Output) : [], DateTimeOffset.UtcNow);
         lock (WslSync) { _wslSnapshot = next; _wslRefreshTask = null; }
