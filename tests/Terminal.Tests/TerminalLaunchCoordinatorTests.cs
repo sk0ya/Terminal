@@ -11,6 +11,28 @@ public sealed class TerminalLaunchCoordinatorTests
         "cmd", "Command Prompt", "cmd.exe /K", "Command profile");
     private static readonly TerminalProfileDefinition PwshProfile = new(
         "pwsh", "PowerShell", "pwsh.exe -NoLogo", "PowerShell profile");
+    private static readonly TerminalProfileDefinition WslProfile = new(
+        "wsl:ubuntu", "Ubuntu", "wsl.exe --distribution Ubuntu", "WSL profile");
+
+    [Theory]
+    [InlineData("cmd", "cmd.exe /K")]
+    [InlineData("pwsh", "pwsh.exe -NoLogo")]
+    [InlineData("wsl:ubuntu", "wsl.exe --distribution Ubuntu")]
+    public void ExplicitProfileCommandsProduceDistinctLaunchRequests(string profileId, string commandLine)
+    {
+        var coordinator = CreateCoordinator();
+        TerminalProfileDefinition profile = coordinator.Profiles.Single(profile => profile.Id == profileId);
+
+        coordinator.SelectProfile(profile);
+        bool success = coordinator.TryBuildLaunchRequest(
+            coordinator.CommandLine, "C:\\work", "fallback.exe", "C:\\current",
+            value => value, value => value, _ => true,
+            out TerminalLaunchRequest? request, out Exception? error);
+
+        Assert.True(success);
+        Assert.Null(error);
+        Assert.Equal(commandLine, request!.CommandLine);
+    }
 
     [Fact]
     public void ApplyAndCommandEditsMatchProfilesOrSelectCustom()
@@ -387,5 +409,5 @@ public sealed class TerminalLaunchCoordinatorTests
     }
 
     private static TerminalLaunchCoordinator CreateCoordinator() =>
-        new([CmdProfile, PwshProfile]);
+        new([CmdProfile, PwshProfile, WslProfile]);
 }

@@ -400,7 +400,10 @@ public partial class MainWindow : Window
             if (ReferenceEquals(GetActiveTab()?.View, view)) view.ClearPendingBell();
             UpdateTabHeader(tab, tab.View.HeaderTitle);
         };
-        view.ApplySettings(_settings);
+        // The view was constructed with this pane's explicit command and directory.
+        // Applying global launch defaults here would make every profile start the
+        // currently selected default profile instead.
+        view.ApplySettings(_settings, applyLaunchSettings: false);
         ApplyAccessibilityTheme(view);
     }
 
@@ -1076,7 +1079,9 @@ public partial class MainWindow : Window
         {
             foreach (TerminalTabView pane in tab.Panes)
             {
-                pane.ApplySettings(_settings);
+                // Existing panes keep their own launch command and directory when
+                // appearance/runtime settings are changed.
+                pane.ApplySettings(_settings, applyLaunchSettings: false);
                 ApplyAccessibilityTheme(pane);
             }
             UpdateTabHeader(tab, tab.View.HeaderTitle);

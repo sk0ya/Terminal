@@ -596,21 +596,24 @@ public partial class TerminalTabView
     private static Color WithAlpha(Color color, byte alpha)
         => Color.FromArgb(alpha, color.R, color.G, color.B);
 
-    public void ApplySettings(TerminalAppSettings settings)
+    public void ApplySettings(TerminalAppSettings settings, bool applyLaunchSettings = true)
     {
         _keyBindings.Update(settings.KeyBindings);
         ApplyColorTheme(TerminalColorThemeCatalog.Resolve(settings));
-        string commandLine = string.IsNullOrWhiteSpace(settings.CommandLine)
-            ? TerminalProfileCatalog.BuildDefaultCommandLine()
-            : settings.CommandLine.Trim();
-        string workingDirectory = string.IsNullOrWhiteSpace(settings.WorkingDirectory)
-            ? Environment.CurrentDirectory
-            : settings.WorkingDirectory.Trim();
-
-        WorkingDirectoryTextBox.Text = workingDirectory;
         ApplyTerminalFontFamily(settings.FontFamilyName, persist: false);
         ApplyTerminalFontSize(settings.FontSize <= 0 ? DefaultTerminalFontSize : settings.FontSize, persist: false);
-        SetSelectedProfile(settings.SelectedProfileId, commandLine);
+        if (applyLaunchSettings)
+        {
+            string commandLine = string.IsNullOrWhiteSpace(settings.CommandLine)
+                ? TerminalProfileCatalog.BuildDefaultCommandLine()
+                : settings.CommandLine.Trim();
+            string workingDirectory = string.IsNullOrWhiteSpace(settings.WorkingDirectory)
+                ? Environment.CurrentDirectory
+                : settings.WorkingDirectory.Trim();
+
+            WorkingDirectoryTextBox.Text = workingDirectory;
+            SetSelectedProfile(settings.SelectedProfileId, commandLine);
+        }
         _terminalBuffer.AmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide;
         TerminalOutput.FontLigaturesEnabled = settings.EnableFontLigatures;
         _scrollbackLimit = TerminalAppSettings.ClampScrollbackLimit(settings.ScrollbackLimit);
