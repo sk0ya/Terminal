@@ -66,8 +66,11 @@ public static class TerminalProfileCatalog
                 _wslRefreshTask ??= Task.Run(RefreshWslAsync);
         }
         if (snapshot.Executable is null) return;
-        profiles.Add(new TerminalProfileDefinition(
-            "wsl", "WSL", QuoteCommand(snapshot.Executable), "Default Windows Subsystem for Linux distribution."));
+        // wsl.exe without --distribution is useful only when the registered default
+        // points at a distribution which survived validation.
+        if (snapshot.DefaultDistribution is not null)
+            profiles.Add(new TerminalProfileDefinition(
+                "wsl", "WSL", QuoteCommand(snapshot.Executable), "Default Windows Subsystem for Linux distribution."));
         foreach (string distribution in snapshot.Distributions)
         {
             profiles.Add(new TerminalProfileDefinition(
@@ -147,24 +150,30 @@ public static class TerminalProfileCatalog
             using RegistryKey? lxss = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Lxss");
             if (lxss is null) return new(true, [], null);
             string? defaultKeyName = lxss.GetValue("DefaultDistribution") as string;
-            var entries = new List<KeyValuePair<string?, object?>>();
+            var entries = new List<WslRegistryEntry>();
             foreach (string keyName in lxss.GetSubKeyNames())
             {
                 using RegistryKey? distribution = lxss.OpenSubKey(keyName);
-                entries.Add(new(keyName, distribution?.GetValue("DistributionName")));
+                entries.Add(new(keyName,
+                    distribution?.GetValue("DistributionName"),
+                    distribution?.GetValue("BasePath"),
+                    distribution?.GetValue("Version")));
             }
-            WslRegistryParseResult parsed = ParseWslRegistryEntries(entries, defaultKeyName);
+            WslRegistryParseResult parsed = ParseWslRegistryEntries(entries, defaultKeyName, Directory.Exists);
             return new(true, parsed.Distributions, parsed.DefaultDistribution);
         }
         catch { return new(false, [], null); }
     }
 
     internal static WslRegistryParseResult ParseWslRegistryEntries(
-        IEnumerable<KeyValuePair<string?, object?>> entries, string? defaultKeyName = null)
+        IEnumerable<WslRegistryEntry> entries, string? defaultKeyName, Func<string, bool> directoryExists)
     {
         var candidates = entries
-            .Where(entry => entry.Value is string)
-            .Select(entry => new KeyValuePair<string?, string>(entry.Key, ((string)entry.Value!).Trim()))
+            .Where(entry => Guid.TryParse(entry.KeyName, out _))
+            .Where(entry => entry.DistributionName is string && entry.BasePath is string)
+            .Where(entry => entry.Version is null || entry.Version is int version && version is 1 or 2)
+            .Where(entry => IsExistingWslBasePath((string)entry.BasePath!, directoryExists))
+            .Select(entry => new KeyValuePair<string?, string>(entry.KeyName, ((string)entry.DistributionName!).Trim()))
             .Where(entry => entry.Value.Length > 0 && !entry.Value.Any(char.IsControl))
             .Where(entry => !entry.Value.Equals("docker-desktop", StringComparison.OrdinalIgnoreCase) &&
                             !entry.Value.Equals("docker-desktop-data", StringComparison.OrdinalIgnoreCase))
@@ -178,6 +187,14 @@ public static class TerminalProfileCatalog
             .ThenBy(entry => entry.Value, StringComparer.OrdinalIgnoreCase)
             .Select(entry => entry.Value).ToArray();
         return new(distributions, defaultDistribution);
+    }
+
+    private static bool IsExistingWslBasePath(string basePath, Func<string, bool> directoryExists)
+    {
+        string expanded = Environment.ExpandEnvironmentVariables(basePath.Trim());
+        if (expanded.Length == 0 || expanded.IndexOfAny(Path.GetInvalidPathChars()) >= 0) return false;
+        try { return Path.IsPathFullyQualified(expanded) && directoryExists(expanded); }
+        catch { return false; }
     }
 
     private static string? ResolveWslExecutable()
@@ -498,6 +515,7 @@ public static class TerminalProfileCatalog
 
     private sealed record WslRegistryQueryResult(bool Succeeded, IReadOnlyList<string> Distributions, string? DefaultDistribution);
     internal sealed record WslRegistryParseResult(IReadOnlyList<string> Distributions, string? DefaultDistribution);
+    internal sealed record WslRegistryEntry(string? KeyName, object? DistributionName, object? BasePath, object? Version);
     private sealed record WslDiscoverySnapshot(string? Executable, IReadOnlyList<string> Distributions,
         string? DefaultDistribution, DateTimeOffset NextRefreshAt);
 }
