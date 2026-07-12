@@ -31,13 +31,24 @@ public sealed class TerminalProfileCatalogTests
     }
 
     [Fact]
-    public async Task QueryWslDistributionsFailsCleanlyForMissingExecutable()
+    public void ParseWslRegistryEntriesIgnoresInvalidValuesAndDeduplicatesNames()
     {
-        TerminalProfileCatalog.WslDistributionQueryResult result = await TerminalProfileCatalog.QueryWslDistributionsAsync(
-            Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".exe"), TimeSpan.FromMilliseconds(50));
+        KeyValuePair<string?, object?>[] entries =
+        [
+            new("{one}", " Ubuntu "),
+            new("{two}", "ubuntu"),
+            new("{three}", null),
+            new("{four}", 42),
+            new("{five}", "bad\u0001name"),
+            new("{six}", "Debian"),
+            new("{docker}", "DOCKER-DESKTOP"),
+            new("{docker-data}", "docker-desktop-data")
+        ];
 
-        Assert.False(result.Succeeded);
-        Assert.Empty(result.Output);
+        TerminalProfileCatalog.WslRegistryParseResult result =
+            TerminalProfileCatalog.ParseWslRegistryEntries(entries, "{six}");
+        Assert.Equal(["Debian", "Ubuntu"], result.Distributions);
+        Assert.Equal("Debian", result.DefaultDistribution);
     }
 
     [Fact]
@@ -65,7 +76,9 @@ public sealed class TerminalProfileCatalogTests
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
         Assert.True(TerminalProfileCatalog.ShouldRefreshWsl(DateTimeOffset.MinValue, now));
-        Assert.False(TerminalProfileCatalog.ShouldRefreshWsl(now, now));
+        Assert.False(TerminalProfileCatalog.ShouldRefreshWsl(now.AddSeconds(1), now));
+        Assert.Equal(now.AddMinutes(5), TerminalProfileCatalog.NextWslRefreshAt(now, succeeded: true));
+        Assert.Equal(now.AddSeconds(15), TerminalProfileCatalog.NextWslRefreshAt(now, succeeded: false));
     }
     [Fact]
     public void ResolveSelectedProfilePrefersMatchingCandidateOverStoredCustomId()

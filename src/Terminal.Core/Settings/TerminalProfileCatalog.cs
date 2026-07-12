@@ -1,6 +1,6 @@
 using System.IO;
-using System.Diagnostics;
 using System.Text;
+using Microsoft.Win32;
 
 using Terminal.Sessions;
 
@@ -9,7 +9,7 @@ namespace Terminal.Settings;
 public static class TerminalProfileCatalog
 {
     private static readonly object WslSync = new();
-    private static WslDiscoverySnapshot _wslSnapshot = new(ResolveWslExecutable(), [], DateTimeOffset.MinValue);
+    private static WslDiscoverySnapshot _wslSnapshot = new(ResolveWslExecutable(), [], null, DateTimeOffset.MinValue);
     private static Task? _wslRefreshTask;
     private static readonly TimeSpan WslCacheTtl = TimeSpan.FromMinutes(5);
     public static event EventHandler? ProfilesChanged;
@@ -62,7 +62,7 @@ public static class TerminalProfileCatalog
         lock (WslSync)
         {
             snapshot = _wslSnapshot;
-            if (ShouldRefreshWsl(snapshot.RefreshedAt, DateTimeOffset.UtcNow))
+            if (ShouldRefreshWsl(snapshot.NextRefreshAt, DateTimeOffset.UtcNow))
                 _wslRefreshTask ??= Task.Run(RefreshWslAsync);
         }
         if (snapshot.Executable is null) return;
@@ -74,28 +74,50 @@ public static class TerminalProfileCatalog
                 BuildWslProfileId(distribution),
                 distribution,
                 BuildWslCommandLine(snapshot.Executable, distribution),
-                $"WSL distribution: {distribution}."));
+                distribution.Equals(snapshot.DefaultDistribution, StringComparison.OrdinalIgnoreCase)
+                    ? $"WSL distribution: {distribution} (default)."
+                    : $"WSL distribution: {distribution}."));
         }
     }
 
-    internal static bool ShouldRefreshWsl(DateTimeOffset refreshedAt, DateTimeOffset now)
-        => now - refreshedAt >= WslCacheTtl;
+    internal static bool ShouldRefreshWsl(DateTimeOffset nextRefreshAt, DateTimeOffset now)
+        => now >= nextRefreshAt;
+
+    internal static DateTimeOffset NextWslRefreshAt(DateTimeOffset now, bool succeeded)
+        => now + (succeeded ? WslCacheTtl : TimeSpan.FromSeconds(15));
 
     public static void RefreshWslProfiles()
     {
         lock (WslSync) _wslRefreshTask ??= Task.Run(RefreshWslAsync);
     }
 
-    private static async Task RefreshWslAsync()
+    private static Task RefreshWslAsync()
     {
         string? executable = ResolveWslExecutable();
-        WslDistributionQueryResult result = executable is null
-            ? new(false, string.Empty)
-            : await QueryWslDistributionsAsync(executable, TimeSpan.FromSeconds(10)).ConfigureAwait(false);
-        var next = new WslDiscoverySnapshot(executable,
-            result.Succeeded ? ParseWslDistributions(result.Output) : [], DateTimeOffset.UtcNow);
-        lock (WslSync) { _wslSnapshot = next; _wslRefreshTask = null; }
-        NotifyProfilesChanged();
+        WslRegistryQueryResult result = ReadWslDistributionsFromRegistry();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        bool changed = false;
+        lock (WslSync)
+        {
+            // A transient registry access failure must not erase a previously useful list.
+            if (result.Succeeded)
+            {
+                _wslSnapshot = new(executable, result.Distributions, result.DefaultDistribution,
+                    NextWslRefreshAt(now, succeeded: true));
+                changed = true;
+            }
+            else
+            {
+                _wslSnapshot = _wslSnapshot with
+                {
+                    Executable = executable ?? _wslSnapshot.Executable,
+                    NextRefreshAt = NextWslRefreshAt(now, succeeded: false)
+                };
+            }
+            _wslRefreshTask = null;
+        }
+        if (changed) NotifyProfilesChanged();
+        return Task.CompletedTask;
     }
 
     internal static void NotifyProfilesChanged()
@@ -118,41 +140,44 @@ public static class TerminalProfileCatalog
             .ToArray();
     }
 
-    internal static async Task<WslDistributionQueryResult> QueryWslDistributionsAsync(string executable, TimeSpan timeout)
+    private static WslRegistryQueryResult ReadWslDistributionsFromRegistry()
     {
         try
         {
-            using var process = new Process
+            using RegistryKey? lxss = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Lxss");
+            if (lxss is null) return new(true, [], null);
+            string? defaultKeyName = lxss.GetValue("DefaultDistribution") as string;
+            var entries = new List<KeyValuePair<string?, object?>>();
+            foreach (string keyName in lxss.GetSubKeyNames())
             {
-                StartInfo = new ProcessStartInfo(executable, "--list --quiet")
-                {
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    StandardOutputEncoding = Encoding.Unicode,
-                    StandardErrorEncoding = Encoding.Unicode
-                }
-            };
-            if (!process.Start()) return new(false, string.Empty);
-            Task<string> output = process.StandardOutput.ReadToEndAsync();
-            Task<string> error = process.StandardError.ReadToEndAsync();
-            using var cts = new CancellationTokenSource(timeout);
-            try { await process.WaitForExitAsync(cts.Token).ConfigureAwait(false); }
-            catch (OperationCanceledException)
-            {
-                try { process.Kill(entireProcessTree: true); } catch { }
-                try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false); } catch { }
-                await Task.WhenAll(output, error).WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
-                return new(false, string.Empty);
+                using RegistryKey? distribution = lxss.OpenSubKey(keyName);
+                entries.Add(new(keyName, distribution?.GetValue("DistributionName")));
             }
-            await Task.WhenAll(output, error).ConfigureAwait(false);
-            return process.ExitCode == 0 ? new(true, output.Result) : new(false, string.Empty);
+            WslRegistryParseResult parsed = ParseWslRegistryEntries(entries, defaultKeyName);
+            return new(true, parsed.Distributions, parsed.DefaultDistribution);
         }
-        catch
-        {
-            return new(false, string.Empty);
-        }
+        catch { return new(false, [], null); }
+    }
+
+    internal static WslRegistryParseResult ParseWslRegistryEntries(
+        IEnumerable<KeyValuePair<string?, object?>> entries, string? defaultKeyName = null)
+    {
+        var candidates = entries
+            .Where(entry => entry.Value is string)
+            .Select(entry => new KeyValuePair<string?, string>(entry.Key, ((string)entry.Value!).Trim()))
+            .Where(entry => entry.Value.Length > 0 && !entry.Value.Any(char.IsControl))
+            .Where(entry => !entry.Value.Equals("docker-desktop", StringComparison.OrdinalIgnoreCase) &&
+                            !entry.Value.Equals("docker-desktop-data", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(entry => entry.Value, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToArray();
+        string? defaultDistribution = candidates.FirstOrDefault(entry =>
+            string.Equals(entry.Key, defaultKeyName, StringComparison.OrdinalIgnoreCase)).Value;
+        string[] distributions = candidates.OrderBy(entry =>
+                !string.Equals(entry.Value, defaultDistribution, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(entry => entry.Value, StringComparer.OrdinalIgnoreCase)
+            .Select(entry => entry.Value).ToArray();
+        return new(distributions, defaultDistribution);
     }
 
     private static string? ResolveWslExecutable()
@@ -471,6 +496,8 @@ public static class TerminalProfileCatalog
 
     private sealed record ParsedCommandLine(string ExecutablePath, string[] Arguments);
 
-    internal sealed record WslDistributionQueryResult(bool Succeeded, string Output);
-    private sealed record WslDiscoverySnapshot(string? Executable, IReadOnlyList<string> Distributions, DateTimeOffset RefreshedAt);
+    private sealed record WslRegistryQueryResult(bool Succeeded, IReadOnlyList<string> Distributions, string? DefaultDistribution);
+    internal sealed record WslRegistryParseResult(IReadOnlyList<string> Distributions, string? DefaultDistribution);
+    private sealed record WslDiscoverySnapshot(string? Executable, IReadOnlyList<string> Distributions,
+        string? DefaultDistribution, DateTimeOffset NextRefreshAt);
 }
