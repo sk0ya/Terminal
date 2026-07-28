@@ -62,6 +62,21 @@ public sealed class TerminalLineRenderCacheTests
     }
 
     [Fact]
+    public void SnapshotUpdateDetectsChangedCachedLineWhenArrayIsReused()
+    {
+        AnsiTerminalBuffer.TerminalRenderLineSnapshot[] lines = [Line("old")];
+        using var cache = new TerminalLineRenderCache<FakeDrawable>();
+        cache.SetSnapshot(lines, ambiguousAsWide: false);
+        FakeDrawable old = cache.GetDrawable(0, _ => new FakeDrawable());
+
+        lines[0] = Line("new");
+        cache.SetSnapshot(lines, ambiguousAsWide: false);
+
+        Assert.Equal(1, old.DisposeCount);
+        Assert.Equal("new", cache[0].Text);
+    }
+
+    [Fact]
     public void TrimEvictsOnlyEntriesOutsideInclusiveWindow()
     {
         using var cache = CacheWith(Line("0"), Line("1"), Line("2"), Line("3"));

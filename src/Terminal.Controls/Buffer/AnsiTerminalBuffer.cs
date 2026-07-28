@@ -175,6 +175,7 @@ internal sealed class AnsiTerminalBuffer
     private bool _pendingClusterJoinNext;
     private int _pendingClusterRegionalIndicatorCount;
     private bool _renderCacheDirty = true;
+    private bool _scrollbackCombinedCacheDirty = true;
     private bool _screenRenderCacheDirty = true;
     private bool _cachedRenderShowCursor;
     private int _cachedVisibleScreenRow = -1;
@@ -570,15 +571,20 @@ internal sealed class AnsiTerminalBuffer
         bool includeScrollback = _primaryScreenBackup is null;
         int renderScrollbackCount = includeScrollback ? _scrollbackRenderCache.Count : 0;
         int totalLineCount = renderScrollbackCount + visibleScreenLineCount;
-        if (_renderCacheDirty || _combinedRenderCache.Length != totalLineCount)
+        bool combinedSizeChanged = _combinedRenderCache.Length != totalLineCount;
+        if (_renderCacheDirty || _scrollbackCombinedCacheDirty || combinedSizeChanged)
         {
-            _combinedRenderCache = new TerminalRenderLineSnapshot[totalLineCount];
-            if (renderScrollbackCount > 0)
+            if (combinedSizeChanged)
+            {
+                _combinedRenderCache = new TerminalRenderLineSnapshot[totalLineCount];
+            }
+
+            if ((combinedSizeChanged || _scrollbackCombinedCacheDirty) && renderScrollbackCount > 0)
             {
                 _scrollbackRenderCache.CopyTo(_combinedRenderCache, 0);
             }
 
-            if (visibleScreenLineCount > 0)
+            if ((combinedSizeChanged || _renderCacheDirty) && visibleScreenLineCount > 0)
             {
                 Array.Copy(
                     _screenRenderCache,
@@ -589,6 +595,7 @@ internal sealed class AnsiTerminalBuffer
             }
 
             _renderCacheDirty = false;
+            _scrollbackCombinedCacheDirty = false;
         }
 
         return new TerminalRenderSnapshot(_combinedRenderCache, _ambiguousWidthIsWide);
@@ -627,6 +634,7 @@ internal sealed class AnsiTerminalBuffer
         _screenStore.ClearScrollback();
         _scrollbackRenderCache.Clear();
         _renderCacheDirty = true;
+        _scrollbackCombinedCacheDirty = true;
     }
 
     public string CreatePlainTextSnapshot()
@@ -733,6 +741,8 @@ internal sealed class AnsiTerminalBuffer
         {
             _scrollbackRenderCache.Add(CreateLineSnapshot(line, -1, -1, showCursor: false));
         }
+
+        _scrollbackCombinedCacheDirty = true;
     }
 
     private void ResetMargins()
@@ -2957,6 +2967,8 @@ internal sealed class AnsiTerminalBuffer
     private void ScrollUpRegion(int lines, int top, int bottom)
     {
         bool appendToScrollback = _primaryScreenBackup is null && top == 0 && bottom == _rows - 1;
+        int previousScrollbackCount = _scrollback.Count;
+        int appendedCount = appendToScrollback ? Math.Clamp(lines, 1, bottom - top + 1) : 0;
         TerminalScreenMutation mutation = _screenStore.ScrollUp(
             lines,
             top,
@@ -2966,9 +2978,29 @@ internal sealed class AnsiTerminalBuffer
             appendToScrollback);
         if (mutation.ScrollbackChanged)
         {
-            RebuildScrollbackRenderCache();
+            UpdateAppendedScrollbackRenderCache(previousScrollbackCount, appendedCount);
             _renderCacheDirty = true;
         }
+    }
+
+    private void UpdateAppendedScrollbackRenderCache(int previousCount, int appendedCount)
+    {
+        int newCount = _scrollback.Count;
+        int actualAppendedCount = Math.Min(appendedCount, newCount);
+        int retainedPreviousCount = newCount - actualAppendedCount;
+        int expectedPreviousCount = Math.Min(previousCount, retainedPreviousCount);
+        int evictedCount = Math.Max(0, _scrollbackRenderCache.Count - expectedPreviousCount);
+        if (evictedCount > 0)
+        {
+            _scrollbackRenderCache.RemoveRange(0, evictedCount);
+        }
+
+        for (int index = expectedPreviousCount; index < newCount; index++)
+        {
+            _scrollbackRenderCache.Add(CreateLineSnapshot(_scrollback[index], -1, -1, showCursor: false));
+        }
+
+        _scrollbackCombinedCacheDirty = true;
     }
 
     private void ScrollDownRegion(int lines, int top, int bottom)

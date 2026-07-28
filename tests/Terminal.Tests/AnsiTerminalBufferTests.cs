@@ -623,6 +623,20 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void CreateRenderSnapshotUpdatesScreenInReusedCombinedArray()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+        buffer.Process("A");
+        AnsiTerminalBuffer.TerminalRenderSnapshot first = buffer.CreateRenderSnapshot(showCursor: false);
+
+        buffer.Process("B");
+        AnsiTerminalBuffer.TerminalRenderSnapshot second = buffer.CreateRenderSnapshot(showCursor: false);
+
+        Assert.Same(first.Lines, second.Lines);
+        Assert.Equal("AB", string.Concat(second.Lines[0].Segments.Select(segment => segment.Text)));
+    }
+
+    [Fact]
     public void CreateRenderSnapshotOmitsScrollbackWhileAlternateScreenIsActive()
     {
         var buffer = new AnsiTerminalBuffer(8, 2);

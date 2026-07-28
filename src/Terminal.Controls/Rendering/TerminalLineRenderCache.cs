@@ -12,8 +12,11 @@ namespace Terminal.Rendering;
 internal sealed class TerminalLineRenderCache<TDrawable> : IDisposable
     where TDrawable : class, IDisposable
 {
-    private sealed class Entry(TerminalLineLayout layout)
+    private sealed class Entry(
+        AnsiTerminalBuffer.TerminalRenderLineSnapshot snapshot,
+        TerminalLineLayout layout)
     {
+        public AnsiTerminalBuffer.TerminalRenderLineSnapshot Snapshot { get; } = snapshot;
         public TerminalLineLayout Layout { get; } = layout;
         public TDrawable? Drawable { get; set; }
     }
@@ -52,7 +55,6 @@ internal sealed class TerminalLineRenderCache<TDrawable> : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(lines);
 
-        AnsiTerminalBuffer.TerminalRenderLineSnapshot[] previous = _snapshot;
         bool reuse = ambiguousAsWide == _ambiguousAsWide && _cache.Count > 0;
         int maxCellLength = lines.Length == 0 ? 0 : lines.Max(static line => line.CellLength);
 
@@ -68,7 +70,7 @@ internal sealed class TerminalLineRenderCache<TDrawable> : IDisposable
         _evictionScratch.Clear();
         foreach (int index in _cache.Keys)
         {
-            if (index >= lines.Length || index >= previous.Length || !lines[index].ContentEquals(previous[index]))
+            if (index >= lines.Length || !lines[index].ContentEquals(_cache[index].Snapshot))
             {
                 _evictionScratch.Add(index);
             }
@@ -122,7 +124,8 @@ internal sealed class TerminalLineRenderCache<TDrawable> : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_cache.TryGetValue(index, out Entry? entry))
         {
-            entry = new Entry(TerminalLineLayoutBuilder.Create(_snapshot[index], _ambiguousAsWide));
+            AnsiTerminalBuffer.TerminalRenderLineSnapshot snapshot = _snapshot[index];
+            entry = new Entry(snapshot, TerminalLineLayoutBuilder.Create(snapshot, _ambiguousAsWide));
             _cache[index] = entry;
         }
 
