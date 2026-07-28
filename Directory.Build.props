@@ -3,7 +3,7 @@
   <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Terminal.Core' or '$(MSBuildProjectName)' == 'Terminal.Controls'">
     <!-- Core ships inside the Controls package, so both assemblies use the
          package version for traceable consumer diagnostics. -->
-    <Version>1.0.28</Version>
+    <Version>1.0.29</Version>
     <Authors>sk0ya</Authors>
     <Company>sk0ya</Company>
     <RepositoryUrl>https://github.com/sk0ya/Terminal</RepositoryUrl>
