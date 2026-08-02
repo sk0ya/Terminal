@@ -217,16 +217,19 @@ internal sealed class ConPtyOwnedHandles
 
     internal void CloseCommunicationHandles(Action<IntPtr> closePseudoConsole)
     {
-        DisposeOnce(ref _pseudoConsoleInputRead);
-        DisposeOnce(ref _pseudoConsoleOutputWrite);
-        DisposeOnce(ref _inputWrite);
-        DisposeOnce(ref _outputRead);
-
+        // ClosePseudoConsole blocks until the console host has flushed its pending output, so it has
+        // to run before the pipes it flushes through are torn down. Closing the output read handle
+        // first leaves the host writing into a pipe nobody drains, and shutdown never returns.
         IntPtr pseudoConsole = Interlocked.Exchange(ref _pseudoConsole, IntPtr.Zero);
         if (pseudoConsole != IntPtr.Zero)
         {
             closePseudoConsole(pseudoConsole);
         }
+
+        DisposeOnce(ref _pseudoConsoleInputRead);
+        DisposeOnce(ref _pseudoConsoleOutputWrite);
+        DisposeOnce(ref _inputWrite);
+        DisposeOnce(ref _outputRead);
     }
 
     internal void CloseProcessHandles(Action<IntPtr> closeHandle)

@@ -193,10 +193,10 @@ public sealed class ConPtySession : ITerminalSession
         }
 
         ioPump?.TryRequestShellExit();
-        if (ioPump is not null)
-        {
-            await ioPump.DisposeAsync().ConfigureAwait(false);
-        }
+
+        // Shut the pseudo console down first and let the io pump keep draining while that happens:
+        // ClosePseudoConsole waits for the console host to flush, so disposing the only reader
+        // beforehand deadlocks the disposer -- and Dispose() blocks the caller on this very task.
         if (processLifetime is not null)
         {
             await processLifetime.ShutdownAsync(handles, ClosePseudoConsoleHandle).ConfigureAwait(false);
@@ -205,6 +205,11 @@ public sealed class ConPtySession : ITerminalSession
         {
             handles?.CloseCommunicationHandles(ClosePseudoConsoleHandle);
             handles?.CloseProcessHandles(WindowsConPtyProcessLifetimeApi.Instance.CloseHandle);
+        }
+
+        if (ioPump is not null)
+        {
+            await ioPump.DisposeAsync().ConfigureAwait(false);
         }
 
         GC.SuppressFinalize(this);

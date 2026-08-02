@@ -61,6 +61,34 @@ public sealed class ConPtyHandleOwnerTests
     }
 
     [Fact]
+    public void ShutdownSnapshotClosesPseudoConsoleBeforeItsPipes()
+    {
+        // ClosePseudoConsole blocks until the console host has flushed through these pipes, so
+        // closing them first hangs shutdown for good.
+        using var inputRead = NonOwningHandle();
+        using var outputWrite = NonOwningHandle();
+        using var inputWrite = NonOwningHandle();
+        using var outputRead = NonOwningHandle();
+        var handles = new ConPtyOwnedHandles(
+            inputRead,
+            outputWrite,
+            inputWrite,
+            outputRead,
+            (IntPtr)1,
+            (IntPtr)2,
+            (IntPtr)3,
+            (IntPtr)4);
+        bool pipesStillOpenWhenClosingPseudoConsole = false;
+
+        handles.CloseCommunicationHandles(
+            _ => pipesStillOpenWhenClosingPseudoConsole = !outputRead.IsClosed && !inputWrite.IsClosed);
+
+        Assert.True(pipesStillOpenWhenClosingPseudoConsole);
+        Assert.True(outputRead.IsClosed);
+        Assert.True(inputWrite.IsClosed);
+    }
+
+    [Fact]
     public async Task ConcurrentDetachHasSingleWinner()
     {
         var owner = new ConPtyHandleOwner();
