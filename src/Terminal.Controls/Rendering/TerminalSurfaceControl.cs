@@ -122,6 +122,37 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     internal string GetAutomationText() => string.Join("\r\n", SelectionLines.Select(static line => line.Text));
 
+    // True while the tab view's hidden input proxy holds keyboard focus on this surface's behalf.
+    internal bool HasDelegatedKeyboardFocus { get; private set; }
+
+    internal void SetDelegatedKeyboardFocus(bool focused)
+    {
+        if (HasDelegatedKeyboardFocus == focused)
+        {
+            return;
+        }
+
+        HasDelegatedKeyboardFocus = focused;
+        if (focused && AutomationPeer.ListenerExists(AutomationEvents.AutomationFocusChanged))
+        {
+            SurfacePeer()?.RaiseAutomationEvent(AutomationEvents.AutomationFocusChanged);
+        }
+    }
+
+    internal void NotifyAutomationTextChanged()
+    {
+        // Cheap gate on the hot path: without an accessibility client listening, a snapshot update
+        // must not pay for materializing a peer or building the automation text.
+        if (AutomationPeer.ListenerExists(AutomationEvents.PropertyChanged)
+            || AutomationPeer.ListenerExists(AutomationEvents.TextPatternOnTextChanged))
+        {
+            SurfacePeer()?.NotifyTextChanged();
+        }
+    }
+
+    private TerminalSurfaceAutomationPeer? SurfacePeer() =>
+        UIElementAutomationPeer.CreatePeerForElement(this) as TerminalSurfaceAutomationPeer;
+
     private void OnBlinkTimerTick(object? sender, EventArgs e)
     {
         _blinkTextVisible = !_blinkTextVisible;
@@ -264,6 +295,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         CoerceKeyboardCursor();
         UpdateScrollMetrics();
         InvalidateVisual();
+        NotifyAutomationTextChanged();
     }
 
     internal void SetViewportFloor(Size size)

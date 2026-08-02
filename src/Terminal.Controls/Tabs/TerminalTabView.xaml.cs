@@ -1462,6 +1462,9 @@ public partial class TerminalTabView : UserControl
     private void UpdateTerminalFocusState(bool focused)
     {
         _cursorBlinkVisible = focused || !_terminalBuffer.CursorBlinkEnabled;
+        // Focus always ends up on the hidden input proxy, which no longer appears in the automation
+        // tree; hand the focus report to the surface so screen readers still announce the terminal.
+        TerminalOutput.SetDelegatedKeyboardFocus(focused);
         if (_isRenderingTerminal)
         {
             return;

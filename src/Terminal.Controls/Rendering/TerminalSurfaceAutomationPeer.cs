@@ -9,6 +9,7 @@ namespace Terminal.Rendering;
 internal sealed class TerminalSurfaceAutomationPeer : FrameworkElementAutomationPeer, ITextProvider, IValueProvider
 {
     private TerminalSurfaceControl Surface => (TerminalSurfaceControl)Owner;
+    private string _reportedText = string.Empty;
 
     internal TerminalSurfaceAutomationPeer(TerminalSurfaceControl owner) : base(owner) { }
 
@@ -17,6 +18,34 @@ internal sealed class TerminalSurfaceAutomationPeer : FrameworkElementAutomation
     protected override string GetNameCore() => string.IsNullOrWhiteSpace(base.GetNameCore()) ? "Terminal output" : base.GetNameCore();
     protected override bool IsControlElementCore() => true;
     protected override bool IsContentElementCore() => true;
+
+    // Keyboard focus physically lives on a hidden proxy TextBox (IME needs a real editor), and that
+    // proxy is hidden from the automation tree. The surface is the only element an accessibility
+    // client can see here, so it has to claim the focus the proxy is holding on its behalf --
+    // otherwise nothing in the tree ever reports as focused.
+    protected override bool IsKeyboardFocusableCore() => true;
+    protected override bool HasKeyboardFocusCore() => base.HasKeyboardFocusCore() || Surface.HasDelegatedKeyboardFocus;
+
+    // The proxy's TextBoxAutomationPeer used to be what announced typed and echoed characters; with
+    // it out of the tree the surface peer owns change notification for the whole terminal.
+    internal void NotifyTextChanged()
+    {
+        if (!ListenerExists(AutomationEvents.PropertyChanged) && !ListenerExists(AutomationEvents.TextPatternOnTextChanged))
+        {
+            return;
+        }
+
+        string current = Surface.GetAutomationText();
+        if (string.Equals(current, _reportedText, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        string previous = _reportedText;
+        _reportedText = current;
+        RaisePropertyChangedEvent(ValuePatternIdentifiers.ValueProperty, previous, current);
+        RaiseAutomationEvent(AutomationEvents.TextPatternOnTextChanged);
+    }
 
     public override object? GetPattern(PatternInterface patternInterface) => patternInterface switch
     {
