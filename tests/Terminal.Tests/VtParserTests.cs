@@ -96,6 +96,20 @@ public sealed class VtParserTests
     }
 
     [Theory]
+    [InlineData('^')]
+    [InlineData('X')]
+    [InlineData('_')]
+    public void SevenBitUnsupportedControlStringsAreConsumedUntilSt(char introducer)
+    {
+        var events = new List<string>();
+        VtParser parser = CreateParser(events);
+
+        Process(parser, $"\u001b{introducer}hidden\u001b[31mstill-hidden\u001b\\X");
+
+        Assert.Equal(["control:88"], events);
+    }
+
+    [Theory]
     [InlineData('\u0018')]
     [InlineData('\u001a')]
     public void CsiCanBeCancelledByCanOrSub(char cancel)

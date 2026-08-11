@@ -256,6 +256,22 @@ public sealed class TerminalVtSequenceGapTests
     }
 
     [Fact]
+    public void EightBitC1CursorAndTabControlsMatchSevenBitForms()
+    {
+        var c1 = new AnsiTerminalBuffer(20, 3);
+        var sevenBit = new AnsiTerminalBuffer(20, 3);
+
+        c1.Process("A\u0084B\u0085C\u0088\t\u008D");
+        sevenBit.Process("A\u001bDB\u001bEC\u001bH\t\u001bM");
+
+        Assert.Equal(sevenBit.CursorRow, c1.CursorRow);
+        Assert.Equal(sevenBit.CursorColumn, c1.CursorColumn);
+        Assert.Equal(sevenBit.GetScreenLineText(0), c1.GetScreenLineText(0));
+        Assert.Equal(sevenBit.GetScreenLineText(1), c1.GetScreenLineText(1));
+        Assert.Equal(sevenBit.GetScreenLineText(2), c1.GetScreenLineText(2));
+    }
+
+    [Fact]
     public void UnknownCsiFinalIsCountedWithoutPrinting()
     {
         var buffer = new AnsiTerminalBuffer(32, 3);

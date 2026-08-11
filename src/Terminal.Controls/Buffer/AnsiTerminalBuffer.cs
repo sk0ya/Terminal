@@ -997,6 +997,22 @@ internal sealed class AnsiTerminalBuffer
             case '\u008F':
                 _singleShift = 3;
                 break;
+            case '\u0084':
+                ClearWrapPending();
+                MoveDownAndScrollIfNeeded();
+                break;
+            case '\u0085':
+                ClearWrapPending();
+                MoveDownAndScrollIfNeeded();
+                _cursorColumn = 0;
+                break;
+            case '\u0088':
+                SetTabStopAtCursor();
+                break;
+            case '\u008D':
+                ClearWrapPending();
+                ReverseIndex();
+                break;
             case '\r':
                 ClearWrapPending();
                 _cursorColumn = 0;

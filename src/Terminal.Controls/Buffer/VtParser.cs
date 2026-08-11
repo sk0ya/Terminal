@@ -138,6 +138,11 @@ internal sealed class VtParser(
             case '#':
                 _state = State.DecLineSize;
                 return;
+            case '^':
+            case 'X':
+            case '_':
+                Begin(State.ControlString);
+                return;
             default:
                 escape(ch);
                 _state = State.Normal;
