@@ -253,6 +253,11 @@ internal sealed class AnsiTerminalBuffer
         set
         {
             if (_ambiguousWidthIsWide == value) return;
+            if (_scrollback.Count > 0 || _screen.Any(static line => !IsLineBlank(line)))
+            {
+                ReflowForAmbiguousWidthChange(value);
+            }
+
             _ambiguousWidthIsWide = value;
             InvalidateScreenRenderCache();
         }
@@ -416,6 +421,84 @@ internal sealed class AnsiTerminalBuffer
         _savedCursorRow = Math.Clamp(savedCursorRow, 0, newRows - 1);
         _savedCursorColumn = Math.Clamp(savedCursorColumn, 0, newColumns - 1);
         _savedWrapPending = savedCursorWrapPending && _autoWrapEnabled && mappedSavedCursorWrapPending;
+    }
+
+    private void ReflowForAmbiguousWidthChange(bool ambiguousAsWide)
+    {
+        bool cursorWrapPending = _wrapPending;
+        bool savedCursorWrapPending = _savedWrapPending;
+        bool hadScrollback = _primaryScreenBackup is null && _scrollback.Count > 0;
+        var source = new List<TerminalLine>(_scrollback.Count + _screen.Count);
+        int screenLineCount = _primaryScreenBackup is null
+            ? (hadScrollback ? _screen.Count : Math.Max(_cursorRow + 1, FindLastVisibleScreenRow(showCursor: false) + 1))
+            : _screen.Count;
+        if (_primaryScreenBackup is null)
+        {
+            source.AddRange(_scrollback);
+        }
+
+        source.AddRange(_screen.Take(screenLineCount));
+        int cursorSourceRow = (_primaryScreenBackup is null ? _scrollback.Count : 0) + _cursorRow;
+        int savedCursorSourceRow = (_primaryScreenBackup is null ? _scrollback.Count : 0) + _savedCursorRow;
+        List<TerminalLine> reflowed = TerminalWidthReflowCalculator.ReflowLines(
+            source,
+            _columns,
+            cursorSourceRow,
+            _cursorColumn,
+            cursorWrapPending,
+            out int cursorRow,
+            out int cursorColumn,
+            out bool mappedCursorWrapPending,
+            savedCursorSourceRow,
+            _savedCursorColumn,
+            savedCursorWrapPending,
+            out int savedCursorRow,
+            out int savedCursorColumn,
+            out bool mappedSavedCursorWrapPending,
+            ambiguousAsWide);
+
+        if (_primaryScreenBackup is null)
+        {
+            int screenStart = Math.Max(0, reflowed.Count - _rows);
+            int historyStart = Math.Max(0, screenStart - _screenStore.ScrollbackLimit);
+            var history = new List<TerminalLine>(screenStart - historyStart);
+            for (int row = historyStart; row < screenStart; row++)
+            {
+                history.Add(reflowed[row]);
+            }
+
+            var screen = CreateScreen(_rows, _columns, TerminalStyle.Default);
+            int copiedRows = reflowed.Count - screenStart;
+            int targetStart = hadScrollback ? _rows - copiedRows : 0;
+            for (int row = 0; row < copiedRows; row++)
+            {
+                screen[targetStart + row] = reflowed[screenStart + row];
+            }
+
+            _screenStore.ApplyReflow(screen, history);
+            _cursorRow = Math.Clamp(targetStart + cursorRow - screenStart, 0, _rows - 1);
+            _savedCursorRow = Math.Clamp(targetStart + savedCursorRow - screenStart, 0, _rows - 1);
+        }
+        else
+        {
+            var screen = CreateScreen(_rows, _columns, TerminalStyle.Default);
+            int copyRows = Math.Min(_rows, reflowed.Count);
+            for (int row = 0; row < copyRows; row++)
+            {
+                screen[row] = reflowed[row];
+            }
+
+            _screenStore.ReplaceScreen(screen);
+            _cursorRow = Math.Clamp(cursorRow, 0, _rows - 1);
+            _savedCursorRow = Math.Clamp(savedCursorRow, 0, _rows - 1);
+        }
+
+        _cursorColumn = Math.Clamp(cursorColumn, 0, _columns - 1);
+        _savedCursorColumn = Math.Clamp(savedCursorColumn, 0, _columns - 1);
+        _wrapPending = cursorWrapPending && _autoWrapEnabled && mappedCursorWrapPending;
+        _savedWrapPending = savedCursorWrapPending && _autoWrapEnabled && mappedSavedCursorWrapPending;
+        RebuildScrollbackRenderCache();
+        ResetScreenRenderCache();
     }
 
 

@@ -60,6 +60,28 @@ public sealed class TerminalWidthCalculatorTests
     }
 
     [Fact]
+    public void ChangingAmbiguousWidthReflowsExistingCellsAndCursor()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        buffer.Process("·X");
+
+        buffer.AmbiguousWidthIsWide = true;
+
+        AnsiTerminalBuffer.TerminalRenderLineSnapshot wide =
+            buffer.CreateRenderSnapshot(showCursor: false).Lines[0];
+        Assert.Equal(3, wide.CellLength);
+        Assert.Equal(3, buffer.CursorColumn);
+        Assert.Equal("·X", buffer.GetScreenLineText(0).TrimEnd());
+
+        buffer.AmbiguousWidthIsWide = false;
+
+        AnsiTerminalBuffer.TerminalRenderLineSnapshot narrow =
+            buffer.CreateRenderSnapshot(showCursor: false).Lines[0];
+        Assert.Equal(2, narrow.CellLength);
+        Assert.Equal(2, buffer.CursorColumn);
+    }
+
+    [Fact]
     public void ParserAndWidthStateSurviveChunkBoundaries()
     {
         const string input = "\u001b[31mA界👩\u200d💻🇯🇵e\u0301\u001b[0m·X";
