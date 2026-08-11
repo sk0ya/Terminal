@@ -46,7 +46,7 @@ public sealed class VtParserTests
         var events = new List<string>();
         VtParser parser = CreateParser(events);
 
-        Process(parser, "\u0005\u009b6n\u009d2;title\u009c\u009f$qm\u009c\u0007");
+        Process(parser, "\u0005\u009b6n\u009d2;title\u009c\u0090$qm\u009c\u0007");
 
         Assert.Equal(
         [
@@ -57,6 +57,42 @@ public sealed class VtParserTests
             "control:7"
         ],
         events);
+    }
+
+    [Fact]
+    public void EightBitDcsIntroducerDispatchesDcsAndStringTerminatorCompletesIt()
+    {
+        var events = new List<string>();
+        VtParser parser = CreateParser(events);
+
+        Process(parser, "\u0090$qm\u009cX");
+
+        Assert.Equal(["dcs:$qm", "control:88"], events);
+    }
+
+    [Theory]
+    [InlineData("\u0098")]
+    [InlineData("\u009e")]
+    [InlineData("\u009f")]
+    public void UnsupportedEightBitControlStringsAreConsumedUntilSt(string introducer)
+    {
+        var events = new List<string>();
+        VtParser parser = CreateParser(events);
+
+        Process(parser, $"{introducer}hidden\u001b[31mstill-hidden\u009cX");
+
+        Assert.Equal(["control:88"], events);
+    }
+
+    [Fact]
+    public void UnsupportedControlStringCanUseSevenBitStTerminator()
+    {
+        var events = new List<string>();
+        VtParser parser = CreateParser(events);
+
+        Process(parser, "\u009fhidden\u001b\\X");
+
+        Assert.Equal(["control:88"], events);
     }
 
     private static VtParser CreateParser(List<string> events)

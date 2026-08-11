@@ -70,6 +70,12 @@ internal sealed class VtParser(
             case State.DcsPassthroughEscape:
                 ProcessDcsPassthroughEscape(ch);
                 break;
+            case State.ControlString:
+                ProcessControlString(ch);
+                break;
+            case State.ControlStringEscape:
+                ProcessControlStringEscape(ch);
+                break;
         }
     }
 
@@ -86,8 +92,13 @@ internal sealed class VtParser(
             case '\u009d':
                 Begin(State.Osc);
                 return;
-            case '\u009f':
+            case '\u0090':
                 Begin(State.DcsEntry);
+                return;
+            case '\u0098':
+            case '\u009e':
+            case '\u009f':
+                Begin(State.ControlString);
                 return;
             case '\u009c':
                 return;
@@ -262,6 +273,32 @@ internal sealed class VtParser(
         _state = State.DcsPassthrough;
     }
 
+    private void ProcessControlString(char ch)
+    {
+        if (ch == '\u009c')
+        {
+            _state = State.Normal;
+        }
+        else if (ch == '\u001b')
+        {
+            _state = State.ControlStringEscape;
+        }
+    }
+
+    private void ProcessControlStringEscape(char ch)
+    {
+        if (ch == '\\')
+        {
+            _state = State.Normal;
+            return;
+        }
+
+        // APC, PM, and SOS are unsupported, so their content must remain opaque even
+        // when an ESC is not followed by the ST terminator.
+        _state = State.ControlString;
+        ProcessControlString(ch);
+    }
+
     private bool TryFinishDcs(char ch)
     {
         if (ch != '\u009c')
@@ -310,6 +347,8 @@ internal sealed class VtParser(
         DcsParam,
         DcsIntermediate,
         DcsPassthrough,
-        DcsPassthroughEscape
+        DcsPassthroughEscape,
+        ControlString,
+        ControlStringEscape
     }
 }

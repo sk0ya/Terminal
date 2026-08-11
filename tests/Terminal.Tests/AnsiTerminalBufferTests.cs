@@ -2334,8 +2334,8 @@ public sealed class AnsiTerminalBufferTests
         string? emitted = null;
         buffer.InputSequenceGenerated += (_, text) => emitted = text;
 
-        // C1 DCS (U+009F) ... C1 ST (U+009C)
-        buffer.Process("$qm");
+        // C1 DCS (U+0090) ... C1 ST (U+009C)
+        buffer.Process("$qm");
 
         Assert.Equal("P1$r0m\\", emitted);
     }
