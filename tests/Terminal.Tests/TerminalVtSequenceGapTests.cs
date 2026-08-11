@@ -451,6 +451,28 @@ public sealed class TerminalVtSequenceGapTests
     }
 
     [Fact]
+    public void Osc1SetsIconTitleWithoutChangingWindowTitle()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+
+        buffer.Process("]2;Window]1;Icon");
+
+        Assert.Equal("Window", buffer.WindowTitle);
+        Assert.Equal("Icon", buffer.IconTitle);
+    }
+
+    [Fact]
+    public void Osc0SetsBothWindowAndIconTitles()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+
+        buffer.Process("]0;Combined");
+
+        Assert.Equal("Combined", buffer.WindowTitle);
+        Assert.Equal("Combined", buffer.IconTitle);
+    }
+
+    [Fact]
     public void Xtwinops23PopWithEmptyStackLeavesTitleUnchanged()
     {
         var buffer = new AnsiTerminalBuffer(32, 3);

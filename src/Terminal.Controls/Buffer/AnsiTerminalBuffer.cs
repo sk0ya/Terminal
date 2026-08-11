@@ -169,6 +169,7 @@ internal sealed class AnsiTerminalBuffer
     private string? _currentHyperlink;
     private string? _savedHyperlink;
     private string _windowTitle = string.Empty;
+    private string _iconTitle = string.Empty;
     // XTWINOPS 22/23 window-title stack (vim / tmux save & restore the title around their session).
     private readonly Stack<string> _windowTitleStack = new();
     private ScreenState? _pendingSyntheticAlternateScreenBackup;
@@ -241,6 +242,7 @@ internal sealed class AnsiTerminalBuffer
     }
 
     public string WindowTitle => _windowTitle;
+    public string IconTitle => _iconTitle;
     public bool ApplicationCursorKeysEnabled => _applicationCursorKeys;
 
     // DEC private modes 1036/1039: when disabled, Alt/Meta key input is sent without the ESC prefix.
@@ -963,6 +965,7 @@ internal sealed class AnsiTerminalBuffer
         _pendingSyntheticAlternateScreenBackup = null;
         _screenStore.ClearPendingPrimaryScreen();
         _windowTitle = string.Empty;
+        _iconTitle = string.Empty;
         _windowTitleStack.Clear();
         _lastPrintedClusterText = string.Empty;
         _lastPrintedClusterWidth = 0;
@@ -1425,11 +1428,20 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
-        if (command is "0" or "2")
+        if (command is "0" or "1" or "2")
         {
-            string previousTitle = _windowTitle;
-            _windowTitle = value;
-            UpdateSyntheticAlternateScreenFromTitle(previousTitle, value);
+            if (command is "0" or "2")
+            {
+                string previousTitle = _windowTitle;
+                _windowTitle = value;
+                UpdateSyntheticAlternateScreenFromTitle(previousTitle, value);
+            }
+
+            if (command is "0" or "1")
+            {
+                _iconTitle = value;
+            }
+
             return;
         }
 
