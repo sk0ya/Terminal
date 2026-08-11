@@ -113,8 +113,11 @@ internal sealed class AnsiTerminalBuffer
     private int _rows;
     private int _cursorRow;
     private int _cursorColumn;
+    // DEC autowrap is a pending state, not an extra grid column.
+    private bool _wrapPending;
     private int _savedCursorRow;
     private int _savedCursorColumn;
+    private bool _savedWrapPending;
     private int _scrollTop;
     private int _scrollBottom;
     private int _leftMargin;
@@ -367,6 +370,7 @@ internal sealed class AnsiTerminalBuffer
 
         _cursorRow = Math.Clamp(targetStart + cursorRow - screenStart, 0, newRows - 1);
         _cursorColumn = Math.Clamp(cursorColumn, 0, newColumns - 1);
+        _wrapPending = _wrapPending && _autoWrapEnabled && _cursorColumn == newColumns - 1;
         _savedCursorRow = Math.Clamp(targetStart + savedCursorRow - screenStart, 0, newRows - 1);
         _savedCursorColumn = Math.Clamp(savedCursorColumn, 0, newColumns - 1);
         RebuildScrollbackRenderCache();
@@ -398,6 +402,7 @@ internal sealed class AnsiTerminalBuffer
 
         _cursorRow = Math.Clamp(cursorRow, 0, newRows - 1);
         _cursorColumn = Math.Clamp(cursorColumn, 0, newColumns - 1);
+        _wrapPending = _wrapPending && _autoWrapEnabled && _cursorColumn == newColumns - 1;
         _savedCursorRow = Math.Clamp(savedCursorRow, 0, newRows - 1);
         _savedCursorColumn = Math.Clamp(savedCursorColumn, 0, newColumns - 1);
     }
@@ -796,8 +801,10 @@ internal sealed class AnsiTerminalBuffer
         _screenStore.ResetAlternateState();
         _cursorRow = 0;
         _cursorColumn = 0;
+        _wrapPending = false;
         _savedCursorRow = 0;
         _savedCursorColumn = 0;
+        _savedWrapPending = false;
         _currentStyle = TerminalStyle.Default;
         _savedStyle = TerminalStyle.Default;
         _cursorVisible = true;
@@ -882,24 +889,31 @@ internal sealed class AnsiTerminalBuffer
                 _singleShift = 3;
                 break;
             case '\r':
+                ClearWrapPending();
                 _cursorColumn = 0;
                 break;
             case '\n':
             case '\u000b':
             case '\u000c':
+                ClearWrapPending();
                 LineFeed();
                 break;
             case '\b':
+                ClearWrapPending();
                 Backspace();
                 break;
             case '\t':
+                ClearWrapPending();
                 _cursorColumn = FindNextTabStop(_cursorColumn);
                 break;
         }
     }
 
+    private void ClearWrapPending() => _wrapPending = false;
+
     private void Backspace()
     {
+        ClearWrapPending();
         int leftBound = _leftRightMarginEnabled ? _leftMargin : 0;
         if (_cursorColumn > leftBound)
         {
@@ -961,6 +975,11 @@ internal sealed class AnsiTerminalBuffer
 
     private void ProcessEscapeCommand(char ch)
     {
+        if (ch is not ('7' or '8'))
+        {
+            ClearWrapPending();
+        }
+
         switch (ch)
         {
             case 'n':
@@ -1033,6 +1052,7 @@ internal sealed class AnsiTerminalBuffer
 
     private void ProcessDecLineSize(char ch)
     {
+        ClearWrapPending();
         // ESC # <ch>: DEC line-size / alignment controls.
         // ESC # 8 = DECALN: fill the entire screen with 'E' in the default rendition and home the cursor.
         // ESC # 3/4/5/6 = DECDHL/DECDWL/DECSWL double-height/width lines: consumed so the parameter
@@ -1048,6 +1068,7 @@ internal sealed class AnsiTerminalBuffer
         _screenStore.FillAlignment();
         _cursorRow = 0;
         _cursorColumn = 0;
+        _wrapPending = false;
         InvalidateScreenRenderCache();
     }
 
@@ -1382,6 +1403,7 @@ internal sealed class AnsiTerminalBuffer
 
     private void DecodeCsi(char final, string rawParameters)
     {
+        ClearWrapPending();
         DispatchCsi(CsiDecoder.Decode(final, rawParameters));
     }
 
@@ -1592,6 +1614,7 @@ internal sealed class AnsiTerminalBuffer
     {
         _savedCursorRow = _cursorRow;
         _savedCursorColumn = _cursorColumn;
+        _savedWrapPending = _wrapPending;
         _savedStyle = _currentStyle;
         _savedGlLevel = _glLevel;
         _savedG0CharacterSet = _g0CharacterSet;
@@ -1608,6 +1631,7 @@ internal sealed class AnsiTerminalBuffer
     {
         _cursorRow = Math.Clamp(_savedCursorRow, 0, _rows - 1);
         _cursorColumn = Math.Clamp(_savedCursorColumn, 0, _columns - 1);
+        _wrapPending = _savedWrapPending && _autoWrapEnabled;
         _currentStyle = _savedStyle;
         _glLevel = _savedGlLevel;
         _g0CharacterSet = _savedG0CharacterSet;
@@ -1716,9 +1740,9 @@ internal sealed class AnsiTerminalBuffer
                     break;
                 case 7:
                     _autoWrapEnabled = enabled;
-                    if (!_autoWrapEnabled && _cursorColumn >= _columns)
+                    if (!_autoWrapEnabled)
                     {
-                        _cursorColumn = _columns - 1;
+                        ClearWrapPending();
                     }
 
                     break;
@@ -2138,8 +2162,10 @@ internal sealed class AnsiTerminalBuffer
         _screenStore.EnterAlternateScreen(_rows, _columns);
         _cursorRow = 0;
         _cursorColumn = 0;
+        _wrapPending = false;
         _savedCursorRow = 0;
         _savedCursorColumn = 0;
+        _savedWrapPending = false;
         _currentStyle = TerminalStyle.Default;
         _savedStyle = TerminalStyle.Default;
         _currentHyperlink = null;
@@ -2165,8 +2191,10 @@ internal sealed class AnsiTerminalBuffer
         _columns = backup.Columns;
         _cursorRow = backup.CursorRow;
         _cursorColumn = backup.CursorColumn;
+        _wrapPending = backup.WrapPending && _autoWrapEnabled;
         _savedCursorRow = backup.SavedCursorRow;
         _savedCursorColumn = backup.SavedCursorColumn;
+        _savedWrapPending = backup.SavedWrapPending && _autoWrapEnabled;
         _scrollTop = backup.ScrollTop;
         _scrollBottom = backup.ScrollBottom;
         _currentStyle = backup.Style;
@@ -2210,8 +2238,10 @@ internal sealed class AnsiTerminalBuffer
             _columns,
             _cursorRow,
             _cursorColumn,
+            _wrapPending,
             _savedCursorRow,
             _savedCursorColumn,
+            _savedWrapPending,
             _scrollTop,
             _scrollBottom,
             _currentStyle,
@@ -2494,6 +2524,7 @@ internal sealed class AnsiTerminalBuffer
         _tabStops = CreateDefaultTabStops(_columns);
         _cursorRow = 0;
         _cursorColumn = 0;
+        _wrapPending = false;
         ResetMargins();
         for (int row = 0; row < _rows; row++)
         {
@@ -2626,7 +2657,7 @@ internal sealed class AnsiTerminalBuffer
     private void PutText(string text, int width)
     {
         int normalizedWidth = Math.Clamp(width, 1, 2);
-        if (_cursorColumn >= _columns)
+        if (_wrapPending)
         {
             if (_autoWrapEnabled)
             {
@@ -2634,10 +2665,8 @@ internal sealed class AnsiTerminalBuffer
                 _cursorColumn = 0;
                 MoveDownAndScrollIfNeeded();
             }
-            else
-            {
-                _cursorColumn = _columns - 1;
-            }
+
+            _wrapPending = false;
         }
 
         if (normalizedWidth == 2 && _cursorColumn == _columns - 1)
@@ -2672,18 +2701,23 @@ internal sealed class AnsiTerminalBuffer
         {
             if (_cursorColumn + 1 >= _columns)
             {
-                _cursorColumn = _columns;
+                _cursorColumn = _columns - 1;
+                _wrapPending = _autoWrapEnabled;
+                _lastPrintedClusterText = text;
+                _lastPrintedClusterWidth = normalizedWidth;
                 return;
             }
         }
 
         _cursorColumn += normalizedWidth;
-        _lastPrintedClusterText = text;
-        _lastPrintedClusterWidth = normalizedWidth;
-        if (!_autoWrapEnabled && _cursorColumn >= _columns)
+        if (_cursorColumn >= _columns)
         {
             _cursorColumn = _columns - 1;
+            _wrapPending = _autoWrapEnabled;
         }
+
+        _lastPrintedClusterText = text;
+        _lastPrintedClusterWidth = normalizedWidth;
     }
 
     private void AppendCombiningRune(Rune rune)
@@ -2695,7 +2729,7 @@ internal sealed class AnsiTerminalBuffer
         {
             // Cursor is at column 0 with no previous character on this line.
             // After an autowrap the base character sits at the end of the previous row.
-            if (_cursorRow > 0)
+            if (_cursorRow > 0 && _screen[_cursorRow - 1].IsWrapped)
             {
                 targetLine = _screen[_cursorRow - 1];
                 targetColumn = FindLastOccupiedColumn(targetLine);
@@ -2809,7 +2843,16 @@ internal sealed class AnsiTerminalBuffer
                 cell.Hyperlink,
                 IsContinuation: true,
                 Width: 0);
-            _cursorColumn = Math.Max(_cursorColumn, targetColumn + 2);
+            int nextColumn = Math.Max(_cursorColumn, targetColumn + 2);
+            if (nextColumn >= _columns)
+            {
+                _cursorColumn = _columns - 1;
+                _wrapPending = _autoWrapEnabled;
+            }
+            else
+            {
+                _cursorColumn = nextColumn;
+            }
         }
 
         return true;
@@ -3338,8 +3381,10 @@ internal sealed class AnsiTerminalBuffer
         int Columns,
         int CursorRow,
         int CursorColumn,
+        bool WrapPending,
         int SavedCursorRow,
         int SavedCursorColumn,
+        bool SavedWrapPending,
         int ScrollTop,
         int ScrollBottom,
         TerminalStyle Style,
