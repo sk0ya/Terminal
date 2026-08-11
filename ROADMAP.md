@@ -1,97 +1,27 @@
 # ConPtyTerminal Roadmap
 
-## 実装済み
-
-- ConPTY 起動・サイズ変更・セッション管理（起動失敗診断、recover、dispose）
-- ANSI / VT パーサ（基本 + SGR dim/italic/blink/invisible/strikethrough）
-- スクロールバック・カーソル・色・下線・反転・alternate screen
-- VT シーケンス: `HTS`, `TBC`, `CHT`, `CBT`, `IRM`, `DECSCUSR`, `OSC 8`, `OSC 52`, `1005`, `1015`, `1048`, `1049`, DEC Special Graphics
-- VT 互換: DECRQM, XTWINOPS, XTSAVE/XTRESTORE, DECSCNM, OSC 10/11/12, XTVERSION
-- mouse tracking（legacy raw byte / 1006 / DECRQM 状態クエリ）
-- grapheme cluster / ZWJ emoji / variation selector / 国旗ペア / combining mark
-- East Asian Ambiguous width（`CjkAmbiguousWidthIsWide` 設定で制御）
-- `TerminalSurfaceControl` 描画（diff ベース再描画、scroll、選択、検索、コピー）
-- カーソル overlay / viewport sizing / render 分離
-- WPF input proxy による IME composition 受け取りと candidate window 位置同期
-- 修飾キー付き主要キーシーケンス / Ctrl 系 ASCII 制御文字
-- セッションロギング（JSONL、ANSI 除去、秘密情報マスク、ZIP 圧縮）
-- 自動テスト（parser / buffer / key encoding / mouse / OSC・CSI 応答 / ConPTY smoke test / surface 回帰）
-
----
-
 ## 未実装・不足機能
 
 ### VT / ANSI シーケンス拡張
 
-- ~~**アンダーラインスタイル・色** — `SGR 4:1`〜`4:5`（single/double/curly/dashed/dotted）, `SGR 58/59`（アンダーライン色）。現状は単純な on/off のみ~~ **実装済み**
-- ~~**オーバーライン** — `SGR 53/55`。多くの TUI アプリが使用~~ **実装済み**
-- ~~**左右マージン（DECSLRM）** — `CSI s` / `DECSET 69`。上下スクロール領域は実装済みだが列方向マージンは未対応~~ **実装済み（DECLRMM mode 69、カーソル移動・消去・挿入削除のマージン適用）**
-- ~~**OSC 4** — カラーパレット（16 色）の上書きとクエリ。テーマ変更やコントラスト調整に必要~~ **実装済み（`rgb:rr/gg/bb` / `#rrggbb` 形式、クエリ応答、ハードリセット時に初期化）**
-- ~~**OSC 7** — カレントディレクトリ通知。シェルが設定し、ターミナルが「同じ場所で新規タブ」に利用する標準プロトコル~~ **実装済み（Working Directory UI と連動）**
-- ~~**OSC 9** — デスクトップ通知（Windows Toast）。長時間コマンドの完了通知に活用~~ **実装済み（WPF ポップアップバナー）**
-- ~~**OSC 9;4 タスクバー進捗** — ConEmu 由来 / Windows Terminal 互換の `ESC ] 9 ; 4 ; <state> ; <progress>` によるタスクバー進捗表示~~ **実装済み（`9;4;` プレフィックスのみ進捗として分岐しデスクトップ通知と非干渉、state 0=解除/1=通常/2=エラー/3=不確定/4=一時停止(警告)、progress は 0–100 クランプ・省略/不正は 0、不正 state は無視。`AnsiTerminalBuffer.TaskbarProgressChanged` → `TerminalTabView.TaskbarProgressChanged` で中継し `MainWindow` がアクティブタブの状態を `TaskbarItemInfo`（Normal/Error/Paused/Indeterminate/None）へ反映、タブ切替時は新アクティブタブの保持状態を反映）**
-- ~~**OSC 133 / 633** — シェル統合プロトコル（プロンプト・コマンド・出力のゾーンマーキング）。コマンドナビゲーション・意味的選択の前提~~ **実装済み（A/B/C/D マーカーを ShellCommandZoneReceived イベントで通知、Ctrl+Shift+↑/↓ でコマンドナビゲーション）**
-- ~~**DCS パーサ** — `ESC P...ST` の状態機械が未実装。Sixel / DECRQSS / DECUDK などが通らない~~ **実装済み（DECRQSS は端末が保持するSGR・カーソル形状・スクロール領域・左右マージン・画面寸法・適合レベル・文字保護属性・modifyOtherKeysの現在値に応答し、非対応問い合わせには失敗応答。不明 DCS 無視、C1 ST 対応）**
+- **8-bit C1文字列開始コードの修正・拡張** — 標準の `0x90=DCS`、`0x9F=APC`、`0x9E=PM`、`0x98=SOS` を正しく区別する。現状は `0x9F` をDCSとして誤認し、`0x90` をDCSとして認識していない。APC/PM/SOSは未対応でも `ST`（`0x9C` または `ESC \`）まで消費して画面へ漏らさない
+- **エスケープ系列の中断・再同期** — CSI/DCS/OSC中の `CAN`（`0x18`）/`SUB`（`0x1A`）による中断、CSI中に現れる `ESC` による新しいエスケープ系列への再同期を実装する。不正な系列が後続の通常文字を巻き込まないようにする
+- **未知シーケンスの診断** — 未対応CSI終端文字・DCS種別を黙って破棄せず、診断カウンターまたはデバッグログで確認できるようにする。解析不足の調査と互換性テストに利用する
+- **OSC/DCSペイロード上限** — OSC/DCS/APC/PM/SOSの蓄積文字数に上限を設け、終端されない長大な制御文字列によるメモリ消費を防止する。上限超過時は安全に破棄して通常状態へ復帰する
 - **Sixel グラフィクス** — **意図的に非対応**。ConPTY の入出力経路では画像データとテキスト出力の順序・同期を安定して保証できず、表示崩れの原因になるため実装しない。`DCS ... q` は画面へ文字として漏れないよう消費して無視し、DA1でもSixel対応を広告しない
-- ~~**DECCOLM（mode 3）** — 80/132 列切り替え。一部の全画面アプリが発行する~~ **実装済み（mode 3h/3l、画面クリア・カーソルホーム・スクロール領域リセット）**
-- ~~**SGR マウスピクセルモード（1016）** — セル単位でなくピクセル座標で報告するマウスモード~~ **実装済み（DECSET 1016、SGR 暗黙有効、DECRQM 応答、ピクセル座標送信）**
-- ~~**BEL（ベル）対応** — `\a`（0x07）ベル。従来は OSC/DCS 終端としてのみ処理し通常状態では無視していた~~ **実装済み（可聴ベル＋非アクティブタブのベルインジケータ。通常状態の 0x07 で `AnsiTerminalBuffer.BellReceived` を発火（OSC/DCS 終端の 0x07 は非対象）→ `TerminalTabView` が `SystemSounds.Beep` を鳴らし `HasPendingBell` を立てて `BellRang` で中継。`MainWindow` は非アクティブタブのヘッダ先頭に「🔔 」を付与し、そのタブがアクティブになったらクリア。可聴ベルは `PlayBell` に集約し将来の設定化に備える）**
 
-- ~~**DECALN / DEC 行サイズ（`ESC #`）** — `ESC # 8`（画面整列テスト）と `ESC # 3/4/5/6`（倍高・倍幅行）~~ **実装済み（`ParserState.DecLineSize` を追加。`ESC # 8` DECALN はアクティブ画面全体を既定レンディションの 'E' で埋めカーソルをホームへ（`FillScreenForAlignment`）。`ESC # 3/4/5/6`（DECDHL/DECDWL/DECSWL）はパラメータ桁が印字されないよう消費（倍角の実描画は今後の課題）。vttest 互換性向上）**
-- ~~**G2/G3 文字セットとシフト** — `ESC * X` / `ESC + X`（G2/G3 指定）、LS2/LS3（`ESC n` / `ESC o`）、SS2/SS3（`ESC N` / `ESC O`・C1 0x8E/0x8F）~~ **実装済み（従来の bool `_useG1CharacterSet` を GL 呼び出しレベル `_glLevel`（0..3）へ一般化。単一シフト `_singleShift` は次の 1 図形文字のみに適用し `ProcessRune` で消費、SIMD ASCII 高速パスは単一シフト保留中は無効化。DECSC/DECRC・RIS・DECSTR で G0〜G3 と GL レベルを保存/復元/リセット）**
-- ~~**LNM（ANSI mode 20）** — 改行モード。設定時に LF/VT/FF が復帰も伴う~~ **実装済み（`ESC[20h/l`。C0 の LF・VT(0x0B)・FF(0x0C) を `LineFeed()` 経由に統一し、従来無視していた VT/FF も改行として扱うよう修正。NEL(`ESC E`)/IND(`ESC D`) は LNM の影響を受けず固定挙動を維持）**
+- **DEC 行サイズ（`ESC # 3/4/5/6`）** — パラメータ桁が印字されないよう消費するが、倍高・倍幅行の実描画は未対応
 - **DA での Sixel 広告** — **意図的に非対応**。描画できない機能をアプリケーションへ誤広告しないため、DA1の属性4（Sixel）は返さない
-- ~~**ENQ（0x05）アンサーバック** — 従来は通常状態で無視~~ **実装済み（`_answerbackString`（既定は空）を応答。既定では何も送出しないが仕様準拠で将来設定化可能）**
-
-### キーボード入力
-
-- ~~**Kitty キーボードプロトコル** — `DECSET 2048` + CSI u ベースの高精度キーエンコード。Neovim 0.10+、Ghostty、WezTerm が標準採用。Shift/Ctrl+Enter 等の区別が可能になる~~ **実装済み（CSI u エンコード、フラグスタック push/pop/set/query、alt-screen 保存復元）**
-- ~~**XTerm modifyOtherKeys** — `CSI > 4;2m` モード。Emacs・Vim が利用する拡張修飾キーシーケンス~~ **実装済み**
-- ~~**テンキー（数字パッド）** — `DECKPAM`/`DECKPNM`（mode 66）の切り替えはフラグのみ存在するが、数字パッドキーの SS3 シーケンス出力が未実装~~ **実装済み**
-
-### テキスト選択・クリップボード
-
-- ~~**矩形選択（ブロック選択）** — Alt+ドラッグで列ブロック選択。カラムコピーに必須~~ **実装済み（Alt+ドラッグ）**
-- ~~**ダブルクリック・ワード選択** — 単語境界での自動選択~~ **実装済み**
-- ~~**トリプルクリック・行選択** — 1 行全体を選択~~ **実装済み**
-- ~~**Shift+矢印キー選択** — キーボードによる範囲拡張~~ **実装済み**
-- ~~**マルチライン貼り付け確認** — ブラケットペースト（mode 2004）未対応アプリへの複数行貼り付け前の確認ダイアログ~~ **実装済み（BracketedPaste 無効時に改行含むテキストをキャンセル確認）**
-- ~~**色付きコピー（HTML/RTF）** — 選択セルの前景/背景色・bold/italic/underline を保持したままクリップボードへコピー~~ **実装済み（画面選択のコピー時に `DataObject` へ CF_HTML・RTF・プレーンテキストを併載。通常選択・矩形選択の双方に対応し、レンダラ解決済みの実 RGB を使用。CF_HTML はフラグメントオフセットを UTF-8 バイトで算出。OSC 52 経由のコピーは従来どおりプレーンテキスト）**
-
-### シェル統合
-
-- ~~**OSC 133/633 コマンドナビゲーション** — OSC 133 実装後に有効化。Ctrl+Shift+↑/↓ で前後のプロンプト行へジャンプ~~ **実装済み**
-- ~~**Ctrl+R コマンド履歴検索** — シェルが OSC 633;E で報告したコマンド文字列を蓄積し、Ctrl+R で再利用~~ **実装済み（fzf 風ファジーファインダ。入力キャレット直上に Popup を表示し、ファジー絞り込み＋一致文字ハイライト、↑↓/Ctrl+N/P で選択、Ctrl+R で次候補、Enter で入力欄へ挿入。pwsh の PSReadLine フックが `633;E;<エスケープ済みコマンド>` を送出。初回 Ctrl+R 時に PSReadLine の永続履歴ファイル（`ConsoleHost_history.txt`、バッククォート継続行を結合）を読み込み**過去セッションの履歴**もシード（`PSReadLineHistorySeedingEnabled` でオプトアウト、`LoadCommandHistory` で任意ソース注入可）。`TerminalTabView.CommandHistory` / `CommandHistoryRecorded` で公開。重複は最新位置へ移動、上限5000件、再起動後も保持）**
-- ~~**コマンド終了コード表示** — OSC 133 `D;exitCode` を受け取りタブやプロンプト領域に結果を表示~~ **実装済み（非ゼロ終了時にステータスバー表示）**
-- ~~**シェル統合の自動注入** — シェル側が OSC 133 を出さなくても機能するよう、起動時にマーカー出力を仕込む~~ **実装済み（pwsh のみ。shell-integration.ps1 を `-NoExit -Command` で dot-source。`EnableShellIntegrationInjection` 設定 / `TerminalTabView.ShellIntegrationInjectionEnabled` API でオプトアウト可。powershell.exe・cmd・Git Bash は未対応＝センチネル方式フォールバック）**
-- ~~**「同ディレクトリで新規タブ」** — OSC 7 から得たパスを新タブ起動に渡す~~ **実装済み（Ctrl+Shift+D）**
 
 ### UI / UX
 
 - **設定 UI** — フォント・配色・プロファイル・キーバインドを GUI で変更できる設定画面 **部分実装（`SettingsWindow`: プロファイル・コマンド・開始ディレクトリ・フォント・フォントサイズ・タブ配置・ステータスバーを GUI 変更可。配色・キーバインドは未対応＝JSON 直接編集）**
-- ~~**カラースキーム / テーマ** — OSC 4 と連動した16色パレット定義、ダーク/ライト/カスタムテーマの切り替え~~ **実装済み（設定UI、プレビュー、前景/背景/カーソル/選択色/ANSI 16色編集、永続化）**
-- ~~**スクロールバック行数の設定化** — バッファが保持する最大行数をユーザーが変更可能にする~~ **実装済み（`ScrollbackLimit` 設定（既定 10000、100〜1,000,000 にクランプ）、`SettingsWindow` に数値入力欄。バッファの上限は生成時固定のため新規タブ／セッション再起動から適用）**
-- ~~**画面内テキスト検索 UI（検索バー）** — スクロールバック全体を対象にした画面内テキスト検索のインクリメンタル検索バー~~ **実装済み（Ctrl+Shift+F。Ctrl+R 履歴と同層（`TryHandleClipboardShortcut`）で捕捉し、入力キャレット直上にアンカーする fzf 風 Popup（`FindPopup`、配色は HistoryPopup* リソースで統一）。入力ごとに `FindMatches` を呼び「3/17」形式で現在位置/総数を表示、Enter/F3 で次・Shift+Enter/Shift+F3 で前へ巡回（末尾↔先頭ラップ）、現在一致を選択ハイライトの描画・スクロール経路（`TerminalSurfaceControl.SelectMatch`）で強調しつつ可視化、Esc でハイライト解除＋ターミナルへフォーカス復帰、Aa チェックボックス／Alt+C で大文字小文字トグル（既定 `OrdinalIgnoreCase`）。巡回・現在位置文字列・近傍一致選定の純粋ロジックは `TerminalFindNavigator` に分離しユニットテスト。出力ストリーム中もカウントを追従）**
-- ~~**キーバインドカスタマイズ** — コピー・貼り付け・タブ操作などのショートカットをユーザーが変更可能にする~~ **実装済み（設定UI、不正入力/競合検出、既定値リセット）**
-- ~~**ペイン分割** — 1 タブ内での水平・垂直ペイン分割。tmux 不要のマルチペイン操作~~ **実装済み（GridSplitter、ペイン終了、前後フォーカス移動）**
-- ~~**タブのドラッグ並べ替え** — タブストリップ上でドラッグ&ドロップ並べ替え~~ **実装済み**
-- ~~**セッション構成復元** — 終了時のタブ、コマンド、作業ディレクトリ、選択タブを次回起動時に復元~~ **実装済み**
 - **ウィンドウ分離** — タブをドラッグして別ウィンドウへ切り離し
 
 ### 描画 / レンダリング
 
-- ~~**フォントリガチャ** — FiraCode・Cascadia Code のリガチャ（`->`, `=>`, `!=` 等を合字表示）~~ **実装済み（`EnableFontLigatures` 設定 / `TerminalTabView.SetFontLigaturesEnabled` API、既定 OFF。ON 時は主フォントのランを `TextFormatter` + OpenType `liga`/`clig`/`calt` でシェイプして合字描画。ワイド/フォールバックのランはセル単位描画を維持。設定 UI にトグル追加）**
-- ~~**フォントフォールバック** — 主フォントにないグリフを CJK フォントや絵文字フォントで補完~~ **実装済み（FontFallbackResolver、Segoe UI Emoji/Yu Gothic UI/Meiryo/MS Gothic/SimSun、グリフキャッシュ）**
-- ~~**GPU アクセラレーション** — DirectComposition / Direct2D を使った高フレームレート描画。大量テキスト更新時のドロップフレーム解消~~ **実装済み（WPF は既定で GPU 合成のため、真因の「毎フレーム全可視行の `FormattedText` 再シェイプ」という CPU コストを解消。`TerminalSurfaceControl` が行ごとにシェイプ済み描画物（`FormattedText`/`TextLine`）をキャッシュし再描画で再利用。キャッシュは `VirtualLineLayouts` のエントリに同梱して行内容変化・可視外で退避、フォントメトリクス/リガチャ変更で無効化。`CachedLineDrawableCount` テストフック。※真の Direct2D/D3DImage 自前描画はスコープ外）**
-- ~~**Mica / Acrylic 背景** — Windows 11 ウィンドウ素材 API を使った半透明背景エフェクト~~ **実装済み（DWMWA_SYSTEMBACKDROP_TYPE、none/mica/acrylic/mica-alt 設定、DwmBackdrop.cs）**
 - **インライン画像（OSC 1337 / iTerm2 プロトコル）** — **意図的に非対応**。Sixelと同様にConPTY経由での画像とテキストの順序・同期を保証できないため実装しない。シーケンスは画面へ漏れないよう消費して無視する
-
-### パフォーマンス
-
-- ~~**スクロールバック仮想化** — 数万行を超えるバッファの描画・選択を仮想スクロールで省メモリ化~~ **実装済み（`TerminalSurfaceControl` の重い `LineLayout`（grapheme マップ・セグメント配列）を `VirtualLineLayouts` で遅延生成・キャッシュ。可視ウィンドウ外はレンダリング時に退避し、未変更行はスナップショット更新時に再利用。メモリ・更新毎 CPU が全履歴ではなくビューポート規模に。水平スクロール幅は軽量スナップショットの CellLength から算出）**
-- ~~**パーサスループット** — 大量出力時（`cat` 大ファイル等）のバッファ書き込みを SIMD / バッチ化して CPU 使用率を削減~~ **実装済み（`Process` に印字可能 ASCII（U+0020〜U+007E）連続実行の高速パスを追加。`System.Numerics.Vector<ushort>` で run 境界を SIMD 走査し、rune デコード・幅計算・grapheme クラスタ状態機械・セル毎の文字列割り当てを回避。ASCII charset かつクラスタ未確定でない場合のみ作動し、per-rune パスと出力一致）**
 
 ### アクセシビリティ
 
-- ~~**UI Automation 対応** — Windows Narrator・NVDA 等のスクリーンリーダーがターミナル出力を読み上げられるよう、UIA テキストパターンを実装~~ **実装済み（Document、Text Pattern、Value Pattern、読み取り専用レンジ）**
 - **ハイコントラストテーマ** — Windows システムのハイコントラスト設定に追従した配色
