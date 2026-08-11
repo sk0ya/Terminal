@@ -1911,12 +1911,20 @@ internal sealed class AnsiTerminalBuffer
                 {
                     InsertColumns(GetParameter(parameters, 0, 1));
                 }
+                else
+                {
+                    _unknownCsiSequenceCount++;
+                }
 
                 break;
             case '~':
                 if (intermediate == "'")
                 {
                     DeleteColumns(GetParameter(parameters, 0, 1));
+                }
+                else
+                {
+                    _unknownCsiSequenceCount++;
                 }
 
                 break;
