@@ -16,8 +16,10 @@ internal static class TerminalReflowPositionMapper
         int outputStart,
         int outputCount,
         out int targetRow,
-        out int targetColumn)
+        out int targetColumn,
+        out bool targetWrapPending)
     {
+        targetWrapPending = false;
         var cells = new List<TerminalCell>();
         int positionOffset = 0;
         int clampedPositionRow = Math.Clamp(positionRow, logicalStart, logicalEnd);
@@ -54,6 +56,14 @@ internal static class TerminalReflowPositionMapper
                 rowOffset++;
                 targetCellColumn = 0;
             }
+        }
+
+        if (positionOffset >= cells.Count && rowOffset >= outputCount)
+        {
+            targetRow = outputStart + outputCount - 1;
+            targetColumn = targetColumns - 1;
+            targetWrapPending = true;
+            return;
         }
 
         targetRow = outputStart + Math.Min(rowOffset, outputCount - 1);

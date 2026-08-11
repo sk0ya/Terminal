@@ -14,8 +14,38 @@ internal static class TerminalReflowCalculator
         out int savedCursorTargetRow,
         out int savedCursorTargetColumn)
     {
+        return ReflowLinesWithWrapState(
+            source,
+            targetColumns,
+            cursorSourceRow,
+            cursorSourceColumn,
+            out cursorTargetRow,
+            out cursorTargetColumn,
+            savedCursorSourceRow,
+            savedCursorSourceColumn,
+            out savedCursorTargetRow,
+            out savedCursorTargetColumn,
+            out _,
+            out _);
+    }
+
+    public static List<TerminalLine> ReflowLinesWithWrapState(
+        List<TerminalLine> source,
+        int targetColumns,
+        int cursorSourceRow,
+        int cursorSourceColumn,
+        out int cursorTargetRow,
+        out int cursorTargetColumn,
+        int savedCursorSourceRow,
+        int savedCursorSourceColumn,
+        out int savedCursorTargetRow,
+        out int savedCursorTargetColumn,
+        out bool cursorTargetWrapPending,
+        out bool savedCursorTargetWrapPending)
+    {
         var result = new List<TerminalLine>();
         cursorTargetRow = cursorTargetColumn = savedCursorTargetRow = savedCursorTargetColumn = 0;
+        cursorTargetWrapPending = savedCursorTargetWrapPending = false;
         int sourceRow = 0;
         while (sourceRow < source.Count)
         {
@@ -74,19 +104,23 @@ internal static class TerminalReflowCalculator
             }
 
             TerminalReflowPositionMapper.Map(source, logicalStart, logicalEnd, cursorSourceRow, cursorSourceColumn,
-                targetColumns, outputStart, result.Count - outputStart, out int mappedRow, out int mappedColumn);
+                targetColumns, outputStart, result.Count - outputStart, out int mappedRow, out int mappedColumn,
+                out bool mappedWrapPending);
             if (cursorSourceRow >= logicalStart && cursorSourceRow <= logicalEnd)
             {
                 cursorTargetRow = mappedRow;
                 cursorTargetColumn = mappedColumn;
+                cursorTargetWrapPending = mappedWrapPending;
             }
 
             TerminalReflowPositionMapper.Map(source, logicalStart, logicalEnd, savedCursorSourceRow, savedCursorSourceColumn,
-                targetColumns, outputStart, result.Count - outputStart, out mappedRow, out mappedColumn);
+                targetColumns, outputStart, result.Count - outputStart, out mappedRow, out mappedColumn,
+                out mappedWrapPending);
             if (savedCursorSourceRow >= logicalStart && savedCursorSourceRow <= logicalEnd)
             {
                 savedCursorTargetRow = mappedRow;
                 savedCursorTargetColumn = mappedColumn;
+                savedCursorTargetWrapPending = mappedWrapPending;
             }
         }
 

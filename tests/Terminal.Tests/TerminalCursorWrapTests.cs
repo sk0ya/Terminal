@@ -53,4 +53,34 @@ public sealed class TerminalCursorWrapTests
         Assert.Equal(1, buffer.CursorRow);
         Assert.Equal(4, buffer.CursorColumn);
     }
+
+    [Fact]
+    public void GrowingWidthMovesDeferredWrapToTheNewLogicalEnd()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process(new string('A', 20));
+        buffer.Resize(21, 10);
+        Assert.False(buffer.WrapPendingForTests);
+        buffer.Process("X");
+
+        Assert.Equal(0, buffer.CursorRow);
+        Assert.Equal('X', buffer.GetScreenLineText(0)[20]);
+    }
+
+    [Fact]
+    public void ShrinkingWidthKeepsDeferredWrapAfterTheReflowedLastCell()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        buffer.Process(new string('A', 40));
+        buffer.Resize(20, 10);
+        Assert.Equal(1, buffer.CursorRow);
+        Assert.Equal(19, buffer.CursorColumn);
+        Assert.True(buffer.WrapPendingForTests);
+        buffer.Process("X");
+
+        Assert.Equal(2, buffer.CursorRow);
+        Assert.Equal('X', buffer.GetScreenLineText(2)[0]);
+    }
 }

@@ -259,6 +259,7 @@ internal sealed class AnsiTerminalBuffer
     }
     public int CursorRow => _cursorRow;
     public int CursorColumn => Math.Clamp(_cursorColumn, 0, _columns - 1);
+    internal bool WrapPendingForTests => _wrapPending;
     public bool CursorBlinkEnabled => _cursorBlinkEnabled;
     public TerminalCursorShape CursorShape => _cursorShape;
     public bool CursorVisible => _cursorVisible;
@@ -331,6 +332,8 @@ internal sealed class AnsiTerminalBuffer
     private void ReflowPrimaryScreen(int newColumns, int newRows)
     {
         bool hadScrollback = _scrollback.Count > 0;
+        bool cursorWrapPending = _wrapPending;
+        bool savedCursorWrapPending = _savedWrapPending;
         var source = new List<TerminalLine>(_scrollback.Count + _screen.Count);
         source.AddRange(_scrollback);
         int screenLineCount = hadScrollback ? _screen.Count : Math.Max(_cursorRow + 1, FindLastVisibleScreenRow(showCursor: false) + 1);
@@ -338,17 +341,19 @@ internal sealed class AnsiTerminalBuffer
 
         int cursorSourceRow = _scrollback.Count + _cursorRow;
         int savedCursorSourceRow = _scrollback.Count + _savedCursorRow;
-        List<TerminalLine> reflowed = TerminalReflowCalculator.ReflowLines(
+        List<TerminalLine> reflowed = TerminalReflowCalculator.ReflowLinesWithWrapState(
             source,
             newColumns,
             cursorSourceRow,
-            _cursorColumn,
+            _cursorColumn + (cursorWrapPending ? 1 : 0),
             out int cursorRow,
             out int cursorColumn,
             savedCursorSourceRow,
-            _savedCursorColumn,
+            _savedCursorColumn + (savedCursorWrapPending ? 1 : 0),
             out int savedCursorRow,
-            out int savedCursorColumn);
+            out int savedCursorColumn,
+            out bool mappedCursorWrapPending,
+            out bool mappedSavedCursorWrapPending);
 
         int screenStart = Math.Max(0, reflowed.Count - newRows);
         int historyStart = Math.Max(0, screenStart - _screenStore.ScrollbackLimit);
@@ -370,26 +375,31 @@ internal sealed class AnsiTerminalBuffer
 
         _cursorRow = Math.Clamp(targetStart + cursorRow - screenStart, 0, newRows - 1);
         _cursorColumn = Math.Clamp(cursorColumn, 0, newColumns - 1);
-        _wrapPending = _wrapPending && _autoWrapEnabled && _cursorColumn == newColumns - 1;
+        _wrapPending = cursorWrapPending && _autoWrapEnabled && mappedCursorWrapPending;
         _savedCursorRow = Math.Clamp(targetStart + savedCursorRow - screenStart, 0, newRows - 1);
         _savedCursorColumn = Math.Clamp(savedCursorColumn, 0, newColumns - 1);
+        _savedWrapPending = savedCursorWrapPending && _autoWrapEnabled && mappedSavedCursorWrapPending;
         RebuildScrollbackRenderCache();
     }
 
 
     private void ResizeActiveScreen(int newColumns, int newRows)
     {
-        List<TerminalLine> reflowed = TerminalReflowCalculator.ReflowLines(
+        bool cursorWrapPending = _wrapPending;
+        bool savedCursorWrapPending = _savedWrapPending;
+        List<TerminalLine> reflowed = TerminalReflowCalculator.ReflowLinesWithWrapState(
             _screen,
             newColumns,
             _cursorRow,
-            _cursorColumn,
+            _cursorColumn + (cursorWrapPending ? 1 : 0),
             out int cursorRow,
             out int cursorColumn,
             _savedCursorRow,
-            _savedCursorColumn,
+            _savedCursorColumn + (savedCursorWrapPending ? 1 : 0),
             out int savedCursorRow,
-            out int savedCursorColumn);
+            out int savedCursorColumn,
+            out bool mappedCursorWrapPending,
+            out bool mappedSavedCursorWrapPending);
 
         List<TerminalLine> screen = CreateScreen(newRows, newColumns, TerminalStyle.Default);
         int copyRows = Math.Min(newRows, reflowed.Count);
@@ -402,9 +412,10 @@ internal sealed class AnsiTerminalBuffer
 
         _cursorRow = Math.Clamp(cursorRow, 0, newRows - 1);
         _cursorColumn = Math.Clamp(cursorColumn, 0, newColumns - 1);
-        _wrapPending = _wrapPending && _autoWrapEnabled && _cursorColumn == newColumns - 1;
+        _wrapPending = cursorWrapPending && _autoWrapEnabled && mappedCursorWrapPending;
         _savedCursorRow = Math.Clamp(savedCursorRow, 0, newRows - 1);
         _savedCursorColumn = Math.Clamp(savedCursorColumn, 0, newColumns - 1);
+        _savedWrapPending = savedCursorWrapPending && _autoWrapEnabled && mappedSavedCursorWrapPending;
     }
 
 
