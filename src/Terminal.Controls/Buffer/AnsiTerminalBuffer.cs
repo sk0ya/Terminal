@@ -1557,10 +1557,26 @@ internal sealed class AnsiTerminalBuffer
         switch (command.Final)
         {
             case '@':
-                InsertCharacters(GetParameter(parameters, 0, 1));
+                if (intermediate == " ")
+                {
+                    ScrollLeft(GetParameter(parameters, 0, 1));
+                }
+                else
+                {
+                    InsertCharacters(GetParameter(parameters, 0, 1));
+                }
+
                 break;
             case 'A':
-                _cursorRow = Math.Max(GetTopRowLimit(), _cursorRow - GetParameter(parameters, 0, 1));
+                if (intermediate == " ")
+                {
+                    ScrollRight(GetParameter(parameters, 0, 1));
+                }
+                else
+                {
+                    _cursorRow = Math.Max(GetTopRowLimit(), _cursorRow - GetParameter(parameters, 0, 1));
+                }
+
                 break;
             case 'B':
                 _cursorRow = Math.Min(GetBottomRowLimit(), _cursorRow + GetParameter(parameters, 0, 1));
@@ -1756,6 +1772,20 @@ internal sealed class AnsiTerminalBuffer
                 else
                 {
                     RestoreCursorState();
+                }
+
+                break;
+            case '}':
+                if (intermediate == "'")
+                {
+                    InsertColumns(GetParameter(parameters, 0, 1));
+                }
+
+                break;
+            case '~':
+                if (intermediate == "'")
+                {
+                    DeleteColumns(GetParameter(parameters, 0, 1));
                 }
 
                 break;
@@ -2733,6 +2763,50 @@ internal sealed class AnsiTerminalBuffer
     {
         int rightLimit = _leftRightMarginEnabled ? _rightMargin + 1 : _columns;
         _screenStore.InsertCharacters(_cursorRow, _cursorColumn, rightLimit, count, _currentStyle);
+    }
+
+    private void ScrollLeft(int count)
+    {
+        _screenStore.ScrollLeft(
+            GetTopRowLimit(),
+            GetBottomRowLimit(),
+            _leftRightMarginEnabled ? _leftMargin : 0,
+            _leftRightMarginEnabled ? _rightMargin + 1 : _columns,
+            count,
+            _currentStyle);
+    }
+
+    private void ScrollRight(int count)
+    {
+        _screenStore.ScrollRight(
+            GetTopRowLimit(),
+            GetBottomRowLimit(),
+            _leftRightMarginEnabled ? _leftMargin : 0,
+            _leftRightMarginEnabled ? _rightMargin + 1 : _columns,
+            count,
+            _currentStyle);
+    }
+
+    private void InsertColumns(int count)
+    {
+        _screenStore.InsertColumns(
+            GetTopRowLimit(),
+            GetBottomRowLimit(),
+            _leftRightMarginEnabled ? _leftMargin : 0,
+            _leftRightMarginEnabled ? _rightMargin + 1 : _columns,
+            count,
+            _currentStyle);
+    }
+
+    private void DeleteColumns(int count)
+    {
+        _screenStore.DeleteColumns(
+            GetTopRowLimit(),
+            GetBottomRowLimit(),
+            _leftRightMarginEnabled ? _leftMargin : 0,
+            _leftRightMarginEnabled ? _rightMargin + 1 : _columns,
+            count,
+            _currentStyle);
     }
 
     private void DeleteCharacters(int count)

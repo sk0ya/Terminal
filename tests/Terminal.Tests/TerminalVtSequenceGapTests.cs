@@ -285,6 +285,32 @@ public sealed class TerminalVtSequenceGapTests
     }
 
     [Fact]
+    public void HorizontalScrollShiftsTheViewportContent()
+    {
+        var left = new AnsiTerminalBuffer(10, 2);
+        var right = new AnsiTerminalBuffer(10, 2);
+
+        left.Process("abcdef\r[2 @");
+        right.Process("abcdef\r[2 A");
+
+        Assert.Equal("cdef", left.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("  abcdef", right.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void ColumnInsertAndDeleteShiftAllRowsInTheScrollRegion()
+    {
+        var insert = new AnsiTerminalBuffer(10, 2);
+        var delete = new AnsiTerminalBuffer(10, 2);
+
+        insert.Process("abcd\r[2'}");
+        delete.Process("abcd\r[2'~");
+
+        Assert.Equal("  abcd", insert.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("cd", delete.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
     public void UnknownCsiFinalIsCountedWithoutPrinting()
     {
         var buffer = new AnsiTerminalBuffer(32, 3);

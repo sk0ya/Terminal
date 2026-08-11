@@ -208,6 +208,70 @@ internal sealed class TerminalScreenStore
         FillRange(row, rightLimit - deleteCount, rightLimit, cells.Length, blankStyle);
     }
 
+    public void ScrollLeft(
+        int top,
+        int bottom,
+        int left,
+        int rightLimit,
+        int count,
+        TerminalStyle blankStyle)
+    {
+        int scrollCount = Math.Min(Math.Max(count, 1), rightLimit - left);
+        for (int row = top; row <= bottom; row++)
+        {
+            TerminalCell[] cells = Screen[row].Cells;
+            for (int target = left; target < rightLimit - scrollCount; target++)
+            {
+                cells[target] = cells[target + scrollCount];
+            }
+
+            FillRange(row, rightLimit - scrollCount, rightLimit, cells.Length, blankStyle);
+        }
+    }
+
+    public void ScrollRight(
+        int top,
+        int bottom,
+        int left,
+        int rightLimit,
+        int count,
+        TerminalStyle blankStyle)
+    {
+        int scrollCount = Math.Min(Math.Max(count, 1), rightLimit - left);
+        for (int row = top; row <= bottom; row++)
+        {
+            TerminalCell[] cells = Screen[row].Cells;
+            for (int target = rightLimit - 1; target >= left + scrollCount; target--)
+            {
+                cells[target] = cells[target - scrollCount];
+            }
+
+            FillRange(row, left, left + scrollCount, cells.Length, blankStyle);
+        }
+    }
+
+    public void InsertColumns(
+        int top,
+        int bottom,
+        int left,
+        int rightLimit,
+        int count,
+        TerminalStyle blankStyle)
+    {
+        ScrollRight(top, bottom, left, rightLimit, count, blankStyle);
+    }
+
+    public void DeleteColumns(
+        int top,
+        int bottom,
+        int left,
+        int rightLimit,
+        int count,
+        TerminalStyle blankStyle)
+    {
+        ScrollLeft(top, bottom, left, rightLimit, count, blankStyle);
+    }
+
     public void EraseCharacters(int row, int column, int count, int columns, TerminalStyle blankStyle)
     {
         int eraseCount = Math.Min(Math.Max(count, 1), columns - column);
