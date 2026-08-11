@@ -17,6 +17,7 @@ namespace Terminal;
 public partial class MainWindow : Window
 {
     private readonly List<TerminalTabItem> _tabs = [];
+    private readonly List<DetachedTerminalWindow> _detachedWindows = [];
     private TerminalAppSettings _settings;
     private SettingsWindow? _settingsWindow;
     private bool _isClosing;
@@ -27,6 +28,7 @@ public partial class MainWindow : Window
     private readonly TerminalKeyBindings _keyBindings;
     private Point? _tabDragStart;
     private TerminalTabItem? _draggedTab;
+    private bool _tabDragDetached;
 
     public MainWindow()
     {
@@ -86,6 +88,10 @@ public partial class MainWindow : Window
         {
             foreach (TerminalTabView pane in tab.Panes) ApplyAccessibilityTheme(pane);
             UpdateTabHeader(tab, tab.View.HeaderTitle);
+        }
+        foreach (DetachedTerminalWindow window in _detachedWindows)
+        {
+            foreach (TerminalTabView pane in window.Panes) ApplyAccessibilityTheme(pane);
         }
     }
 
@@ -164,6 +170,10 @@ public partial class MainWindow : Window
         {
             foreach (TerminalTabView pane in tab.Panes) pane.SetBackdropActive(active);
         }
+        foreach (DetachedTerminalWindow window in _detachedWindows)
+        {
+            foreach (TerminalTabView pane in window.Panes) pane.SetBackdropActive(active);
+        }
 
         if (_highContrastActive)
         {
@@ -192,7 +202,9 @@ public partial class MainWindow : Window
         }
 
         if (_settings.ConfirmCloseWithRunningProcesses &&
-            TerminalCloseConfirmation.NeedsConfirmation(_tabs.SelectMany(tab => tab.Panes).Select(pane => pane.RequiresCloseConfirmation)) &&
+            TerminalCloseConfirmation.NeedsConfirmation(
+                _tabs.SelectMany(tab => tab.Panes).Concat(_detachedWindows.SelectMany(window => window.Panes))
+                    .Select(pane => pane.RequiresCloseConfirmation)) &&
             MessageBox.Show(
                 this,
                 "実行中の処理があります。すべてのタブを終了しますか？",
@@ -212,6 +224,11 @@ public partial class MainWindow : Window
             foreach (TerminalTabItem tab in _tabs.ToArray())
             {
                 foreach (TerminalTabView pane in tab.Panes.ToArray()) await pane.CloseAsync();
+            }
+            foreach (DetachedTerminalWindow window in _detachedWindows.ToArray())
+            {
+                await window.ClosePanesAsync();
+                window.Close();
             }
         }
         finally
@@ -767,14 +784,25 @@ public partial class MainWindow : Window
 
     private void TabStrip_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        _tabDragDetached = false;
         _tabDragStart = e.GetPosition(TabStrip);
         ListBoxItem? item = FindVisualAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
         _draggedTab = item is null ? null : _tabs.FirstOrDefault(tab => ReferenceEquals(tab.ListBoxItem, item));
+        if (_draggedTab is not null)
+        {
+            Mouse.Capture(TabStrip, CaptureMode.SubTree);
+        }
     }
 
     private void TabStrip_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        if (ReferenceEquals(Mouse.Captured, TabStrip))
+        {
+            Mouse.Capture(null);
+        }
+
         _tabDragStart = null; _draggedTab = null;
+        _tabDragDetached = false;
     }
 
     private void TabStrip_PreviewMouseMove(object sender, MouseEventArgs e)
@@ -783,6 +811,20 @@ public partial class MainWindow : Window
         Point current = e.GetPosition(TabStrip);
         if (Math.Abs(current.X - _tabDragStart.Value.X) < SystemParameters.MinimumHorizontalDragDistance &&
             Math.Abs(current.Y - _tabDragStart.Value.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+
+        if (!_tabDragDetached && !new Rect(new Size(TabStrip.ActualWidth, TabStrip.ActualHeight)).Contains(current))
+        {
+            TerminalTabItem tab = _draggedTab;
+            Point screenPoint = PointToScreen(current);
+            _tabDragDetached = true;
+            _tabDragStart = null;
+            _draggedTab = null;
+            Mouse.Capture(null);
+            DetachTab(tab, screenPoint);
+            e.Handled = true;
+            return;
+        }
+
         ListBoxItem? targetItem = FindVisualAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
         TerminalTabItem? target = targetItem is null ? null : _tabs.FirstOrDefault(tab => ReferenceEquals(tab.ListBoxItem, targetItem));
         if (target is null || ReferenceEquals(target, _draggedTab)) return;
@@ -791,6 +833,47 @@ public partial class MainWindow : Window
         if (!TerminalTabCollectionState.MoveItem(_tabs, from, to)) return;
         TabStrip.Items.Remove(selected); TabStrip.Items.Insert(to, selected); TabStrip.SelectedItem = selected;
         _tabDragStart = current;
+    }
+
+    private void DetachTab(TerminalTabItem tab, Point screenPoint)
+    {
+        int tabIndex = _tabs.IndexOf(tab);
+        if (tabIndex < 0)
+        {
+            return;
+        }
+
+        bool wasSelected = ReferenceEquals(TabStrip.SelectedItem, tab.ListBoxItem);
+        TabStrip.Items.Remove(tab.ListBoxItem);
+        _tabs.RemoveAt(tabIndex);
+
+        if (wasSelected)
+        {
+            if (_tabs.Count == 0)
+            {
+                TabStrip.SelectedItem = null;
+                ActiveTabHost.Content = null;
+                Title = "ConPTY Terminal";
+            }
+            else
+            {
+                TabStrip.SelectedIndex = Math.Min(tabIndex, _tabs.Count - 1);
+            }
+        }
+
+        UpdateTabVisuals();
+
+        var window = new DetachedTerminalWindow(tab.Content, tab.Panes.ToArray(), tab.View.HeaderTitle, this)
+        {
+            Left = Math.Max(SystemParameters.VirtualScreenLeft, screenPoint.X - 120),
+            Top = Math.Max(SystemParameters.VirtualScreenTop, screenPoint.Y - 20)
+        };
+        _detachedWindows.Add(window);
+        window.Closed += (_, _) => _detachedWindows.Remove(window);
+        HighContrastAppearance.Apply(window, _highContrastActive);
+        window.Show();
+        window.Activate();
+        window.Panes[0].FocusTerminal();
     }
 
     private void ConfigureVerticalTabChrome(bool isHorizontal)
@@ -1086,6 +1169,14 @@ public partial class MainWindow : Window
             }
             UpdateTabHeader(tab, tab.View.HeaderTitle);
         }
+        foreach (DetachedTerminalWindow window in _detachedWindows)
+        {
+            foreach (TerminalTabView pane in window.Panes)
+            {
+                pane.ApplySettings(_settings, applyLaunchSettings: false);
+                ApplyAccessibilityTheme(pane);
+            }
+        }
     }
 
     private void SettingsWindow_Closed(object? sender, EventArgs e)
@@ -1159,7 +1250,10 @@ public partial class MainWindow : Window
     {
         _settings.WindowWidth = ActualWidth;
         _settings.WindowHeight = ActualHeight;
-        _settings.SavedTabs = _tabs.Select(tab => new TerminalSavedTab(tab.View.CommandLine, tab.View.WorkingDirectory)).ToList();
+        _settings.SavedTabs = _tabs.Select(tab => new TerminalSavedTab(tab.View.CommandLine, tab.View.WorkingDirectory))
+            .Concat(_detachedWindows.SelectMany(window => window.Panes)
+                .Select(pane => new TerminalSavedTab(pane.CommandLine, pane.WorkingDirectory)))
+            .ToList();
         _settings.ActiveTabIndex = Math.Max(0, TabStrip.SelectedIndex);
     }
 
