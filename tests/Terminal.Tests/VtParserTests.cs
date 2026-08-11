@@ -134,6 +134,32 @@ public sealed class VtParserTests
         Assert.Equal(["control:88"], events);
     }
 
+    [Fact]
+    public void OversizedOscPayloadIsDiscardedAndParserReturnsToNormal()
+    {
+        var events = new List<string>();
+        VtParser parser = CreateParser(events);
+
+        Process(parser, $"\u001b]0;{new string('a', VtParser.MaxControlStringLength - 2)}");
+        Process(parser, "Y");
+        parser.Process('X');
+
+        Assert.Equal(["control:88"], events);
+    }
+
+    [Fact]
+    public void OversizedDcsPayloadIsDiscardedAndParserReturnsToNormal()
+    {
+        var events = new List<string>();
+        VtParser parser = CreateParser(events);
+
+        Process(parser, $"\u001bPq{new string('a', VtParser.MaxControlStringLength - 1)}");
+        Process(parser, "Y");
+        parser.Process('X');
+
+        Assert.Equal(["control:88"], events);
+    }
+
     private static VtParser CreateParser(List<string> events)
     {
         return new VtParser(

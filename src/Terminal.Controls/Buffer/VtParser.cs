@@ -15,6 +15,8 @@ internal sealed class VtParser(
     Action<int, char> charset,
     Action<char> decLineSize)
 {
+    internal const int MaxControlStringLength = 64 * 1024;
+
     private readonly StringBuilder _sequence = new();
     private State _state;
     private int _charsetTarget;
@@ -185,7 +187,7 @@ internal sealed class VtParser(
         }
         else
         {
-            _sequence.Append(ch);
+            TryAppendControlString(ch);
         }
     }
 
@@ -221,17 +223,29 @@ internal sealed class VtParser(
 
         if (ch is >= '\x20' and <= '\x2f')
         {
-            _sequence.Append(ch);
+            if (!TryAppendControlString(ch))
+            {
+                return;
+            }
+
             _state = State.DcsIntermediate;
         }
         else if (ch is >= '\x30' and <= '\x3f')
         {
-            _sequence.Append(ch);
+            if (!TryAppendControlString(ch))
+            {
+                return;
+            }
+
             _state = State.DcsParam;
         }
         else if (ch is >= '\x40' and <= '\x7e')
         {
-            _sequence.Append(ch);
+            if (!TryAppendControlString(ch))
+            {
+                return;
+            }
+
             _state = State.DcsPassthrough;
         }
     }
@@ -250,16 +264,24 @@ internal sealed class VtParser(
 
         if (ch is >= '\x30' and <= '\x3f')
         {
-            _sequence.Append(ch);
+            TryAppendControlString(ch);
         }
         else if (ch is >= '\x20' and <= '\x2f')
         {
-            _sequence.Append(ch);
+            if (!TryAppendControlString(ch))
+            {
+                return;
+            }
+
             _state = State.DcsIntermediate;
         }
         else if (ch is >= '\x40' and <= '\x7e')
         {
-            _sequence.Append(ch);
+            if (!TryAppendControlString(ch))
+            {
+                return;
+            }
+
             _state = State.DcsPassthrough;
         }
     }
@@ -278,11 +300,15 @@ internal sealed class VtParser(
 
         if (ch is >= '\x20' and <= '\x2f')
         {
-            _sequence.Append(ch);
+            TryAppendControlString(ch);
         }
         else if (ch is >= '\x40' and <= '\x7e')
         {
-            _sequence.Append(ch);
+            if (!TryAppendControlString(ch))
+            {
+                return;
+            }
+
             _state = State.DcsPassthrough;
         }
     }
@@ -299,7 +325,7 @@ internal sealed class VtParser(
             return;
         }
 
-        _sequence.Append(ch);
+        TryAppendControlString(ch);
     }
 
     private void ProcessDcsPassthroughEscape(char ch)
@@ -316,8 +342,10 @@ internal sealed class VtParser(
             return;
         }
 
-        _sequence.Append('\u001b').Append(ch);
-        _state = State.DcsPassthrough;
+        if (TryAppendControlString('\u001b', ch))
+        {
+            _state = State.DcsPassthrough;
+        }
     }
 
     private void ProcessControlString(char ch)
@@ -356,6 +384,36 @@ internal sealed class VtParser(
         _sequence.Clear();
         _state = State.Normal;
         return true;
+    }
+
+    private bool TryAppendControlString(char ch)
+    {
+        if (_sequence.Length >= MaxControlStringLength)
+        {
+            AbortControlString();
+            return false;
+        }
+
+        _sequence.Append(ch);
+        return true;
+    }
+
+    private bool TryAppendControlString(char first, char second)
+    {
+        if (_sequence.Length > MaxControlStringLength - 2)
+        {
+            AbortControlString();
+            return false;
+        }
+
+        _sequence.Append(first).Append(second);
+        return true;
+    }
+
+    private void AbortControlString()
+    {
+        _sequence.Clear();
+        _state = State.Normal;
     }
 
     private bool TryFinishDcs(char ch)
