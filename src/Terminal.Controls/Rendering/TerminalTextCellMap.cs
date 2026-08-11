@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-using Terminal.Unicode;
+using Terminal.Buffer;
 
 namespace Terminal.Rendering;
 
@@ -37,7 +37,9 @@ internal sealed class TerminalTextCellMap
         {
             int start = starts[index];
             int end = index + 1 < starts.Length ? starts[index + 1] : text.Length;
-            int cellLength = EstimateCellWidth(text.AsSpan(start, end - start), ambiguousAsWide);
+            int cellLength = TerminalWidthCalculator.EstimateGraphemeWidth(
+                text.AsSpan(start, end - start),
+                ambiguousAsWide);
             entries[index] = new Entry(start, end - start, totalCells, cellLength);
             totalCells += cellLength;
         }
@@ -155,25 +157,6 @@ internal sealed class TerminalTextCellMap
         }
 
         return CellLength;
-    }
-
-    private static int EstimateCellWidth(ReadOnlySpan<char> element, bool ambiguousAsWide)
-    {
-        bool hasVisibleRune = false;
-        int maxWidth = 1;
-        foreach (Rune rune in element.EnumerateRunes())
-        {
-            int width = UnicodeWidth.GetWidth(rune, ambiguousAsWide);
-            if (width <= 0)
-            {
-                continue;
-            }
-
-            hasVisibleRune = true;
-            maxWidth = Math.Max(maxWidth, width);
-        }
-
-        return hasVisibleRune ? maxWidth : 1;
     }
 
     private readonly record struct Entry(int TextIndex, int TextLength, int StartCell, int CellLength);

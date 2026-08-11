@@ -11,7 +11,6 @@ using System.Windows.Automation.Peers;
 
 using Terminal.Buffer;
 using Terminal.Tabs;
-using Terminal.Unicode;
 
 namespace Terminal.Rendering;
 
@@ -1557,27 +1556,8 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         return brush;
     }
 
-    private static int GetDisplayWidth(Rune rune, bool ambiguousAsWide) =>
-        UnicodeWidth.GetWidth(rune, ambiguousAsWide);
-
     private static int EstimateTextElementCellWidth(string element, bool ambiguousAsWide)
-    {
-        bool hasVisibleRune = false;
-        int maxWidth = 1;
-        foreach (Rune rune in element.EnumerateRunes())
-        {
-            int width = GetDisplayWidth(rune, ambiguousAsWide);
-            if (width <= 0)
-            {
-                continue;
-            }
-
-            hasVisibleRune = true;
-            maxWidth = Math.Max(maxWidth, width);
-        }
-
-        return hasVisibleRune ? maxWidth : 1;
-    }
+        => TerminalWidthCalculator.EstimateGraphemeWidth(element.AsSpan(), ambiguousAsWide);
 
     // A line's shaped, position-relative paint commands, reused across repaints. Disposing it
     // releases any unmanaged text resources held by its commands (e.g. TextLine).

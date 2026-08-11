@@ -48,6 +48,36 @@ public sealed class TerminalReflowCalculatorTests
         Assert.Equal(1, cursorColumn);
     }
 
+    [Fact]
+    public void ReflowMapsCursorFromTheSecondWrappedSourceRow()
+    {
+        TerminalLine first = CreateLine(4, "abcd");
+        first.IsWrapped = true;
+        TerminalLine second = CreateLine(4, "efgh");
+
+        _ = Reflow([first, second], 3, 1, 2, out int cursorRow, out int cursorColumn);
+
+        Assert.Equal(2, cursorRow);
+        Assert.Equal(0, cursorColumn);
+    }
+
+    [Fact]
+    public void ReflowPreservesWideCellPairWhenMappingTheFollowingPosition()
+    {
+        TerminalLine source = CreateLine(6, "abcd");
+        source.IsWrapped = true;
+        source.Cells[4] = Cell("界", width: 2);
+        source.Cells[5] = Cell(string.Empty, isContinuation: true, width: 0);
+
+        List<TerminalLine> result = Reflow([source], 5, 0, 6, out int cursorRow, out int cursorColumn);
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal(1, cursorRow);
+        Assert.Equal(2, cursorColumn);
+        Assert.True(result[1].Cells[0].Width == 2);
+        Assert.True(result[1].Cells[1].IsContinuation);
+    }
+
     private static List<TerminalLine> Reflow(
         List<TerminalLine> source,
         int columns,

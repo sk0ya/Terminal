@@ -926,7 +926,7 @@ internal sealed class AnsiTerminalBuffer
             _singleShift = -1;
         }
 
-        int width = GetDisplayWidth(mappedRune);
+        int width = TerminalWidthCalculator.GetWidth(mappedRune, _ambiguousWidthIsWide);
         if (width <= 0)
         {
             AppendClusterExtension(mappedRune);
@@ -3309,9 +3309,6 @@ internal sealed class AnsiTerminalBuffer
     {
         return rune.Value < 0x20 || rune.Value == 0x7F || rune.Value is >= 0x80 and <= 0x9F;
     }
-
-    private int GetDisplayWidth(Rune rune) =>
-        UnicodeWidth.GetWidth(rune, _ambiguousWidthIsWide);
 
     private static bool IsZeroWidthJoiner(Rune rune)
     {

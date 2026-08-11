@@ -73,7 +73,7 @@ internal static class TerminalReflowCalculator
                 }
             }
 
-            MapReflowedPosition(source, logicalStart, logicalEnd, cursorSourceRow, cursorSourceColumn,
+            TerminalReflowPositionMapper.Map(source, logicalStart, logicalEnd, cursorSourceRow, cursorSourceColumn,
                 targetColumns, outputStart, result.Count - outputStart, out int mappedRow, out int mappedColumn);
             if (cursorSourceRow >= logicalStart && cursorSourceRow <= logicalEnd)
             {
@@ -81,7 +81,7 @@ internal static class TerminalReflowCalculator
                 cursorTargetColumn = mappedColumn;
             }
 
-            MapReflowedPosition(source, logicalStart, logicalEnd, savedCursorSourceRow, savedCursorSourceColumn,
+            TerminalReflowPositionMapper.Map(source, logicalStart, logicalEnd, savedCursorSourceRow, savedCursorSourceColumn,
                 targetColumns, outputStart, result.Count - outputStart, out mappedRow, out mappedColumn);
             if (savedCursorSourceRow >= logicalStart && savedCursorSourceRow <= logicalEnd)
             {
@@ -91,52 +91,6 @@ internal static class TerminalReflowCalculator
         }
 
         return result;
-    }
-
-    private static void MapReflowedPosition(List<TerminalLine> source, int logicalStart, int logicalEnd,
-        int positionRow, int positionColumn, int targetColumns, int outputStart, int outputCount,
-        out int targetRow, out int targetColumn)
-    {
-        var cells = new List<TerminalCell>();
-        int positionOffset = 0;
-        int clampedPositionRow = Math.Clamp(positionRow, logicalStart, logicalEnd);
-        for (int row = logicalStart; row <= logicalEnd; row++)
-        {
-            TerminalLine line = source[row];
-            int length = line.IsWrapped ? line.Cells.Length : FindLastOccupiedColumn(line) + 1;
-            if (row < clampedPositionRow)
-            {
-                positionOffset += length;
-            }
-
-            for (int column = 0; column < length; column++)
-            {
-                cells.Add(line.Cells[column]);
-            }
-        }
-
-        positionOffset += Math.Max(0, positionColumn);
-        int rowOffset = 0;
-        int targetCellColumn = 0;
-        for (int offset = 0; offset < Math.Min(positionOffset, cells.Count); offset++)
-        {
-            TerminalCell cell = cells[offset];
-            if (!cell.IsContinuation && cell.Width == 2 && targetCellColumn == targetColumns - 1)
-            {
-                rowOffset++;
-                targetCellColumn = 0;
-            }
-
-            targetCellColumn++;
-            if (targetCellColumn >= targetColumns)
-            {
-                rowOffset++;
-                targetCellColumn = 0;
-            }
-        }
-
-        targetRow = outputStart + Math.Min(rowOffset, outputCount - 1);
-        targetColumn = Math.Min(targetCellColumn, targetColumns - 1);
     }
 
     public static List<TerminalLine> ResizeScreenBuffer(
