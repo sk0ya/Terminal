@@ -272,6 +272,19 @@ public sealed class TerminalVtSequenceGapTests
     }
 
     [Fact]
+    public void HorizontalAndVerticalRelativeCursorPositioningMovesWithinBounds()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 4);
+
+        buffer.Process("A[3aB[2eC");
+
+        Assert.Equal(2, buffer.CursorRow);
+        Assert.Equal(6, buffer.CursorColumn);
+        Assert.Equal("A   B", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("     C", buffer.GetScreenLineText(2).TrimEnd());
+    }
+
+    [Fact]
     public void UnknownCsiFinalIsCountedWithoutPrinting()
     {
         var buffer = new AnsiTerminalBuffer(32, 3);

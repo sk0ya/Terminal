@@ -1621,11 +1621,24 @@ internal sealed class AnsiTerminalBuffer
             case 'Z':
                 MoveToPreviousTabStop(GetParameter(parameters, 0, 1));
                 break;
+            case 'a':
+                {
+                    int rightLimit = _leftRightMarginEnabled ? _rightMargin : _columns - 1;
+                    _cursorColumn = Math.Min(
+                        rightLimit,
+                        _cursorColumn + GetParameter(parameters, 0, 1));
+                    break;
+                }
             case 'b':
                 RepeatLastPrintedCluster(GetParameter(parameters, 0, 1));
                 break;
             case 'd':
                 SetCursorRow(GetParameter(parameters, 0, 1));
+                break;
+            case 'e':
+                _cursorRow = Math.Min(
+                    GetBottomRowLimit(),
+                    _cursorRow + GetParameter(parameters, 0, 1));
                 break;
             case 'c':
                 DispatchDeviceAttributes(isPrivate, isSecondary);
