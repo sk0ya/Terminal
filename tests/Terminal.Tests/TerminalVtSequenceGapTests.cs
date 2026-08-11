@@ -256,6 +256,39 @@ public sealed class TerminalVtSequenceGapTests
     }
 
     [Fact]
+    public void UnknownCsiFinalIsCountedWithoutPrinting()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+
+        buffer.Process("\u001b[1~X");
+
+        Assert.Equal(1, buffer.UnknownCsiSequenceCount);
+        Assert.Equal("X", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void UnknownDcsTypeIsCountedWithoutPrinting()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+
+        buffer.Process("\u001bP1;2!zpayload\u001b\\X");
+
+        Assert.Equal(1, buffer.UnknownDcsSequenceCount);
+        Assert.Equal("X", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void SixelDcsIsConsumedWithoutCountingAsUnknown()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+
+        buffer.Process("\u001bPq#0;2;0;0;0-!200~\u001b\\X");
+
+        Assert.Equal(0, buffer.UnknownDcsSequenceCount);
+        Assert.Equal("X", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
     public void PrimaryDeviceAttributesOmitsSixelAttribute()
     {
         var buffer = new AnsiTerminalBuffer(32, 3);

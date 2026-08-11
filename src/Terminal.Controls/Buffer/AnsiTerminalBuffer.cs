@@ -184,6 +184,8 @@ internal sealed class AnsiTerminalBuffer
     private int _cachedVisibleScreenRow = -1;
     private int _kittyKeyboardFlags;
     private readonly Stack<int> _kittyKeyboardStack = new();
+    private int _unknownCsiSequenceCount;
+    private int _unknownDcsSequenceCount;
 
     public event EventHandler<string>? InputSequenceGenerated;
     public event EventHandler<string>? ClipboardSetRequested;
@@ -276,6 +278,19 @@ internal sealed class AnsiTerminalBuffer
     public bool MousePixelMode => _mousePixelMode;
     public int ScrollbackLineCount => _scrollback.Count;
     public int VisibleLineCount => GetLastRenderedScreenRow(showCursor: false) + 1;
+
+    /// <summary>
+    /// Number of CSI sequences whose final character is not implemented by this terminal.
+    /// This is intentionally a counter rather than a logging side effect so callers can
+    /// inspect parser compatibility without enabling diagnostics globally.
+    /// </summary>
+    public int UnknownCsiSequenceCount => _unknownCsiSequenceCount;
+
+    /// <summary>
+    /// Number of DCS sequences whose introducer/type is not implemented. Supported but
+    /// intentionally ignored Sixel sequences are not included.
+    /// </summary>
+    public int UnknownDcsSequenceCount => _unknownDcsSequenceCount;
 
     public TerminalColorTheme ColorTheme { get; private set; } = TerminalColorTheme.Default;
 
@@ -1199,7 +1214,7 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
-        // All other DCS sequences (DECUDK, etc.) are silently ignored.
+        _unknownDcsSequenceCount++;
     }
 
     private string SerializeCurrentSgr()
@@ -1700,6 +1715,9 @@ internal sealed class AnsiTerminalBuffer
                     RestoreCursorState();
                 }
 
+                break;
+            default:
+                _unknownCsiSequenceCount++;
                 break;
         }
     }
