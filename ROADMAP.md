@@ -10,10 +10,7 @@
 
 ### 中優先度
 
-- **XTGETTCAP / XTSETTCAP** — `DCS +q` / `DCS +p` によるterminfo能力の問い合わせ・設定
 - **DECUDK** — `DCS ... |` によるユーザー定義キー
-- **CSI拡張の一部** — HPR (`CSI Ps a`)、VPR (`CSI Ps e`)、横スクロール、列挿入・削除など
-- **8-bit C1制御文字の一部** — IND (`0x84`)、NEL (`0x85`)、HTS (`0x88`)、RI (`0x8D`) など
 
 ### 低優先度
 

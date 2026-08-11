@@ -4,10 +4,15 @@ internal enum DcsCommandKind
 {
     Unknown,
     Decrqss,
+    XtGetTcap,
+    XtSetTcap,
     Sixel
 }
 
-internal readonly record struct DcsCommand(DcsCommandKind Kind, string? RequestToken = null);
+internal readonly record struct DcsCommand(
+    DcsCommandKind Kind,
+    string? RequestToken = null,
+    string? Payload = null);
 
 internal static class DcsDecoder
 {
@@ -16,6 +21,16 @@ internal static class DcsDecoder
         if (content.StartsWith("$q", StringComparison.Ordinal))
         {
             return new DcsCommand(DcsCommandKind.Decrqss, content[2..]);
+        }
+
+        if (content.StartsWith("+q", StringComparison.Ordinal))
+        {
+            return new DcsCommand(DcsCommandKind.XtGetTcap, Payload: content[2..]);
+        }
+
+        if (content.StartsWith("+p", StringComparison.Ordinal))
+        {
+            return new DcsCommand(DcsCommandKind.XtSetTcap, Payload: content[2..]);
         }
 
         int introducerIndex = content.IndexOf('q');

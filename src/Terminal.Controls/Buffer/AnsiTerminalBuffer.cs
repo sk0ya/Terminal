@@ -184,6 +184,7 @@ internal sealed class AnsiTerminalBuffer
     private int _cachedVisibleScreenRow = -1;
     private int _kittyKeyboardFlags;
     private readonly Stack<int> _kittyKeyboardStack = new();
+    private readonly Dictionary<string, string> _termcapOverrides = new(StringComparer.Ordinal);
     private int _unknownCsiSequenceCount;
     private int _unknownDcsSequenceCount;
 
@@ -1238,6 +1239,18 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
+        if (command.Kind == DcsCommandKind.XtGetTcap)
+        {
+            DispatchXtGetTcap(command.Payload!);
+            return;
+        }
+
+        if (command.Kind == DcsCommandKind.XtSetTcap)
+        {
+            DispatchXtSetTcap(command.Payload!);
+            return;
+        }
+
         if (command.Kind == DcsCommandKind.Sixel)
         {
             // Sixel graphics are not supported; the sequence is consumed and ignored.
@@ -1245,6 +1258,112 @@ internal sealed class AnsiTerminalBuffer
         }
 
         _unknownDcsSequenceCount++;
+    }
+
+    private void DispatchXtGetTcap(string encodedNames)
+    {
+        var pairs = new List<string>();
+        foreach (string encodedName in encodedNames.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!TryDecodeHex(encodedName, out string name))
+            {
+                break;
+            }
+
+            string? value = GetTermcapValue(name);
+            if (value is null)
+            {
+                break;
+            }
+
+            pairs.Add($"{encodedName}={EncodeHex(value)}");
+        }
+
+        if (pairs.Count == 0)
+        {
+            EmitInputSequence("P0+r\\");
+            return;
+        }
+
+        EmitInputSequence($"P1+r{string.Join(';', pairs)}\\");
+    }
+
+    private void DispatchXtSetTcap(string encodedValue)
+    {
+        if (!TryDecodeHex(encodedValue, out string decoded))
+        {
+            return;
+        }
+
+        int separator = decoded.IndexOf('=');
+        if (separator <= 0)
+        {
+            return;
+        }
+
+        _termcapOverrides[decoded[..separator]] = decoded[(separator + 1)..];
+    }
+
+    private string? GetTermcapValue(string name)
+    {
+        if (_termcapOverrides.TryGetValue(name, out string? overrideValue))
+        {
+            return overrideValue;
+        }
+
+        return name switch
+        {
+            "TN" => "xterm-256color",
+            "Co" => "256",
+            "RGB" or "Tc" => "1",
+            "kcuu1" => "[A",
+            "kcud1" => "[B",
+            "kcuf1" => "[C",
+            "kcub1" => "[D",
+            "khome" => "[H",
+            "kend" => "[F",
+            "kich1" => "[2~",
+            "kdch1" => "[3~",
+            "kpp" => "[5~",
+            "knp" => "[6~",
+            "kf1" => "OP",
+            "kf2" => "OQ",
+            "kf3" => "OR",
+            "kf4" => "OS",
+            "kf5" => "[15~",
+            "kf6" => "[17~",
+            "kf7" => "[18~",
+            "kf8" => "[19~",
+            "kf9" => "[20~",
+            "kf10" => "[21~",
+            "kf11" => "[23~",
+            "kf12" => "[24~",
+            _ => null
+        };
+    }
+
+    private static bool TryDecodeHex(string encoded, out string value)
+    {
+        value = string.Empty;
+        if (encoded.Length == 0 || (encoded.Length & 1) != 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            value = Encoding.UTF8.GetString(Convert.FromHexString(encoded));
+            return true;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    private static string EncodeHex(string value)
+    {
+        return Convert.ToHexString(Encoding.UTF8.GetBytes(value));
     }
 
     private string SerializeCurrentSgr()

@@ -311,6 +311,32 @@ public sealed class TerminalVtSequenceGapTests
     }
 
     [Fact]
+    public void XtGetTcapReportsCommonTerminalCapabilities()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 2);
+        string? response = null;
+        buffer.InputSequenceGenerated += (_, text) => response = text;
+
+        buffer.Process("P+q544e;436f\\");
+
+        Assert.Equal(
+            "P1+r544e=787465726D2D323536636F6C6F72;436f=323536\\",
+            response);
+    }
+
+    [Fact]
+    public void XtSetTcapOverridesTheValueReturnedByXtGetTcap()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 2);
+        string? response = null;
+        buffer.InputSequenceGenerated += (_, text) => response = text;
+
+        buffer.Process("P+p544e3d637573746f6d\\P+q544e\\");
+
+        Assert.Equal("P1+r544e=637573746F6D\\", response);
+    }
+
+    [Fact]
     public void UnknownCsiFinalIsCountedWithoutPrinting()
     {
         var buffer = new AnsiTerminalBuffer(32, 3);
