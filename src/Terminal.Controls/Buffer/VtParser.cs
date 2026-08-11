@@ -145,6 +145,18 @@ internal sealed class VtParser(
 
     private void ProcessCsi(char ch)
     {
+        if (TryCancel(ch))
+        {
+            return;
+        }
+
+        if (ch == '\u001b')
+        {
+            _sequence.Clear();
+            _state = State.Escape;
+            return;
+        }
+
         if (ch is >= '@' and <= '~')
         {
             csi(ch, _sequence.ToString());
@@ -157,6 +169,11 @@ internal sealed class VtParser(
 
     private void ProcessOsc(char ch)
     {
+        if (TryCancel(ch))
+        {
+            return;
+        }
+
         if (ch is '\a' or '\u009c')
         {
             osc(_sequence.ToString());
@@ -174,6 +191,11 @@ internal sealed class VtParser(
 
     private void ProcessOscEscape(char ch)
     {
+        if (TryCancel(ch))
+        {
+            return;
+        }
+
         if (ch == '\\')
         {
             osc(_sequence.ToString());
@@ -187,6 +209,11 @@ internal sealed class VtParser(
 
     private void ProcessDcsEntry(char ch)
     {
+        if (TryCancel(ch))
+        {
+            return;
+        }
+
         if (TryFinishDcs(ch) || TryEnterDcsEscape(ch))
         {
             return;
@@ -211,6 +238,11 @@ internal sealed class VtParser(
 
     private void ProcessDcsParam(char ch)
     {
+        if (TryCancel(ch))
+        {
+            return;
+        }
+
         if (TryFinishDcs(ch) || TryEnterDcsEscape(ch))
         {
             return;
@@ -234,6 +266,11 @@ internal sealed class VtParser(
 
     private void ProcessDcsIntermediate(char ch)
     {
+        if (TryCancel(ch))
+        {
+            return;
+        }
+
         if (TryFinishDcs(ch) || TryEnterDcsEscape(ch))
         {
             return;
@@ -252,6 +289,11 @@ internal sealed class VtParser(
 
     private void ProcessDcsPassthrough(char ch)
     {
+        if (TryCancel(ch))
+        {
+            return;
+        }
+
         if (TryFinishDcs(ch) || TryEnterDcsEscape(ch))
         {
             return;
@@ -262,6 +304,11 @@ internal sealed class VtParser(
 
     private void ProcessDcsPassthroughEscape(char ch)
     {
+        if (TryCancel(ch))
+        {
+            return;
+        }
+
         if (ch == '\\')
         {
             dcs(_sequence.ToString());
@@ -297,6 +344,18 @@ internal sealed class VtParser(
         // when an ESC is not followed by the ST terminator.
         _state = State.ControlString;
         ProcessControlString(ch);
+    }
+
+    private bool TryCancel(char ch)
+    {
+        if (ch is not ('\u0018' or '\u001a'))
+        {
+            return false;
+        }
+
+        _sequence.Clear();
+        _state = State.Normal;
+        return true;
     }
 
     private bool TryFinishDcs(char ch)

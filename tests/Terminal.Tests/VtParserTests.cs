@@ -95,6 +95,45 @@ public sealed class VtParserTests
         Assert.Equal(["control:88"], events);
     }
 
+    [Theory]
+    [InlineData('\u0018')]
+    [InlineData('\u001a')]
+    public void CsiCanBeCancelledByCanOrSub(char cancel)
+    {
+        var events = new List<string>();
+        VtParser parser = CreateParser(events);
+
+        Process(parser, $"\u001b[31{cancel}X");
+
+        Assert.Equal(["control:88"], events);
+    }
+
+    [Fact]
+    public void EscapeInsideCsiResynchronizesToANewEscapeSequence()
+    {
+        var events = new List<string>();
+        VtParser parser = CreateParser(events);
+
+        Process(parser, "\u001b[31\u001b]2;title\u0007X");
+
+        Assert.Equal(["osc:2;title", "control:88"], events);
+    }
+
+    [Theory]
+    [InlineData("\u001b]2;partial", '\u0018')]
+    [InlineData("\u001b]2;partial", '\u001a')]
+    [InlineData("\u001bP$qpartial", '\u0018')]
+    [InlineData("\u001bP$qpartial", '\u001a')]
+    public void OscAndDcsCanBeCancelledByCanOrSub(string prefix, char cancel)
+    {
+        var events = new List<string>();
+        VtParser parser = CreateParser(events);
+
+        Process(parser, $"{prefix}{cancel}X");
+
+        Assert.Equal(["control:88"], events);
+    }
+
     private static VtParser CreateParser(List<string> events)
     {
         return new VtParser(
