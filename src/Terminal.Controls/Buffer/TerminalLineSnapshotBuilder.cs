@@ -35,7 +35,8 @@ internal static class TerminalLineSnapshotBuilder
             return new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
                 anchorColumn == 0 ? 0 : -1,
                 0,
-                []);
+                [],
+                line.LineSize);
         }
 
         var text = new StringBuilder();
@@ -85,7 +86,8 @@ internal static class TerminalLineSnapshotBuilder
         return new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
             anchorSegmentIndex,
             visibleLength,
-            segments.ToArray());
+            segments.ToArray(),
+            line.LineSize);
     }
 
     private static int FindVisibleLength(TerminalLine line, int cursorColumn)

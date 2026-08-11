@@ -763,34 +763,54 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         {
             TerminalLineLayout line = _lines[lineIndex];
             double top = contentTop + (lineIndex * _cellSize.Height);
-            DrawLineBackgrounds(drawingContext, line, top, contentLeft);
-            if (_blockSelectionMode && selection.HasValue)
+            double scaleX = line.LineSize == TerminalLineSize.DoubleWidth ? 2.0 : 1.0;
+            double scaleY = line.LineSize is TerminalLineSize.DoubleHeightTop or TerminalLineSize.DoubleHeightBottom
+                ? 2.0
+                : 1.0;
+            bool scaled = scaleX != 1.0 || scaleY != 1.0;
+            if (scaled)
             {
-                DrawBlockSelection(drawingContext, selection.Value, lineIndex, top, contentLeft);
-            }
-            else
-            {
-                DrawSelection(drawingContext, selection, lineIndex, line, top, contentLeft);
+                drawingContext.PushTransform(new ScaleTransform(scaleX, scaleY, contentLeft, top));
             }
 
-            LineDrawable drawable = _lines.GetDrawable(lineIndex, BuildLineDrawable);
-            foreach (IDrawCommand command in drawable.Commands)
+            try
             {
-                if (command.Blink)
+                DrawLineBackgrounds(drawingContext, line, top, contentLeft);
+                if (_blockSelectionMode && selection.HasValue)
                 {
-                    sawBlinkingContent = true;
-                    if (!_blinkTextVisible)
-                    {
-                        continue;
-                    }
+                    DrawBlockSelection(drawingContext, selection.Value, lineIndex, top, contentLeft);
+                }
+                else
+                {
+                    DrawSelection(drawingContext, selection, lineIndex, line, top, contentLeft);
                 }
 
-                command.Render(drawingContext, contentLeft, top);
-            }
+                LineDrawable drawable = _lines.GetDrawable(lineIndex, BuildLineDrawable);
+                foreach (IDrawCommand command in drawable.Commands)
+                {
+                    if (command.Blink)
+                    {
+                        sawBlinkingContent = true;
+                        if (!_blinkTextVisible)
+                        {
+                            continue;
+                        }
+                    }
 
-            if (_hoveredLink is { } hovered && hovered.Line == lineIndex)
+                    command.Render(drawingContext, contentLeft, top);
+                }
+
+                if (_hoveredLink is { } hovered && hovered.Line == lineIndex)
+                {
+                    DrawHoverUnderline(drawingContext, hovered.StartColumn, hovered.EndColumn, top, contentLeft);
+                }
+            }
+            finally
             {
-                DrawHoverUnderline(drawingContext, hovered.StartColumn, hovered.EndColumn, top, contentLeft);
+                if (scaled)
+                {
+                    drawingContext.Pop();
+                }
             }
         }
 

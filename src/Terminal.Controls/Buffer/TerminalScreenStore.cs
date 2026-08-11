@@ -309,6 +309,7 @@ internal sealed class TerminalScreenStore
         var clone = new TerminalLine(line.Cells.Length, TerminalStyle.Default);
         Array.Copy(line.Cells, clone.Cells, line.Cells.Length);
         clone.IsWrapped = line.IsWrapped;
+        clone.LineSize = line.LineSize;
         return clone;
     }
 

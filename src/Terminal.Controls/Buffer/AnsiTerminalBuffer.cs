@@ -1164,11 +1164,25 @@ internal sealed class AnsiTerminalBuffer
         ClearWrapPending();
         // ESC # <ch>: DEC line-size / alignment controls.
         // ESC # 8 = DECALN: fill the entire screen with 'E' in the default rendition and home the cursor.
-        // ESC # 3/4/5/6 = DECDHL/DECDWL/DECSWL double-height/width lines: consumed so the parameter
-        // digit is not printed; per-line size rendering is not yet applied.
+        // ESC # 3/4/5/6 = DECDHL/DECDWL/DECSWL double-height/width lines.
         if (ch == '8')
         {
             FillScreenForAlignment();
+            return;
+        }
+
+        TerminalLineSize? lineSize = ch switch
+        {
+            '3' => TerminalLineSize.DoubleHeightTop,
+            '4' => TerminalLineSize.DoubleHeightBottom,
+            '5' => TerminalLineSize.SingleWidth,
+            '6' => TerminalLineSize.DoubleWidth,
+            _ => null
+        };
+        if (lineSize.HasValue)
+        {
+            _screen[_cursorRow].LineSize = lineSize.Value;
+            InvalidateScreenRenderCache();
         }
     }
 
@@ -3514,12 +3528,14 @@ internal sealed class AnsiTerminalBuffer
     internal readonly record struct TerminalRenderLineSnapshot(
         int AnchorSegmentIndex,
         int CellLength,
-        TerminalRenderSegmentSnapshot[] Segments)
+        TerminalRenderSegmentSnapshot[] Segments,
+        TerminalLineSize LineSize = TerminalLineSize.SingleWidth)
     {
         public bool ContentEquals(TerminalRenderLineSnapshot other)
         {
             if (AnchorSegmentIndex != other.AnchorSegmentIndex ||
                 CellLength != other.CellLength ||
+                LineSize != other.LineSize ||
                 Segments.Length != other.Segments.Length)
             {
                 return false;

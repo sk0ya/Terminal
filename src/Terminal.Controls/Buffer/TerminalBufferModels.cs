@@ -2,6 +2,14 @@ using System.Windows.Media;
 
 namespace Terminal.Buffer;
 
+internal enum TerminalLineSize
+{
+    SingleWidth,
+    DoubleWidth,
+    DoubleHeightTop,
+    DoubleHeightBottom
+}
+
 internal sealed class TerminalLine
 {
     public TerminalLine(int columns, TerminalStyle blankStyle)
@@ -15,6 +23,7 @@ internal sealed class TerminalLine
 
     public TerminalCell[] Cells { get; }
     public bool IsWrapped { get; set; }
+    public TerminalLineSize LineSize { get; set; }
 }
 
 internal readonly record struct TerminalCell(

@@ -70,16 +70,17 @@ internal static class TerminalReflowCalculator
 
             int logicalEnd = sourceRow - 1;
             int outputStart = result.Count;
+            TerminalLineSize lineSize = source[logicalStart].LineSize;
             if (cells.Count == 0)
             {
-                result.Add(new TerminalLine(targetColumns, TerminalStyle.Default));
+                result.Add(new TerminalLine(targetColumns, TerminalStyle.Default) { LineSize = lineSize });
             }
             else
             {
                 int offset = 0;
                 while (offset < cells.Count)
                 {
-                    var line = new TerminalLine(targetColumns, TerminalStyle.Default);
+                    var line = new TerminalLine(targetColumns, TerminalStyle.Default) { LineSize = lineSize };
                     int column = 0;
                     while (offset < cells.Count && column < targetColumns)
                     {
@@ -150,6 +151,7 @@ internal static class TerminalReflowCalculator
             TerminalLine source = sourceScreen[sourceStartRow + row];
             TerminalLine target = resizedScreen[targetStartRow + row];
             Array.Copy(source.Cells, 0, target.Cells, 0, copyColumns);
+            target.LineSize = source.LineSize;
             SanitizeRightEdge(source, target, copyColumns, sourceColumns);
         }
 

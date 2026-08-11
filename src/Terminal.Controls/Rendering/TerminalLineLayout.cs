@@ -10,7 +10,8 @@ internal readonly record struct TerminalLineLayout(
     int CellLength,
     ImmutableArray<TerminalLineSegmentLayout> Segments,
     ImmutableArray<TerminalHyperlinkSegment> HyperlinkSegments,
-    TerminalTextCellMap TextCellMap);
+    TerminalTextCellMap TextCellMap,
+    TerminalLineSize LineSize = TerminalLineSize.SingleWidth);
 
 /// <summary>A render segment and its cell offset within its line.</summary>
 internal readonly record struct TerminalLineSegmentLayout(
@@ -47,6 +48,7 @@ internal static class TerminalLineLayoutBuilder
             line.CellLength,
             segments.MoveToImmutable(),
             hyperlinkSegments.MoveToImmutable(),
-            textCellMap);
+            textCellMap,
+            line.LineSize);
     }
 }

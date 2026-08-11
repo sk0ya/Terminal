@@ -288,6 +288,33 @@ public sealed class TerminalVtSequenceGapTests
         Assert.Equal("X", buffer.GetScreenLineText(0).TrimEnd());
     }
 
+    [Theory]
+    [InlineData('3', "DoubleHeightTop")]
+    [InlineData('4', "DoubleHeightBottom")]
+    [InlineData('6', "DoubleWidth")]
+    public void DecLineSizeChangesTheCurrentLineRenderSize(char command, string expectedName)
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+
+        buffer.Process("A");
+        buffer.Process($"\u001b#{command}");
+
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.Equal(expectedName, snapshot.Lines[0].LineSize.ToString());
+    }
+
+    [Fact]
+    public void DecSingleWidthSingleHeightRestoresNormalLineSize()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 3);
+
+        buffer.Process("\u001b#6\u001b#5");
+
+        Assert.Equal(
+            TerminalLineSize.SingleWidth,
+            buffer.CreateRenderSnapshot(showCursor: false).Lines[0].LineSize);
+    }
+
     [Fact]
     public void PrimaryDeviceAttributesOmitsSixelAttribute()
     {

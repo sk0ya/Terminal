@@ -61,16 +61,17 @@ internal static class TerminalWidthReflowCalculator
 
             int logicalEnd = sourceRow - 1;
             int outputStart = result.Count;
+            TerminalLineSize lineSize = source[logicalStart].LineSize;
             if (logicalCells.Count == 0)
             {
-                result.Add(new TerminalLine(targetColumns, TerminalStyle.Default));
+                result.Add(new TerminalLine(targetColumns, TerminalStyle.Default) { LineSize = lineSize });
             }
             else
             {
                 int offset = 0;
                 while (offset < logicalCells.Count)
                 {
-                    var line = new TerminalLine(targetColumns, TerminalStyle.Default);
+                    var line = new TerminalLine(targetColumns, TerminalStyle.Default) { LineSize = lineSize };
                     int column = 0;
                     while (offset < logicalCells.Count && column < targetColumns)
                     {
