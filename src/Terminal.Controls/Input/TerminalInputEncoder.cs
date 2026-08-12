@@ -167,6 +167,7 @@ internal static class TerminalInputEncoder
         if ((modifiers & ModifierKeys.Shift) != 0) bits |= 1;
         if ((modifiers & ModifierKeys.Alt) != 0) bits |= 2;
         if ((modifiers & ModifierKeys.Control) != 0) bits |= 4;
+        if ((modifiers & ModifierKeys.Windows) != 0) bits |= 8;
         return bits + 1;
     }
 

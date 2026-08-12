@@ -194,6 +194,9 @@ internal static class TerminalKeyChordTranslator
     {
         return key switch
         {
+            >= Key.A and <= Key.Z => 'a' + (key - Key.A),
+            >= Key.D0 and <= Key.D9 => '0' + (key - Key.D0),
+            >= Key.NumPad0 and <= Key.NumPad9 => '0' + (key - Key.NumPad0),
             Key.Escape => 27,
             Key.Enter => 13,
             Key.Tab => 9,

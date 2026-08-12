@@ -631,7 +631,8 @@ public partial class TerminalTabView : UserControl
     private TerminalKeyboardRequest BuildKeyboardRequest(KeyEventArgs e, TerminalKeyboardSource source)
     {
         Key key = GetEffectiveKey(e);
-        ModifierKeys terminalModifiers = GetTerminalModifiers();
+        ModifierKeys terminalModifiers = GetTerminalModifiers(
+            includeWindows: (_terminalBuffer.KittyKeyboardFlags & 0x08) != 0);
         bool supportsInput = SupportsTerminalInput();
         string? controlSequence = supportsInput && (terminalModifiers & ModifierKeys.Control) != 0
             ? TerminalKeyChordTranslator.TranslateCtrlChord(key, terminalModifiers, _terminalBuffer.ModifyOtherKeysLevel)
@@ -2426,9 +2427,15 @@ public partial class TerminalTabView : UserControl
             Mouse.RightButton == MouseButtonState.Pressed;
     }
 
-    private static ModifierKeys GetTerminalModifiers()
+    private static ModifierKeys GetTerminalModifiers(bool includeWindows = false)
     {
-        return Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control | ModifierKeys.Alt);
+        ModifierKeys supported = ModifierKeys.Shift | ModifierKeys.Control | ModifierKeys.Alt;
+        if (includeWindows)
+        {
+            supported |= ModifierKeys.Windows;
+        }
+
+        return Keyboard.Modifiers & supported;
     }
 
     private TerminalMouseState BuildMouseState() => new(

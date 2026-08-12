@@ -80,6 +80,7 @@ public sealed class TerminalInputEncoderTests
         Assert.Equal(3, TerminalInputEncoder.GetKittyModifierParameter(ModifierKeys.Alt));
         Assert.Equal(5, TerminalInputEncoder.GetKittyModifierParameter(ModifierKeys.Control));
         Assert.Equal(8, TerminalInputEncoder.GetKittyModifierParameter(ModifierKeys.Shift | ModifierKeys.Alt | ModifierKeys.Control));
+        Assert.Equal(9, TerminalInputEncoder.GetKittyModifierParameter(ModifierKeys.Windows));
     }
 
     [Fact]
@@ -137,5 +138,21 @@ public sealed class TerminalInputEncoderTests
     {
         Assert.True(TerminalInputEncoder.ShouldUseKittyEncoding(Key.A, ModifierKeys.None, kittyFlags: 8));
         Assert.True(TerminalInputEncoder.ShouldUseKittyEncoding(Key.Enter, ModifierKeys.None, kittyFlags: 8));
+    }
+
+    [Fact]
+    public void EncodeKittyAllKeysUsesUnicodeCodePointForAsciiLettersAndDigits()
+    {
+        Assert.Equal("[97u", TerminalKeyChordTranslator.TranslateSpecialKey(
+            Key.A, ModifierKeys.None, applicationCursorKeys: false, modifyOtherKeysLevel: 0, kittyKeyboardFlags: 8));
+        Assert.Equal("[49u", TerminalKeyChordTranslator.TranslateSpecialKey(
+            Key.D1, ModifierKeys.None, applicationCursorKeys: false, modifyOtherKeysLevel: 0, kittyKeyboardFlags: 8));
+    }
+
+    [Fact]
+    public void EncodeKittyKeyReportsWindowsModifier()
+    {
+        Assert.Equal("[97;9u", TerminalInputEncoder.EncodeKittyKey(
+            97, ModifierKeys.Windows, kittyFlags: 8));
     }
 }
