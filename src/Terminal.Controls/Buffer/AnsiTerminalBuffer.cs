@@ -2313,11 +2313,14 @@ internal sealed class AnsiTerminalBuffer
     {
         switch (operation)
         {
+            case 19:
+                EmitInputSequence($"\u001b[9;{_rows};{_columns}t");
+                break;
             case 18:
                 EmitInputSequence($"[8;{_rows};{_columns}t");
                 break;
             case 20:
-                EmitInputSequence($"]L{_windowTitle}\\");
+                EmitInputSequence($"]L{_iconTitle}\\");
                 break;
             case 21:
                 EmitInputSequence($"]l{_windowTitle}\\");

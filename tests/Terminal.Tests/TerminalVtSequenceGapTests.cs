@@ -543,6 +543,19 @@ public sealed class TerminalVtSequenceGapTests
     }
 
     [Fact]
+    public void XtwinopsReportsIconTitleAndScreenSize()
+    {
+        var buffer = new AnsiTerminalBuffer(80, 24);
+        var emitted = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => emitted.Add(text);
+
+        buffer.Process("]1;Icon[20t[19t");
+
+        Assert.Equal("]LIcon\\", emitted[0]);
+        Assert.Equal("[9;24;80t", emitted[1]);
+    }
+
+    [Fact]
     public void Osc1SetsIconTitleWithoutChangingWindowTitle()
     {
         var buffer = new AnsiTerminalBuffer(32, 3);
