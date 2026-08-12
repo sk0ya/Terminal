@@ -2023,6 +2023,18 @@ internal sealed class AnsiTerminalBuffer
                 string prefix = isPrivate ? "?" : string.Empty;
                 EmitInputSequence($"\u001b[{prefix}{_cursorRow + 1};{_cursorColumn + 1}R");
                 break;
+            case 15 when !isPrivate:
+                // The terminal has no printer attached. DSR 15 reports the printer as not ready.
+                EmitInputSequence("\u001b[?13n");
+                break;
+            case 25 when !isPrivate:
+                // User-defined keys are not implemented and therefore reported as unlocked.
+                EmitInputSequence("\u001b[?21n");
+                break;
+            case 26 when !isPrivate:
+                // Report a usable North American keyboard with no parity or data problems.
+                EmitInputSequence("\u001b[?27;1;0;0n");
+                break;
         }
     }
 

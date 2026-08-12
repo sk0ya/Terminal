@@ -311,6 +311,20 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void DeviceStatusReportEmitsStandardPrinterUdkAndKeyboardResponses()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        var emitted = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => emitted.Add(text);
+
+        buffer.Process("\u001b[15n\u001b[25n\u001b[26n");
+
+        Assert.Equal(
+            new[] { "\u001b[?13n", "\u001b[?21n", "\u001b[?27;1;0;0n" },
+            emitted);
+    }
+
+    [Fact]
     public void DeviceAttributesRespondToPrimaryAndSecondaryQueries()
     {
         var buffer = new AnsiTerminalBuffer(32, 10);
