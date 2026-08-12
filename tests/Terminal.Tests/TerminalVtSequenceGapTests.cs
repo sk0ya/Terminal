@@ -352,6 +352,30 @@ public sealed class TerminalVtSequenceGapTests
         Assert.Equal("[?9;1$y", response);
     }
 
+    [Theory]
+    [InlineData("#abc", 0xaa, 0xbb, 0xcc)]
+    [InlineData("#aabbcc", 0xaa, 0xbb, 0xcc)]
+    [InlineData("rgb:a/b/c", 0xaa, 0xbb, 0xcc)]
+    [InlineData("rgb:aaaa/bbbb/cccc", 0xaa, 0xbb, 0xcc)]
+    public void OscColorParserAcceptsStandardHexWidths(string spec, byte red, byte green, byte blue)
+    {
+        Assert.True(OscDecoder.TryParseColor(spec, out var color));
+        Assert.Equal(Color.FromRgb(red, green, blue), color);
+    }
+
+    [Fact]
+    public void Osc4QueryResponseIsProperlyTerminated()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 3);
+        string? response = null;
+        buffer.InputSequenceGenerated += (_, text) => response = text;
+
+        buffer.Process("]4;1;?");
+
+        Assert.NotNull(response);
+        Assert.EndsWith("", response);
+    }
+
     [Fact]
     public void HorizontalScrollShiftsTheViewportContent()
     {

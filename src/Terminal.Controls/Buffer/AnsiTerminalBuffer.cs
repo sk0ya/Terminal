@@ -1534,7 +1534,7 @@ internal sealed class AnsiTerminalBuffer
             if (change.Kind == OscPaletteChangeKind.Query)
             {
                 EmitInputSequence(
-                    $"]4;{change.Index};{OscDecoder.FormatColor(_ansiPalette[change.Index])}");
+                    $"]4;{change.Index};{OscDecoder.FormatColor(_ansiPalette[change.Index])}");
             }
             else
             {

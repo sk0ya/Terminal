@@ -254,12 +254,9 @@ internal static class OscDecoder
             return true;
         }
 
-        if (spec.StartsWith('#') && spec.Length >= 7 &&
-            byte.TryParse(spec.AsSpan(1, 2), NumberStyles.HexNumber, null, out byte hashRed) &&
-            byte.TryParse(spec.AsSpan(3, 2), NumberStyles.HexNumber, null, out byte hashGreen) &&
-            byte.TryParse(spec.AsSpan(5, 2), NumberStyles.HexNumber, null, out byte hashBlue))
+        if (spec.StartsWith('#') && TryParseHashColor(spec, out Color hashColor))
         {
-            color = Color.FromRgb(hashRed, hashGreen, hashBlue);
+            color = hashColor;
             return true;
         }
 
@@ -313,14 +310,37 @@ internal static class OscDecoder
 
     private static bool TryParseHexColorComponent(string hex, out byte value)
     {
-        int length = Math.Min(2, hex.Length);
-        if (length == 0)
+        if (hex.Length is < 1 or > 4 ||
+            !uint.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint raw))
         {
             value = 0;
             return false;
         }
 
-        return byte.TryParse(hex.AsSpan(0, length), NumberStyles.HexNumber, null, out value);
+        uint max = (1u << (hex.Length * 4)) - 1;
+        value = (byte)Math.Round(raw * 255d / max);
+        return true;
+    }
+
+    private static bool TryParseHashColor(string spec, out Color color)
+    {
+        color = default;
+        int digits = spec.Length - 1;
+        if (digits is not (3 or 6 or 9 or 12))
+        {
+            return false;
+        }
+
+        int componentDigits = digits / 3;
+        if (!TryParseHexColorComponent(spec.Substring(1, componentDigits), out byte red) ||
+            !TryParseHexColorComponent(spec.Substring(1 + componentDigits, componentDigits), out byte green) ||
+            !TryParseHexColorComponent(spec.Substring(1 + componentDigits * 2, componentDigits), out byte blue))
+        {
+            return false;
+        }
+
+        color = Color.FromRgb(red, green, blue);
+        return true;
     }
 
     private static string NormalizeBase64(string payload)
