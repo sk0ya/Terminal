@@ -1227,7 +1227,7 @@ internal sealed class AnsiTerminalBuffer
                 "r" => $"{_scrollTop + 1};{_scrollBottom + 1}r", // DECSTBM
                 "s" => $"{_leftMargin + 1};{_rightMargin + 1}s", // DECSLRM
                 "\"p" => "62;1\"p",                    // DECSCL: VT220, 7-bit controls
-                "\"q" => "0\"q",                       // DECSCA: all cells erasable
+                "\"q" => $"{GetCharacterProtectionParameter()}\"q", // DECSCA
                 "t" => $"{_rows}t",                       // DECSLPP
                 "$|" => $"{_columns}$|",                  // DECSCPP
                 "*|" => $"{_rows}*|",                     // DECSNLS
@@ -1742,10 +1742,10 @@ internal sealed class AnsiTerminalBuffer
                 MoveToNextTabStop(GetParameter(parameters, 0, 1));
                 break;
             case 'J':
-                ClearDisplay(GetParameter(parameters, 0, 0));
+                ClearDisplay(GetParameter(parameters, 0, 0), isPrivate);
                 break;
             case 'K':
-                ClearLine(GetParameter(parameters, 0, 0));
+                ClearLine(GetParameter(parameters, 0, 0), isPrivate);
                 break;
             case 'L':
                 InsertLines(GetParameter(parameters, 0, 1));
@@ -1846,6 +1846,10 @@ internal sealed class AnsiTerminalBuffer
                 if (intermediate == " ")
                 {
                     SetCursorStyle(GetParameter(parameters, 0, 0));
+                }
+                else if (intermediate == "\"")
+                {
+                    SetCharacterProtection(GetParameter(parameters, 0, 0));
                 }
                 else if (isSecondary && GetParameter(parameters, 0, 0) == 0)
                 {
@@ -2667,6 +2671,9 @@ internal sealed class AnsiTerminalBuffer
                 case 9:
                     _currentStyle = _currentStyle with { Strikethrough = true };
                     break;
+                case 21:
+                    _currentStyle = _currentStyle with { UnderlineStyle = UnderlineStyle.Double };
+                    break;
                 case 22:
                     _currentStyle = _currentStyle with { Bold = false, Dim = false };
                     break;
@@ -2970,31 +2977,31 @@ internal sealed class AnsiTerminalBuffer
         _screenStore.EraseCharacters(_cursorRow, _cursorColumn, count, _columns, _currentStyle);
     }
 
-    private void ClearDisplay(int mode)
+    private void ClearDisplay(int mode, bool selective = false)
     {
         switch (mode)
         {
             case 0:
-                ClearLine(0);
+                ClearLine(0, selective);
                 for (int row = _cursorRow + 1; row < _rows; row++)
                 {
-                    ClearEntireLine(row);
+                    ClearEntireLine(row, selective);
                 }
 
                 break;
             case 1:
                 for (int row = 0; row < _cursorRow; row++)
                 {
-                    ClearEntireLine(row);
+                    ClearEntireLine(row, selective);
                 }
 
-                ClearLine(1);
+                ClearLine(1, selective);
                 break;
             case 2:
                 CaptureSyntheticAlternateScreenCandidate();
                 for (int row = 0; row < _rows; row++)
                 {
-                    ClearEntireLine(row);
+                    ClearEntireLine(row, selective);
                 }
 
                 break;
@@ -3003,35 +3010,42 @@ internal sealed class AnsiTerminalBuffer
                 ClearScrollback();
                 for (int row = 0; row < _rows; row++)
                 {
-                    ClearEntireLine(row);
+                    ClearEntireLine(row, selective);
                 }
 
                 break;
         }
     }
 
-    private void ClearLine(int mode)
+    private void ClearLine(int mode, bool selective = false)
     {
         int rightLimit = _leftRightMarginEnabled ? _rightMargin + 1 : _columns;
         int leftLimit = _leftRightMarginEnabled ? _leftMargin : 0;
         switch (mode)
         {
             case 0:
-                _screenStore.FillRange(_cursorRow, _cursorColumn, rightLimit, _columns, _currentStyle);
+                _screenStore.FillRange(_cursorRow, _cursorColumn, rightLimit, _columns, _currentStyle, selective: selective);
                 break;
             case 1:
-                _screenStore.FillRange(_cursorRow, leftLimit, _cursorColumn + 1, _columns, _currentStyle);
+                _screenStore.FillRange(_cursorRow, leftLimit, _cursorColumn + 1, _columns, _currentStyle, selective: selective);
                 break;
             case 2:
-                _screenStore.FillRange(_cursorRow, leftLimit, rightLimit, _columns, _currentStyle);
+                _screenStore.FillRange(_cursorRow, leftLimit, rightLimit, _columns, _currentStyle, selective: selective);
                 break;
         }
     }
 
-    private void ClearEntireLine(int row)
+    private void ClearEntireLine(int row, bool selective = false)
     {
-        _screenStore.FillRange(row, 0, _columns, _columns, _currentStyle, clearWrapped: true);
+        _screenStore.FillRange(row, 0, _columns, _columns, _currentStyle, clearWrapped: true, selective: selective);
     }
+
+    private void SetCharacterProtection(int parameter)
+    {
+        _currentStyle = _currentStyle with { Protected = parameter == 1 };
+    }
+
+    private int GetCharacterProtectionParameter() => _currentStyle.Protected ? 1 : 0;
 
     private void PutText(string text, int width)
     {

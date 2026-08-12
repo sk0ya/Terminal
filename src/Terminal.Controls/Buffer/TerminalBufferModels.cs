@@ -49,8 +49,9 @@ internal readonly record struct TerminalStyle(
     bool Inverse,
     bool Invisible,
     bool Strikethrough,
-    bool Overline)
+    bool Overline,
+    bool Protected)
 {
     public static readonly TerminalStyle Default = new(
-        null, null, false, false, false, UnderlineStyle.None, null, false, false, false, false, false);
+        null, null, false, false, false, UnderlineStyle.None, null, false, false, false, false, false, false);
 }

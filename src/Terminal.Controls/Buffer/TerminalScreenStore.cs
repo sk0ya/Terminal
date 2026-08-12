@@ -284,12 +284,18 @@ internal sealed class TerminalScreenStore
         int endExclusive,
         int columns,
         TerminalStyle blankStyle,
-        bool clearWrapped = false)
+        bool clearWrapped = false,
+        bool selective = false)
     {
         int start = Math.Clamp(startColumn, 0, columns);
         int end = Math.Clamp(endExclusive, 0, columns);
         for (int column = start; column < end; column++)
         {
+            if (selective && Screen[row].Cells[column].Style.Protected)
+            {
+                continue;
+            }
+
             Screen[row].Cells[column] = TerminalCell.CreateBlank(blankStyle);
         }
 

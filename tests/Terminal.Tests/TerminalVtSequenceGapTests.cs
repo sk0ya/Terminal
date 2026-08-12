@@ -306,6 +306,40 @@ public sealed class TerminalVtSequenceGapTests
     }
 
     [Fact]
+    public void DecscaProtectsCellsFromSelectiveErase()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 3);
+
+        buffer.Process("[1\"qProtected[0\"q Normal[?2J");
+
+        Assert.Equal("Protected", buffer.GetScreenLineText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void Sgr21RendersAsDoubleUnderline()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 3);
+
+        buffer.Process("[21mA[24mB");
+
+        var segments = buffer.CreateRenderSnapshot(showCursor: false).Lines[0].Segments;
+        Assert.Equal(UnderlineStyle.Double, segments[0].UnderlineStyle);
+        Assert.Equal(UnderlineStyle.None, segments[1].UnderlineStyle);
+    }
+
+    [Fact]
+    public void DecrqssReportsCurrentCharacterProtection()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 3);
+        string? response = null;
+        buffer.InputSequenceGenerated += (_, text) => response = text;
+
+        buffer.Process("[1\"qP$q\"q\\");
+
+        Assert.Equal("P1$r1\"q\\", response);
+    }
+
+    [Fact]
     public void HorizontalScrollShiftsTheViewportContent()
     {
         var left = new AnsiTerminalBuffer(10, 2);
