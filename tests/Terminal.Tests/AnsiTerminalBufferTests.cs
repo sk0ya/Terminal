@@ -338,6 +338,18 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void DecidRespondsWithPrimaryDeviceAttributes()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? emitted = null;
+        buffer.InputSequenceGenerated += (_, text) => emitted = text;
+
+        buffer.Process("\u001bZ");
+
+        Assert.Equal("\u001b[?62;1;22c", emitted);
+    }
+
+    [Fact]
     public void Osc52ClipboardQueryRaisesSelectionTarget()
     {
         var buffer = new AnsiTerminalBuffer(32, 10);

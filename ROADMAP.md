@@ -21,7 +21,7 @@
 
 - **SGR高度装飾** — 枠線、囲み、イデオグラム、上付き・下付き文字など
 - **SGR互換属性の細分化** — `SGR 5/6` のslow/rapid blink区別、追加フォント属性、ANSI `SM/RM` のキーボード・印字モード
-- **ESC互換シーケンス** — `ESC Z` DECID、`ESC %` character-set selection など未実装の7bit legacy controls
+- **ESC互換シーケンス** — `ESC %` character-set selection など未実装の7bit legacy controls
 - **XTGETTCAPの実環境連携** — 現在はxterm-256color相当の固定capabilityを返すため、実際のterminfo/capability設定との同期が必要
 - **DCS拡張** — DECUDK以外のDEC/HP系DCS（例: DECDLD、XTGETXRES）
 

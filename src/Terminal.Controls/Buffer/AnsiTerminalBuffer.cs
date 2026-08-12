@@ -1151,6 +1151,10 @@ internal sealed class AnsiTerminalBuffer
             case 'c':
                 ResetTerminal();
                 break;
+            case 'Z':
+                // DECID is the 7-bit alias for the primary device attributes query.
+                DispatchDeviceAttributes(isPrivate: true, isSecondary: false);
+                break;
         }
     }
 
