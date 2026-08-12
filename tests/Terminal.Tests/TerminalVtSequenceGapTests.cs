@@ -285,6 +285,27 @@ public sealed class TerminalVtSequenceGapTests
     }
 
     [Fact]
+    public void HorizontalAbsolutePositioningMovesToTheRequestedColumn()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 4);
+
+        buffer.Process("A[6`B");
+
+        Assert.Equal("A    B", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal(6, buffer.CursorColumn);
+    }
+
+    [Fact]
+    public void TabClearModeTwoClearsAllTabStops()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 4);
+
+        buffer.Process("[3G[2g[I");
+
+        Assert.Equal(19, buffer.CursorColumn);
+    }
+
+    [Fact]
     public void HorizontalScrollShiftsTheViewportContent()
     {
         var left = new AnsiTerminalBuffer(10, 2);

@@ -1776,6 +1776,14 @@ internal sealed class AnsiTerminalBuffer
                         _cursorColumn + GetParameter(parameters, 0, 1));
                     break;
                 }
+            case '`':
+                {
+                    int colParam = GetParameter(parameters, 0, 1) - 1;
+                    int minCol = _leftRightMarginEnabled ? _leftMargin : 0;
+                    int maxCol = _leftRightMarginEnabled ? _rightMargin : _columns - 1;
+                    _cursorColumn = Math.Clamp(colParam, minCol, maxCol);
+                    break;
+                }
             case 'b':
                 RepeatLastPrintedCluster(GetParameter(parameters, 0, 1));
                 break;
@@ -2810,6 +2818,9 @@ internal sealed class AnsiTerminalBuffer
                     _tabStops[_cursorColumn] = false;
                 }
 
+                break;
+            case 2:
+                Array.Fill(_tabStops, false);
                 break;
             case 3:
                 Array.Fill(_tabStops, false);
