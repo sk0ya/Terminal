@@ -2128,6 +2128,7 @@ internal sealed class AnsiTerminalBuffer
 
                     break;
                 case 1000:
+                case 9:
                     if (enabled) _mouseTrackingMode = TerminalMouseTrackingMode.X10;
                     else if (_mouseTrackingMode == TerminalMouseTrackingMode.X10) _mouseTrackingMode = TerminalMouseTrackingMode.Off;
                     break;
@@ -2274,6 +2275,7 @@ internal sealed class AnsiTerminalBuffer
             47 or 1047 => _primaryScreenBackup is not null && !_syntheticAlternateScreenActive ? 1 : 2,
             66 => _applicationKeypad ? 1 : 2,
             1000 => _mouseTrackingMode == TerminalMouseTrackingMode.X10 ? 1 : 2,
+            9 => _mouseTrackingMode == TerminalMouseTrackingMode.X10 ? 1 : 2,
             1002 => _mouseTrackingMode == TerminalMouseTrackingMode.ButtonEvent ? 1 : 2,
             1003 => _mouseTrackingMode == TerminalMouseTrackingMode.AnyEvent ? 1 : 2,
             1004 => _focusReportingEnabled ? 1 : 2,

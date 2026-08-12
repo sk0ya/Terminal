@@ -340,6 +340,19 @@ public sealed class TerminalVtSequenceGapTests
     }
 
     [Fact]
+    public void Decset9EnablesAndReportsX10MouseMode()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 3);
+        string? response = null;
+        buffer.InputSequenceGenerated += (_, text) => response = text;
+
+        buffer.Process("[?9h[?9$p");
+
+        Assert.Equal(TerminalMouseTrackingMode.X10, buffer.MouseTrackingMode);
+        Assert.Equal("[?9;1$y", response);
+    }
+
+    [Fact]
     public void HorizontalScrollShiftsTheViewportContent()
     {
         var left = new AnsiTerminalBuffer(10, 2);
