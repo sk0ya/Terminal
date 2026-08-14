@@ -1,8 +1,9 @@
-using System.Linq;
+﻿using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 using Terminal.Buffer;
 using Terminal.Rendering;
@@ -32,6 +33,168 @@ public sealed class TerminalSurfaceControlTests
             Assert.True(surface.TrySelectNextMatch("beta", StringComparison.Ordinal, forward: true, out wrapped));
             Assert.False(wrapped);
             Assert.Equal("beta", surface.GetSelectedText());
+        });
+    }
+
+    [Fact]
+    public void SurfaceRendersInlineImagePixels()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            var image = new TerminalImage(
+                [255, 255, 255, 255],
+                TerminalImageDataKind.Bgra32,
+                "image/bgra32",
+                1,
+                1,
+                0,
+                4,
+                3,
+                null,
+                null,
+                true);
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
+                    AnchorSegmentIndex: -1,
+                    CellLength: 0,
+                    Segments: [],
+                    Images: [image])
+            ]));
+
+            var visual = new DrawingVisual();
+            using (DrawingContext context = visual.RenderOpen())
+            {
+                var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                var onRender = typeof(TerminalSurfaceControl).GetMethod("OnRender", flags, [typeof(DrawingContext)])!;
+                onRender.Invoke(surface, [context]);
+            }
+
+            var bitmap = new RenderTargetBitmap(640, 320, 96, 96, PixelFormats.Pbgra32);
+            bitmap.Render(visual);
+            byte[] pixels = new byte[640 * 320 * 4];
+            bitmap.CopyPixels(pixels, 640 * 4, 0);
+
+            Assert.Contains(
+                pixels.Chunk(4),
+                pixel => pixel[0] >= 240 && pixel[1] >= 240 && pixel[2] >= 240 && pixel[3] >= 240);
+        });
+    }
+
+    [Fact]
+    public void SurfaceReusesDecodedBitmapWhenReflowMovesAnImage()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            var image = new TerminalImage(
+                [0, 0, 255, 255],
+                TerminalImageDataKind.Bgra32,
+                "image/bgra32",
+                1,
+                1,
+                0,
+                4,
+                3,
+                null,
+                null,
+                true);
+
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+            var onRender = typeof(TerminalSurfaceControl).GetMethod("OnRender", flags, [typeof(DrawingContext)])!;
+            var cacheField = typeof(TerminalSurfaceControl).GetField("_imageCache", flags)!;
+
+            void RenderWith(TerminalImage placed)
+            {
+                surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+                [
+                    new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
+                        AnchorSegmentIndex: -1,
+                        CellLength: 0,
+                        Segments: [],
+                        Images: [placed])
+                ]));
+                var visual = new DrawingVisual();
+                using DrawingContext context = visual.RenderOpen();
+                onRender.Invoke(surface, [context]);
+            }
+
+            RenderWith(image);
+            // A reflow rebuilds the record with a new anchor column but keeps the same payload.
+            RenderWith(image with { Column = 5 });
+
+            int entries = ((System.Collections.ICollection)cacheField.GetValue(surface)!).Count;
+            Assert.Equal(1, entries);
+        });
+    }
+    [Fact]
+    public void SurfaceKeepsMultiRowImageUnderTheRowsBelowIt()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            // Three cells tall, anchored on row 0, with ordinary text on the rows it covers. Cell
+            // backgrounds are opaque, so painting them line by line used to erase the image body.
+            var image = new TerminalImage(
+                [0, 0, 255, 255],
+                TerminalImageDataKind.Bgra32,
+                "image/bgra32",
+                1,
+                1,
+                0,
+                4,
+                3,
+                null,
+                null,
+                true);
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+            [
+                new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
+                    AnchorSegmentIndex: -1,
+                    CellLength: 0,
+                    Segments: [],
+                    Images: [image]),
+                CreateLine("below one"),
+                CreateLine("below two")
+            ]));
+
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+            double cellHeight = ((Size)typeof(TerminalSurfaceControl)
+                .GetField("_cellSize", flags)!
+                .GetValue(surface)!).Height;
+            Assert.True(cellHeight > 0);
+
+            var visual = new DrawingVisual();
+            using (DrawingContext context = visual.RenderOpen())
+            {
+                var onRender = typeof(TerminalSurfaceControl).GetMethod("OnRender", flags, [typeof(DrawingContext)])!;
+                onRender.Invoke(surface, [context]);
+            }
+
+            var bitmap = new RenderTargetBitmap(640, 320, 96, 96, PixelFormats.Pbgra32);
+            bitmap.Render(visual);
+            byte[] pixels = new byte[640 * 320 * 4];
+            bitmap.CopyPixels(pixels, 640 * 4, 0);
+
+            int lowestImageRow = -1;
+            for (int y = 0; y < 320; y++)
+            {
+                for (int x = 0; x < 640; x++)
+                {
+                    int offset = ((y * 640) + x) * 4;
+                    if (pixels[offset + 2] >= 200 && pixels[offset + 1] < 80 && pixels[offset] < 80)
+                    {
+                        lowestImageRow = y;
+                        break;
+                    }
+                }
+            }
+
+            // The image reaches into the third text row, well past the first one.
+            Assert.True(
+                lowestImageRow > cellHeight * 2,
+                $"image was clipped to its anchor row: lowest image row {lowestImageRow}, cell height {cellHeight}");
         });
     }
 

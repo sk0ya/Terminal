@@ -1,3 +1,4 @@
+﻿using System.IO;
 using System.Globalization;
 using System.Text;
 using System.Windows;
@@ -6,6 +7,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.TextFormatting;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.Windows.Automation.Peers;
 
@@ -30,6 +32,17 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private static readonly Brush DefaultForegroundBrush = CreateFrozenBrush(DefaultForegroundColor);
 
     private readonly Dictionary<Color, SolidColorBrush> _brushCache = [];
+    private const long MaxImageCacheBytes = 64L * 1024 * 1024;
+    // Keyed by the pixel payload rather than by TerminalImage: a reflow rebuilds every image
+    // record with a new anchor column, and record equality includes that column, so keying by
+    // the record re-decoded each image on every resize. The payload array is shared by those
+    // copies and is what decoding actually depends on.
+    private readonly Dictionary<byte[], BitmapSource?> _imageCache = new(ReferenceEqualityComparer.Instance);
+    private readonly List<byte[]> _imageCacheOrder = [];
+    private long _imageCacheBytes;
+    // Line indices whose images may extend below their anchor row, kept so OnRender can repaint a
+    // tall image whose anchor has scrolled above the viewport without materializing every layout.
+    private readonly List<int> _imageLineIndices = [];
     // Virtualized line layouts: heavy LineLayout objects (grapheme maps, segment arrays) are built
     // lazily for the lines that are actually touched (the visible window plus any selection/search
     // probes) and evicted once they scroll out, so memory and per-update CPU scale with the viewport
@@ -108,6 +121,10 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             TextFormatter? formatter = _textFormatter;
             _textFormatter = null;
             var cleanup = new List<Action> { _lines.Clear };
+            _imageCache.Clear();
+            _imageCacheOrder.Clear();
+            _imageCacheBytes = 0;
+            _imageLineIndices.Clear();
             if (formatter is not null)
             {
                 cleanup.Add(formatter.Dispose);
@@ -289,6 +306,15 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         // on demand by the cache when OnRender / selection / search ask for a specific line.
         _ambiguousAsWide = snapshot.AmbiguousWidthIsWide;
         _maxCellLength = _lines.SetSnapshot(snapshot.Lines, snapshot.AmbiguousWidthIsWide);
+
+        _imageLineIndices.Clear();
+        for (int index = 0; index < snapshot.Lines.Length; index++)
+        {
+            if (snapshot.Lines[index].Images is { Length: > 0 })
+            {
+                _imageLineIndices.Add(index);
+            }
+        }
 
         CoerceSelection();
         CoerceKeyboardCursor();
@@ -759,23 +785,59 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
         TerminalTextRange? selection = NormalizeSelection(_selection);
         bool sawBlinkingContent = false;
+
+        // Painted in three passes rather than line by line, because an image spans several rows
+        // downward from the single row it is anchored to. Cell backgrounds are opaque, so every
+        // background in the viewport has to be laid down before any image is drawn - otherwise the
+        // rows below the anchor would paint over the image's body as the loop reached them.
         for (int lineIndex = firstVisibleLine; lineIndex <= lastVisibleLine; lineIndex++)
         {
             TerminalLineLayout line = _lines[lineIndex];
             double top = contentTop + (lineIndex * _cellSize.Height);
-            double scaleX = line.LineSize == TerminalLineSize.DoubleWidth ? 2.0 : 1.0;
-            double scaleY = line.LineSize is TerminalLineSize.DoubleHeightTop or TerminalLineSize.DoubleHeightBottom
-                ? 2.0
-                : 1.0;
-            bool scaled = scaleX != 1.0 || scaleY != 1.0;
-            if (scaled)
-            {
-                drawingContext.PushTransform(new ScaleTransform(scaleX, scaleY, contentLeft, top));
-            }
-
+            bool scaled = TryPushLineTransform(drawingContext, line, top, contentLeft);
             try
             {
                 DrawLineBackgrounds(drawingContext, line, top, contentLeft);
+            }
+            finally
+            {
+                if (scaled) drawingContext.Pop();
+            }
+        }
+
+        DrawImagesAnchoredAboveViewport(drawingContext, firstVisibleLine, contentTop, contentLeft);
+        for (int lineIndex = firstVisibleLine; lineIndex <= lastVisibleLine; lineIndex++)
+        {
+            TerminalLineLayout line = _lines[lineIndex];
+            if (line.Images.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            double top = contentTop + (lineIndex * _cellSize.Height);
+            bool scaled = TryPushLineTransform(drawingContext, line, top, contentLeft);
+            try
+            {
+                LineDrawable drawable = _lines.GetDrawable(lineIndex, BuildLineDrawable);
+                for (int index = 0; index < drawable.ImageCommandCount; index++)
+                {
+                    drawable.Commands[index].Render(drawingContext, contentLeft, top);
+                }
+            }
+            finally
+            {
+                if (scaled) drawingContext.Pop();
+            }
+        }
+
+        for (int lineIndex = firstVisibleLine; lineIndex <= lastVisibleLine; lineIndex++)
+        {
+            TerminalLineLayout line = _lines[lineIndex];
+            double top = contentTop + (lineIndex * _cellSize.Height);
+            bool scaled = TryPushLineTransform(drawingContext, line, top, contentLeft);
+
+            try
+            {
                 if (_blockSelectionMode && selection.HasValue)
                 {
                     DrawBlockSelection(drawingContext, selection.Value, lineIndex, top, contentLeft);
@@ -786,8 +848,9 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 }
 
                 LineDrawable drawable = _lines.GetDrawable(lineIndex, BuildLineDrawable);
-                foreach (IDrawCommand command in drawable.Commands)
+                for (int index = drawable.ImageCommandCount; index < drawable.Commands.Length; index++)
                 {
+                    IDrawCommand command = drawable.Commands[index];
                     if (command.Blink)
                     {
                         sawBlinkingContent = true;
@@ -815,6 +878,60 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         }
 
         UpdateBlinkTimer(sawBlinkingContent);
+    }
+
+    // Double-width/double-height lines paint through a scale transform anchored at the line's
+    // top-left. Returns whether a transform was pushed and therefore has to be popped.
+    private bool TryPushLineTransform(
+        DrawingContext drawingContext,
+        TerminalLineLayout line,
+        double top,
+        double contentLeft)
+    {
+        double scaleX = line.LineSize == TerminalLineSize.DoubleWidth ? 2.0 : 1.0;
+        double scaleY = line.LineSize is TerminalLineSize.DoubleHeightTop or TerminalLineSize.DoubleHeightBottom
+            ? 2.0
+            : 1.0;
+        if (scaleX == 1.0 && scaleY == 1.0)
+        {
+            return false;
+        }
+
+        drawingContext.PushTransform(new ScaleTransform(scaleX, scaleY, contentLeft, top));
+        return true;
+    }
+
+    // An image spans several rows downward from the single row it is anchored to, so once that row
+    // scrolls above the viewport the main loop no longer visits it and the image would vanish
+    // instead of being clipped at the top edge. Only the handful of rows that actually carry images
+    // are revisited here, so this stays independent of how far the viewport has scrolled.
+    private void DrawImagesAnchoredAboveViewport(
+        DrawingContext drawingContext,
+        int firstVisibleLine,
+        double contentTop,
+        double contentLeft)
+    {
+        foreach (int lineIndex in _imageLineIndices)
+        {
+            if (lineIndex >= firstVisibleLine)
+            {
+                break;
+            }
+
+            double top = contentTop + (lineIndex * _cellSize.Height);
+            // Drawn straight from the value snapshot: materializing the layout of an off-screen line
+            // would re-shape its text every frame for no visible benefit.
+            foreach (TerminalImage image in _lines.GetSnapshot(lineIndex).Images ?? [])
+            {
+                if (!TryCreateImageCommand(image, out ImageCommand command) ||
+                    top + command.Rect.Height <= 0)
+                {
+                    continue;
+                }
+
+                command.Render(drawingContext, contentLeft, top);
+            }
+        }
     }
 
     private void DrawHoverUnderline(DrawingContext drawingContext, int startColumn, int endColumn, double top, double contentLeft)
@@ -1231,7 +1348,25 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 }
             }
 
-            return new LineDrawable(commands.ToArray());
+            // Images are pinned to a cell and never move the cursor, so the text of the rows they
+            // cover keeps being painted; they go at the head of the command list to paint behind it.
+            var images = new List<IDrawCommand>();
+            foreach (TerminalImage image in line.Images)
+            {
+                if (TryCreateImageCommand(image, out ImageCommand command))
+                {
+                    images.Add(command);
+                }
+            }
+
+            if (images.Count == 0)
+            {
+                return new LineDrawable(commands.ToArray(), imageCommandCount: 0);
+            }
+
+            int imageCommandCount = images.Count;
+            images.AddRange(commands);
+            return new LineDrawable(images.ToArray(), imageCommandCount);
         }
         catch
         {
@@ -1242,6 +1377,120 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
     private bool IsPrimaryGlyph(GlyphTypeface? glyphTypeface)
         => glyphTypeface is null || ReferenceEquals(glyphTypeface, _primaryGlyphTypeface);
+
+    // Positions one image relative to its anchor line's top-left. Cells win over pixels; when only
+    // one axis is given and the aspect ratio is preserved, the other is derived from the bitmap.
+    private bool TryCreateImageCommand(TerminalImage image, out ImageCommand command)
+    {
+        command = null!;
+        BitmapSource? bitmap = GetBitmap(image);
+        if (bitmap is null)
+        {
+            return false;
+        }
+
+        double width = image.WidthCells is int widthCells
+            ? widthCells * _cellSize.Width
+            : image.WidthPixels is int widthPixels
+                ? widthPixels / _pixelsPerDip
+                : bitmap.Width;
+        double height = image.HeightCells is int heightCells
+            ? heightCells * _cellSize.Height
+            : image.HeightPixels is int heightPixels
+                ? heightPixels / _pixelsPerDip
+                : bitmap.Height;
+        bool hasWidth = image.WidthCells.HasValue || image.WidthPixels.HasValue;
+        bool hasHeight = image.HeightCells.HasValue || image.HeightPixels.HasValue;
+        if (image.PreserveAspectRatio && hasWidth != hasHeight)
+        {
+            double aspect = bitmap.Width / Math.Max(1.0, bitmap.Height);
+            if (hasWidth) height = width / aspect;
+            else width = height * aspect;
+        }
+
+        command = new ImageCommand(
+            bitmap,
+            new Rect(image.Column * _cellSize.Width, 0, Math.Max(1, width), Math.Max(1, height)));
+        return true;
+    }
+
+    private BitmapSource? GetBitmap(TerminalImage image)
+    {
+        if (_imageCache.TryGetValue(image.Data, out BitmapSource? cached))
+        {
+            TouchImageCacheEntry(image.Data);
+            return cached;
+        }
+
+        BitmapSource? bitmap = null;
+        try
+        {
+            if (image.DataKind == TerminalImageDataKind.Bgra32)
+            {
+                if (image.PixelWidth > 0 && image.PixelHeight > 0 &&
+                    image.Data.Length == image.PixelWidth * image.PixelHeight * 4)
+                {
+                    bitmap = BitmapSource.Create(
+                        image.PixelWidth, image.PixelHeight, 96, 96, PixelFormats.Bgra32, null, image.Data,
+                        image.PixelWidth * 4);
+                    bitmap.Freeze();
+                }
+            }
+            else
+            {
+                using var stream = new MemoryStream(image.Data, writable: false);
+                var decoded = new BitmapImage();
+                decoded.BeginInit();
+                decoded.CacheOption = BitmapCacheOption.OnLoad;
+                decoded.StreamSource = stream;
+                decoded.EndInit();
+                decoded.Freeze();
+                bitmap = decoded;
+            }
+        }
+        catch (Exception) when (image.Data.Length <= TerminalImageData.MaxDecodedBytes)
+        {
+            // A malformed image must not take down the terminal renderer.
+        }
+
+        _imageCache[image.Data] = bitmap;
+        _imageCacheOrder.Add(image.Data);
+        _imageCacheBytes += EstimateBitmapBytes(bitmap);
+        TrimImageCache();
+        return bitmap;
+    }
+
+    // Decoded bitmaps are cached so scrolling does not re-decode, but a line scrolling out of the
+    // layout cache does not evict its images, and a=p placements each get their own record. The
+    // cache is therefore bounded by decoded size and evicted least-recently-used; a bitmap still
+    // referenced by a live drawable stays alive through that reference, so eviction is safe.
+    private void TouchImageCacheEntry(byte[] payload)
+    {
+        int index = _imageCacheOrder.LastIndexOf(payload);
+        if (index < 0 || index == _imageCacheOrder.Count - 1)
+        {
+            return;
+        }
+
+        _imageCacheOrder.RemoveAt(index);
+        _imageCacheOrder.Add(payload);
+    }
+
+    private void TrimImageCache()
+    {
+        while (_imageCacheBytes > MaxImageCacheBytes && _imageCacheOrder.Count > 1)
+        {
+            byte[] oldest = _imageCacheOrder[0];
+            _imageCacheOrder.RemoveAt(0);
+            if (_imageCache.Remove(oldest, out BitmapSource? evicted))
+            {
+                _imageCacheBytes -= EstimateBitmapBytes(evicted);
+            }
+        }
+    }
+
+    private static long EstimateBitmapBytes(BitmapSource? bitmap) =>
+        bitmap is null ? 0 : (long)bitmap.PixelWidth * bitmap.PixelHeight * 4;
 
     // Builds a position-relative paint command for one same-font run. With ligatures enabled,
     // primary-font runs are shaped through TextFormatter (honoring OpenType liga/calt); wide and
@@ -1585,12 +1834,21 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     {
         private IDrawCommand[] _commands;
 
-        public LineDrawable(IDrawCommand[] commands)
+        public LineDrawable(IDrawCommand[] commands, int imageCommandCount)
         {
             _commands = commands;
+            ImageCommandCount = imageCommandCount;
         }
 
+        /// <summary>Images sit at the head of this list so they paint behind the line's text.</summary>
         public IDrawCommand[] Commands => _commands;
+
+        /// <summary>
+        /// How many leading entries of <see cref="Commands"/> are images. OnRender paints every
+        /// visible line's backgrounds, then all images, then all text, so the two halves are
+        /// rendered in separate passes.
+        /// </summary>
+        public int ImageCommandCount { get; }
 
         public void Dispose()
         {
@@ -1627,6 +1885,16 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             => line.Draw(drawingContext, new Point(relativeX + offsetX, offsetY), InvertAxes.None);
 
         public void Dispose() => line.Dispose();
+    }
+
+    private sealed class ImageCommand(BitmapSource image, Rect rect) : IDrawCommand
+    {
+        public bool Blink => false;
+
+        public Rect Rect => rect;
+
+        public void Render(DrawingContext drawingContext, double offsetX, double offsetY)
+            => drawingContext.DrawImage(image, new Rect(rect.X + offsetX, rect.Y + offsetY, rect.Width, rect.Height));
     }
 
     // Feeds a single styled run to TextFormatter.FormatLine, followed by an end-of-paragraph marker.

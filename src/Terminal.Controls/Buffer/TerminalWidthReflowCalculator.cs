@@ -33,10 +33,13 @@ internal static class TerminalWidthReflowCalculator
         {
             int logicalStart = sourceRow;
             var logicalCells = new List<TerminalCell>();
+            var images = new List<(int Offset, TerminalImage Image)>();
             do
             {
                 TerminalLine line = source[sourceRow];
                 int length = line.IsWrapped ? line.Cells.Length : FindLastOccupiedColumn(line) + 1;
+                // Offsets here count graphemes, since continuation cells are dropped and rebuilt.
+                TerminalReflowImages.CollectByGrapheme(line, logicalCells.Count, length, images);
                 for (int column = 0; column < length; column++)
                 {
                     TerminalCell cell = line.Cells[column];
@@ -64,7 +67,9 @@ internal static class TerminalWidthReflowCalculator
             TerminalLineSize lineSize = source[logicalStart].LineSize;
             if (logicalCells.Count == 0)
             {
-                result.Add(new TerminalLine(targetColumns, TerminalStyle.Default) { LineSize = lineSize });
+                var line = new TerminalLine(targetColumns, TerminalStyle.Default) { LineSize = lineSize };
+                TerminalReflowImages.PlaceRemaining(line, images, 0, targetColumns);
+                result.Add(line);
             }
             else
             {
@@ -82,6 +87,11 @@ internal static class TerminalWidthReflowCalculator
                             break;
                         }
 
+                        if (images.Count > 0)
+                        {
+                            TerminalReflowImages.PlaceAt(line, images, offset, column, targetColumns);
+                        }
+
                         line.Cells[column++] = cell with { Width = width };
                         offset++;
                         if (width == 2)
@@ -96,6 +106,12 @@ internal static class TerminalWidthReflowCalculator
                     }
 
                     line.IsWrapped = offset < logicalCells.Count;
+                    if (!line.IsWrapped)
+                    {
+                        // Images anchored past the last occupied cell stay on the closing row.
+                        TerminalReflowImages.PlaceRemaining(line, images, column, targetColumns);
+                    }
+
                     result.Add(line);
                 }
             }

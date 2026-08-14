@@ -11,7 +11,8 @@ internal readonly record struct TerminalLineLayout(
     ImmutableArray<TerminalLineSegmentLayout> Segments,
     ImmutableArray<TerminalHyperlinkSegment> HyperlinkSegments,
     TerminalTextCellMap TextCellMap,
-    TerminalLineSize LineSize = TerminalLineSize.SingleWidth);
+    TerminalLineSize LineSize = TerminalLineSize.SingleWidth,
+    ImmutableArray<TerminalImage> Images = default);
 
 /// <summary>A render segment and its cell offset within its line.</summary>
 internal readonly record struct TerminalLineSegmentLayout(
@@ -49,6 +50,9 @@ internal static class TerminalLineLayoutBuilder
             segments.MoveToImmutable(),
             hyperlinkSegments.MoveToImmutable(),
             textCellMap,
-            line.LineSize);
+            line.LineSize,
+            line.Images is { Length: > 0 } images
+                ? ImmutableArray.Create(images)
+                : ImmutableArray<TerminalImage>.Empty);
     }
 }

@@ -1,4 +1,4 @@
-using Terminal.Buffer;
+﻿using Terminal.Buffer;
 
 namespace Terminal.Tests;
 
@@ -73,7 +73,6 @@ public sealed class VtParserTests
     [Theory]
     [InlineData("\u0098")]
     [InlineData("\u009e")]
-    [InlineData("\u009f")]
     public void UnsupportedEightBitControlStringsAreConsumedUntilSt(string introducer)
     {
         var events = new List<string>();
@@ -90,7 +89,7 @@ public sealed class VtParserTests
         var events = new List<string>();
         VtParser parser = CreateParser(events);
 
-        Process(parser, "\u009fhidden\u001b\\X");
+        Process(parser, "\u0098hidden\u001b\\X");
 
         Assert.Equal(["control:88"], events);
     }
@@ -98,7 +97,6 @@ public sealed class VtParserTests
     [Theory]
     [InlineData('^')]
     [InlineData('X')]
-    [InlineData('_')]
     public void SevenBitUnsupportedControlStringsAreConsumedUntilSt(char introducer)
     {
         var events = new List<string>();
@@ -162,18 +160,74 @@ public sealed class VtParserTests
     }
 
     [Fact]
-    public void OversizedDcsPayloadIsDiscardedAndParserReturnsToNormal()
+    public void OversizedNonImageDcsPayloadIsDiscardedAndParserReturnsToNormal()
     {
         var events = new List<string>();
         VtParser parser = CreateParser(events);
 
-        Process(parser, $"\u001bPq{new string('a', VtParser.MaxControlStringLength - 1)}");
+        Process(parser, $"\u001bP${new string('a', VtParser.MaxControlStringLength - 1)}");
         Process(parser, "Y");
         parser.Process('X');
 
         Assert.Equal(["control:88"], events);
     }
 
+    [Fact]
+    public void SixelPayloadIsAllowedPastTheOrdinaryControlStringLimit()
+    {
+        var events = new List<string>();
+        VtParser parser = CreateParser(events);
+        // Sixel rasters routinely run past the 64 KB an ordinary control string is capped at.
+        string payload = new('?', VtParser.MaxControlStringLength + 1024);
+
+        Process(parser, $"\u001bPq{payload}\u001b\\");
+
+        Assert.Equal([$"dcs:q{payload}"], events);
+    }
+
+    [Theory]
+    // Only APC (0x9f / ESC _) carries kitty graphics. SOS and PM stay opaque, and the C1 and
+    // ESC forms of each must agree.
+    [InlineData("\u0098")]
+    [InlineData("\u009e")]
+    [InlineData("\u001bX")]
+    [InlineData("\u001b^")]
+    public void SosAndPmContentIsNotDispatchedAsApc(string introducer)
+    {
+        var events = new List<string>();
+        VtParser parser = CreateParser(events);
+
+        Process(parser, $"{introducer}Ga=T,f=100;payload\u001b\\");
+        parser.Process('X');
+
+        Assert.Equal(["control:88"], events);
+    }
+
+    [Theory]
+    [InlineData("\u009f")]
+    [InlineData("\u001b_")]
+    public void ApcContentIsDispatched(string introducer)
+    {
+        var events = new List<string>();
+        VtParser parser = CreateParser(events);
+
+        Process(parser, $"{introducer}Ga=T,f=100;payload\u001b\\");
+        parser.Process('X');
+
+        Assert.Equal(["apc:Ga=T,f=100;payload", "control:88"], events);
+    }
+    [Fact]
+    public void ImageOscPayloadIsAllowedPastTheOrdinaryControlStringLimit()
+    {
+        var events = new List<string>();
+        VtParser parser = CreateParser(events);
+        // OSC 1337;File= carries base64 image data and outgrows the ordinary 64 KB budget.
+        string payload = new('a', VtParser.MaxControlStringLength + 1024);
+
+        Process(parser, $"\u001b]1337;File=inline=1:{payload}\u0007");
+
+        Assert.Equal([$"osc:1337;File=inline=1:{payload}"], events);
+    }
     private static VtParser CreateParser(List<string> events)
     {
         return new VtParser(
@@ -183,7 +237,8 @@ public sealed class VtParserTests
             osc: payload => events.Add($"osc:{payload}"),
             dcs: payload => events.Add($"dcs:{payload}"),
             charset: (target, designator) => events.Add($"charset:{target}:{designator}"),
-            decLineSize: command => events.Add($"line-size:{command}"));
+            decLineSize: command => events.Add($"line-size:{command}"),
+            apc: payload => events.Add($"apc:{payload}"));
     }
 
     private static void Process(VtParser parser, string input)

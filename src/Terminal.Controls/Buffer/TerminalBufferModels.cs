@@ -22,6 +22,7 @@ internal sealed class TerminalLine
     }
 
     public TerminalCell[] Cells { get; }
+    public List<TerminalImage> Images { get; } = [];
     public bool IsWrapped { get; set; }
     public TerminalLineSize LineSize { get; set; }
 }

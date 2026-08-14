@@ -459,6 +459,7 @@ public sealed class TerminalVtSequenceGapTests
 
         Assert.Equal(0, buffer.UnknownDcsSequenceCount);
         Assert.Equal("X", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Single(buffer.CreateRenderSnapshot(showCursor: false).Lines[0].Images!);
     }
 
     [Theory]

@@ -78,6 +78,40 @@ public sealed class TerminalReflowCalculatorTests
         Assert.True(result[1].Cells[1].IsContinuation);
     }
 
+    [Fact]
+    public void ReflowKeepsImagesFromContinuationRowsAndRemapsTheirColumns()
+    {
+        // "abcd" + "efgh" as one logical line, with an image anchored on the second physical row.
+        TerminalLine first = CreateLine(4, "abcd");
+        first.IsWrapped = true;
+        first.Images.Add(Image(column: 1));
+        TerminalLine second = CreateLine(4, "efgh");
+        second.Images.Add(Image(column: 2));
+
+        List<TerminalLine> result = Reflow([first, second], 3, 0, 0, out _, out _);
+
+        // Logical offsets 1 and 6 land on target rows 0 and 2 at columns 1 and 0.
+        Assert.Equal(3, result.Count);
+        Assert.Equal([1], result[0].Images.Select(image => image.Column));
+        Assert.Empty(result[1].Images);
+        Assert.Equal([0], result[2].Images.Select(image => image.Column));
+    }
+
+    [Fact]
+    public void ReflowClampsImageColumnsToTheNarrowerWidth()
+    {
+        TerminalLine source = CreateLine(8, "abcdefgh");
+        source.Images.Add(Image(column: 7));
+
+        List<TerminalLine> result = Reflow([source], 3, 0, 0, out _, out _);
+
+        Assert.Equal([1], result[2].Images.Select(image => image.Column));
+    }
+
+    private static TerminalImage Image(int column) =>
+        new([0, 0, 0, 255], TerminalImageDataKind.Bgra32, "image/bgra32", 1, 1, column,
+            null, null, null, null, PreserveAspectRatio: true);
+
     private static List<TerminalLine> Reflow(
         List<TerminalLine> source,
         int columns,

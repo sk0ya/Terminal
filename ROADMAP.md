@@ -4,9 +4,9 @@
 
 ### 高優先度
 
-- **Sixel グラフィクスの描画** — `DCS ... q` はシーケンスを消費して無視しているが、画像は描画しない
-- **iTerm2 インライン画像** — `OSC 1337;File=...` およびMultipartFileを消費して無視している
-- **Kitty Graphics Protocol** — `APC ESC _ G ... ESC \\` を認識・描画しない
+- **iTerm2 インライン画像** — 対応済み・実機で描画確認。PNG/JPEG の `OSC 1337;File=...` をセル位置へ描画する
+- **Sixel グラフィクスの描画** — デコーダ・描画は実装済みだが **ConPTY がシーケンスを破棄するため実機では表示されない**（下記）
+- **Kitty Graphics Protocol** — 同上。実装済みだが ConPTY に破棄される
 
 ### 中優先度
 
@@ -27,5 +27,33 @@
 
 ## 対応方針・意図的な非対応
 
-- **Sixel グラフィクス** — ConPTY の入出力経路では画像データとテキスト出力の順序・同期を安定して保証できないため実装しない。`DCS ... q` は画面へ文字として漏らさず消費して無視し、DA1でもSixel対応を広告しない
-- **インライン画像（OSC 1337 / iTerm2 プロトコル）** — Sixelと同じ理由で実装しない。シーケンスは画面へ漏らさず消費して無視する
+### ConPTY が通すプロトコル（実測: Windows 11 23H2 / build 22631）
+
+pty へ各シーケンスを流し、ConPTY が再出力するストリームを直接観測した結果:
+
+| プロトコル | ConPTY 通過 |
+| --- | --- |
+| `OSC 1337;File=`（iTerm2） | **通る**（64KB ペイロードでも欠落なし） |
+| `DCS ... q`（Sixel） | **破棄される** |
+| `APC ESC _ G ...`（Kitty） | **破棄される** |
+
+実機で画像を出す最小手順（PowerShell、実測で動作確認済み）。**1行で書く** — 複数行の関数定義は貼り付け時に PowerShell の継続ブロックへ吸い込まれるため:
+
+```powershell
+function Show-Image { param([Parameter(Mandatory)][string]$Path,[int]$Width=40,[int]$Height=20); $e=[char]27; $d=[Convert]::ToBase64String([IO.File]::ReadAllBytes((Resolve-Path $Path))); [Console]::Out.Write($e+']1337;File=inline=1;width='+$Width+';height='+$Height+':'+$d+[char]7); [Console]::Out.Write("`n"*$Height) }
+```
+
+末尾の `"`n"*$Height` は必須。画像はカーソルを動かさないので、画像が占める行はスクリプト側で送る。この改行は ConPTY も認識するため、両者のカーソルがそろって進む。
+
+`wezterm imgcat` は `CSI 14 t`（ピクセル寸法）の応答を待つため現状ハングする。中優先度の XTWINOPS 表示系拡張を実装すれば使えるようになる見込み。
+
+Sixel と Kitty はこちらのパーサに到達しないため、実装があっても実機では表示されない。`CreatePseudoConsole` に `PSEUDOCONSOLE_PASSTHROUGH_MODE`(8) を渡しても当該ビルドでは挙動が変わらなかった。実機で画像を出すには `chafa -f iterm` や `wezterm imgcat` など **iTerm2 形式で出力するツールを使う**。Sixel/Kitty を通すには、Sixel を実装した新しい conhost/conpty（Windows Terminal 同梱の OpenConsole 等）へ差し替える必要がある — 未検証。
+
+### 描画・カーソル
+
+- 画像は端末行のセルへアンカーして保持し、既存のスクロールバックと WPF surface の描画サイクルに乗せる。テキストの背面へ描画する。
+- **画像はカーソルを一切動かさない。** ConPTY は通常モード（`CreatePseudoConsole` の flags=0）で動作しており、画像シーケンスは ConPTY 自身の画面モデルには反映されないため、ConPTY のカーソルは画像の高さぶん進まない。こちらだけカーソルを進めると両者のモデルがずれ、絶対位置指定（`ESC[…H`）で再描画するプログラムは ConPTY のカーソルを基準に行を計算するため、テキストが画像の上に落ちる。これは2026-06-20に画像対応を一度削除した原因そのものなので、オーバーレイに徹して同期を保つ。
+  - 帰結として `imgcat` のようにテキストが流れる用途では、後続のプロンプトが画像の行へ重なって描かれる。ConPTY をパススルーモードで動かせるようになるまでは解消できない。
+  - 同じ理由で、各プロトコルのカーソル移動抑制指定（iTerm2 の `doNotMoveCursor`、Kitty の `C=1`）は常時有効と同じ扱いになる。
+- 消去との関係：`ED 0/1/2/3` は消した行の画像も削除する。`EL` は削除しない（画像はプロンプト行にアンカーされるため、プロンプト再描画のたびに消えてしまう）。
+- Kitty の高度なアニメーション、Unicode placeholder による配置、`a=d` の一部サブモード、iTerm2 のファイル参照形式は未対応。`inline=1` のない `OSC 1337;File=` はファイル転送なので描画しない。壊れた画像データは画面を壊さず無視する。

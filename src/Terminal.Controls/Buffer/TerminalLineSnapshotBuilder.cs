@@ -36,7 +36,8 @@ internal static class TerminalLineSnapshotBuilder
                 anchorColumn == 0 ? 0 : -1,
                 0,
                 [],
-                line.LineSize);
+                line.LineSize,
+                line.Images.ToArray());
         }
 
         var text = new StringBuilder();
@@ -87,7 +88,8 @@ internal static class TerminalLineSnapshotBuilder
             anchorSegmentIndex,
             visibleLength,
             segments.ToArray(),
-            line.LineSize);
+            line.LineSize,
+            line.Images.ToArray());
     }
 
     private static int FindVisibleLength(TerminalLine line, int cursorColumn)

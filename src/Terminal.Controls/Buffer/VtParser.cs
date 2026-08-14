@@ -13,11 +13,18 @@ internal sealed class VtParser(
     Action<string> osc,
     Action<string> dcs,
     Action<int, char> charset,
-    Action<char> decLineSize)
+    Action<char> decLineSize,
+    Action<string>? apc = null)
 {
+    private readonly Action<string> _apc = apc ?? new Action<string>(_ => { });
     internal const int MaxControlStringLength = 64 * 1024;
+    // Inline image payloads (sixel DCS and kitty graphics APC) are routinely larger than any other
+    // control string. Only those two states get the raised budget, so an unterminated OSC - a
+    // truncated hyperlink, or a binary file sent to the tty - still aborts after 64 KB.
+    internal const int MaxImageControlStringLength = 16 * 1024 * 1024;
 
     private readonly StringBuilder _sequence = new();
+    private int _controlStringLimit = MaxControlStringLength;
     private State _state;
     private int _charsetTarget;
 
@@ -78,6 +85,12 @@ internal sealed class VtParser(
             case State.ControlStringEscape:
                 ProcessControlStringEscape(ch);
                 break;
+            case State.Apc:
+                ProcessApc(ch, _apc);
+                break;
+            case State.ApcEscape:
+                ProcessApcEscape(ch, _apc);
+                break;
         }
     }
 
@@ -97,10 +110,14 @@ internal sealed class VtParser(
             case '\u0090':
                 Begin(State.DcsEntry);
                 return;
+            // SOS (0x98) and PM (0x9e) stay opaque; only APC (0x9f) carries kitty graphics. This
+            // must agree with the ESC-form dispatch below.
             case '\u0098':
             case '\u009e':
-            case '\u009f':
                 Begin(State.ControlString);
+                return;
+            case '\u009f':
+                Begin(State.Apc);
                 return;
             case '\u009c':
                 return;
@@ -141,7 +158,7 @@ internal sealed class VtParser(
             case '^':
             case 'X':
             case '_':
-                Begin(State.ControlString);
+                Begin(ch == '_' ? State.Apc : State.ControlString);
                 return;
             default:
                 escape(ch);
@@ -190,10 +207,32 @@ internal sealed class VtParser(
         {
             _state = State.OscEscape;
         }
-        else
+        else if (TryAppendControlString(ch) && ch == ';')
         {
-            TryAppendControlString(ch);
+            RaiseLimitForImageOsc();
         }
+    }
+
+    // OSC 1337;File= carries a base64 image, which legitimately runs past the ordinary control
+    // string budget. The command number is everything before the first ';', so the decision can be
+    // made as soon as that separator arrives - every other OSC keeps the 64 KB cap.
+    private void RaiseLimitForImageOsc()
+    {
+        const string imageOscPrefix = "1337;";
+        if (_controlStringLimit != MaxControlStringLength || _sequence.Length != imageOscPrefix.Length)
+        {
+            return;
+        }
+
+        for (int index = 0; index < imageOscPrefix.Length; index++)
+        {
+            if (_sequence[index] != imageOscPrefix[index])
+            {
+                return;
+            }
+        }
+
+        _controlStringLimit = MaxImageControlStringLength;
     }
 
     private void ProcessOscEscape(char ch)
@@ -251,7 +290,7 @@ internal sealed class VtParser(
                 return;
             }
 
-            _state = State.DcsPassthrough;
+            EnterDcsPassthrough(ch);
         }
     }
 
@@ -287,7 +326,7 @@ internal sealed class VtParser(
                 return;
             }
 
-            _state = State.DcsPassthrough;
+            EnterDcsPassthrough(ch);
         }
     }
 
@@ -314,7 +353,7 @@ internal sealed class VtParser(
                 return;
             }
 
-            _state = State.DcsPassthrough;
+            EnterDcsPassthrough(ch);
         }
     }
 
@@ -373,10 +412,41 @@ internal sealed class VtParser(
             return;
         }
 
-        // APC, PM, and SOS are unsupported, so their content must remain opaque even
-        // when an ESC is not followed by the ST terminator.
+        // PM and SOS are unsupported, so their content must remain opaque even when an ESC is
+        // not followed by the ST terminator. APC has a separate image-aware state machine below.
         _state = State.ControlString;
         ProcessControlString(ch);
+    }
+
+    private void ProcessApc(char ch, Action<string> apc)
+    {
+        if (TryCancel(ch)) return;
+        if (ch == '\u009c')
+        {
+            apc(_sequence.ToString());
+            _state = State.Normal;
+        }
+        else if (ch == '\u001b')
+        {
+            _state = State.ApcEscape;
+        }
+        else
+        {
+            TryAppendControlString(ch);
+        }
+    }
+
+    private void ProcessApcEscape(char ch, Action<string> apc)
+    {
+        if (TryCancel(ch)) return;
+        if (ch == '\\')
+        {
+            apc(_sequence.ToString());
+            _state = State.Normal;
+            return;
+        }
+
+        if (TryAppendControlString('\u001b', ch)) _state = State.Apc;
     }
 
     private bool TryCancel(char ch)
@@ -393,7 +463,7 @@ internal sealed class VtParser(
 
     private bool TryAppendControlString(char ch)
     {
-        if (_sequence.Length >= MaxControlStringLength)
+        if (_sequence.Length >= _controlStringLimit)
         {
             AbortControlString();
             return false;
@@ -405,7 +475,7 @@ internal sealed class VtParser(
 
     private bool TryAppendControlString(char first, char second)
     {
-        if (_sequence.Length > MaxControlStringLength - 2)
+        if (_sequence.Length > _controlStringLimit - 2)
         {
             AbortControlString();
             return false;
@@ -448,6 +518,15 @@ internal sealed class VtParser(
     {
         _sequence.Clear();
         _state = state;
+        _controlStringLimit = state == State.Apc ? MaxImageControlStringLength : MaxControlStringLength;
+    }
+
+    // The final character of the DCS introducer is already in the sequence buffer; 'q' is sixel,
+    // which is the only DCS whose payload needs the raised budget.
+    private void EnterDcsPassthrough(char final)
+    {
+        _state = State.DcsPassthrough;
+        _controlStringLimit = final == 'q' ? MaxImageControlStringLength : MaxControlStringLength;
     }
 
     private void BeginCharset(int target)
@@ -471,6 +550,8 @@ internal sealed class VtParser(
         DcsPassthrough,
         DcsPassthroughEscape,
         ControlString,
-        ControlStringEscape
+        ControlStringEscape,
+        Apc,
+        ApcEscape
     }
 }

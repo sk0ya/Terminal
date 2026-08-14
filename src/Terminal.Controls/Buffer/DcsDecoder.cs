@@ -36,7 +36,7 @@ internal static class DcsDecoder
         int introducerIndex = content.IndexOf('q');
         if (introducerIndex >= 0 && IsSixelIntroducer(content, introducerIndex))
         {
-            return new DcsCommand(DcsCommandKind.Sixel);
+            return new DcsCommand(DcsCommandKind.Sixel, Payload: content[(introducerIndex + 1)..]);
         }
 
         return default;

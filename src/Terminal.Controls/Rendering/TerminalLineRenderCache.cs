@@ -35,6 +35,12 @@ internal sealed class TerminalLineRenderCache<TDrawable> : IDisposable
 
     public TerminalLineLayout this[int index] => GetEntry(index).Layout;
 
+    /// <summary>
+    /// Returns the value snapshot for a line without materializing its layout, for callers that
+    /// only need the lightweight per-line data.
+    /// </summary>
+    public AnsiTerminalBuffer.TerminalRenderLineSnapshot GetSnapshot(int index) => _snapshot[index];
+
     public TDrawable GetDrawable(int index, Func<TerminalLineLayout, TDrawable> builder)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

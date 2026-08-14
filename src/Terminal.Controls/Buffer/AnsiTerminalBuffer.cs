@@ -1,4 +1,5 @@
 using System.IO;
+using System.IO.Compression;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -85,6 +86,9 @@ internal sealed class AnsiTerminalBuffer
     private const int MinColumns = 20;
     private const int MinRows = 10;
     private const int DefaultScrollbackLimit = 10000;
+    // Budget for images retained for later kitty a=p placements. Deletion (a=d) is optional for
+    // senders, so the store is bounded here rather than trusting programs to clean up after themselves.
+    private const long MaxStoredKittyImageBytes = 64L * 1024 * 1024;
 
     private static readonly Dictionary<Color, SolidColorBrush> BrushCache = [];
     private Color _defaultForeground = TerminalColorTheme.Default.Foreground;
@@ -186,6 +190,12 @@ internal sealed class AnsiTerminalBuffer
     private int _kittyKeyboardFlags;
     private readonly Stack<int> _kittyKeyboardStack = new();
     private readonly Dictionary<string, string> _termcapOverrides = new(StringComparer.Ordinal);
+    // Images kept for later a=p placements, capped by total decoded bytes so a program that
+    // streams images cannot grow the buffer without bound. Oldest transmission is evicted first.
+    private readonly Dictionary<int, TerminalImage> _kittyImages = [];
+    private readonly List<int> _kittyImageOrder = [];
+    private long _kittyImageBytes;
+    private KittyTransfer? _kittyTransfer;
     private int _unknownCsiSequenceCount;
     private int _unknownDcsSequenceCount;
 
@@ -232,7 +242,8 @@ internal sealed class AnsiTerminalBuffer
             DispatchOsc,
             DispatchDcs,
             ProcessCharsetDesignation,
-            ProcessDecLineSize);
+            ProcessDecLineSize,
+            DispatchApc);
         _columns = Math.Max(columns, (short)MinColumns);
         _rows = Math.Max(rows, (short)MinRows);
         _screenStore = new TerminalScreenStore(_rows, _columns, normalizedScrollbackLimit);
@@ -290,8 +301,8 @@ internal sealed class AnsiTerminalBuffer
     public int UnknownCsiSequenceCount => _unknownCsiSequenceCount;
 
     /// <summary>
-    /// Number of DCS sequences whose introducer/type is not implemented. Supported but
-    /// intentionally ignored Sixel sequences are not included.
+    /// Number of DCS sequences whose introducer/type is not implemented. Sixel sequences are
+    /// decoded separately and are not included.
     /// </summary>
     public int UnknownDcsSequenceCount => _unknownDcsSequenceCount;
 
@@ -911,6 +922,10 @@ internal sealed class AnsiTerminalBuffer
         _screenStore.ReplaceScreen(CreateScreen(_rows, _columns, TerminalStyle.Default));
         _primaryScreenBackup = null;
         _screenStore.ResetAlternateState();
+        _kittyImages.Clear();
+        _kittyImageOrder.Clear();
+        _kittyImageBytes = 0;
+        _kittyTransfer = null;
         _cursorRow = 0;
         _cursorColumn = 0;
         _wrapPending = false;
@@ -1260,7 +1275,14 @@ internal sealed class AnsiTerminalBuffer
 
         if (command.Kind == DcsCommandKind.Sixel)
         {
-            // Sixel graphics are not supported; the sequence is consumed and ignored.
+            if (command.Payload is not null &&
+                SixelDecoder.TryDecode(command.Payload, out byte[] pixels, out int width, out int height))
+            {
+                AddImage(new TerminalImage(
+                    pixels, TerminalImageDataKind.Bgra32, "image/bgra32", width, height,
+                    _cursorColumn, null, null, null, null, true));
+            }
+
             return;
         }
 
@@ -1516,7 +1538,292 @@ internal sealed class AnsiTerminalBuffer
         if (command == "52")
         {
             DispatchOscClipboard(value);
+            return;
         }
+
+        if (command == "1337")
+        {
+            DispatchItermImage(value);
+        }
+    }
+
+    private void DispatchApc(string content)
+    {
+        if (!content.StartsWith("G", StringComparison.Ordinal)) return;
+
+        int separator = content.IndexOf(';');
+        string header = separator >= 0 ? content[1..separator] : content[1..];
+        string payload = separator >= 0 ? content[(separator + 1)..] : string.Empty;
+        var parameters = new Dictionary<char, string>();
+        foreach (string item in header.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            int equals = item.IndexOf('=');
+            if (equals > 0) parameters[item[0]] = item[(equals + 1)..];
+        }
+
+        bool more = TryGetNonNegativeInt(parameters, 'm') == 1;
+
+        // Kitty sends the control keys on the first chunk only; every continuation chunk carries
+        // nothing but m= and payload. The protocol allows a single chunked transfer to be in flight
+        // at a time, so the first chunk's keys are held here and reused until m=0 arrives.
+        if (_kittyTransfer is not null)
+        {
+            parameters = _kittyTransfer.Parameters;
+        }
+        else if (more)
+        {
+            _kittyTransfer = new KittyTransfer(parameters);
+        }
+
+        List<byte> completed = _kittyTransfer?.Payload ?? [];
+        if (payload.Length > 0)
+        {
+            if (!TerminalImageData.TryDecodeBase64(payload, out byte[] bytes) ||
+                completed.Count + bytes.Length > TerminalImageData.MaxDecodedBytes)
+            {
+                _kittyTransfer = null;
+                return;
+            }
+
+            completed.AddRange(bytes);
+        }
+
+        if (more) return;
+        _kittyTransfer = null;
+
+        int imageId = TryGetNonNegativeInt(parameters, 'i') ?? 0;
+        int? widthCells = ParseKittyDimension(parameters, 'c');
+        int? heightCells = ParseKittyDimension(parameters, 'r');
+        char action = parameters.TryGetValue('a', out string? actionValue) && actionValue.Length > 0
+            ? actionValue[0] : 'T';
+        if (action == 'd')
+        {
+            DeleteKittyImages(parameters, imageId);
+            return;
+        }
+
+        if (action == 'p')
+        {
+            if (_kittyImages.TryGetValue(imageId, out TerminalImage? stored))
+            {
+                AddImage(stored with
+                {
+                    Column = _cursorColumn,
+                    WidthCells = widthCells ?? stored.WidthCells,
+                    HeightCells = heightCells ?? stored.HeightCells
+                });
+            }
+
+            return;
+        }
+
+        if (action is not ('T' or 't')) return;
+
+        if (parameters.TryGetValue('o', out string? compression) && compression == "z")
+        {
+            if (!TryDecompressKittyPayload(completed, out byte[] decompressed)) return;
+            completed = [.. decompressed];
+        }
+
+        // The protocol's default transmission format is raw RGBA (f=32); f=100 is PNG. Raw pixel
+        // dimensions come from s (width) and v (height) - w/h are the source rectangle to crop,
+        // which senders of raw data leave unset.
+        int format = TryGetNonNegativeInt(parameters, 'f') ?? 32;
+        byte[] imageData = [.. completed];
+        int pixelWidth = 0;
+        int pixelHeight = 0;
+        TerminalImageDataKind dataKind;
+        string? mimeType;
+        if (format is 24 or 32 &&
+            ParseKittyDimension(parameters, 's') is int rawWidth &&
+            ParseKittyDimension(parameters, 'v') is int rawHeight)
+        {
+            if (!TryConvertKittyRawPixels(imageData, format == 32, rawWidth, rawHeight, out imageData)) return;
+            dataKind = TerminalImageDataKind.Bgra32;
+            mimeType = "image/bgra32";
+            pixelWidth = rawWidth;
+            pixelHeight = rawHeight;
+        }
+        else
+        {
+            // Either an explicitly encoded transfer (f=100) or a raw one that omitted s/v, in which
+            // case the only thing that can still be decoded is a self-describing encoded image.
+            mimeType = GuessImageMimeType(imageData);
+            if (mimeType is null) return;
+            TerminalImageData.TryGetEncodedPixelSize(imageData, out pixelWidth, out pixelHeight);
+            dataKind = TerminalImageDataKind.Encoded;
+        }
+
+        var image = new TerminalImage(
+            imageData, dataKind, mimeType, pixelWidth, pixelHeight, _cursorColumn,
+            widthCells, heightCells, null, null, true);
+        StoreKittyImage(imageId, image);
+        if (action == 'T') AddImage(image);
+    }
+
+    private void StoreKittyImage(int imageId, TerminalImage image)
+    {
+        if (_kittyImages.Remove(imageId, out TerminalImage? replaced))
+        {
+            _kittyImageOrder.Remove(imageId);
+            _kittyImageBytes -= replaced.Data.Length;
+        }
+
+        _kittyImages[imageId] = image;
+        _kittyImageOrder.Add(imageId);
+        _kittyImageBytes += image.Data.Length;
+        while (_kittyImageBytes > MaxStoredKittyImageBytes && _kittyImageOrder.Count > 1)
+        {
+            int oldest = _kittyImageOrder[0];
+            _kittyImageOrder.RemoveAt(0);
+            if (_kittyImages.Remove(oldest, out TerminalImage? evicted))
+            {
+                _kittyImageBytes -= evicted.Data.Length;
+            }
+        }
+    }
+
+    private void DeleteKittyImages(Dictionary<char, string> parameters, int imageId)
+    {
+        char target = parameters.TryGetValue('d', out string? mode) && mode.Length > 0 ? mode[0] : 'a';
+        // Uppercase forms additionally free the stored data; we never keep placements separately
+        // from their transmission, so both cases drop the image itself.
+        if (char.ToLowerInvariant(target) == 'i')
+        {
+            if (_kittyImages.Remove(imageId, out TerminalImage? removed))
+            {
+                _kittyImageOrder.Remove(imageId);
+                _kittyImageBytes -= removed.Data.Length;
+            }
+
+            _screenStore.RemoveImages(image => ReferenceEquals(image, removed) ||
+                (removed is not null && image.Data == removed.Data));
+            InvalidateScreenRenderCache();
+            return;
+        }
+
+        if (char.ToLowerInvariant(target) == 'a')
+        {
+            _kittyImages.Clear();
+            _kittyImageOrder.Clear();
+            _kittyImageBytes = 0;
+            _screenStore.ClearImages();
+            InvalidateScreenRenderCache();
+        }
+    }
+
+    private sealed class KittyTransfer(Dictionary<char, string> parameters)
+    {
+        public Dictionary<char, string> Parameters { get; } = parameters;
+        public List<byte> Payload { get; } = [];
+    }
+
+    private static bool TryDecompressKittyPayload(List<byte> compressed, out byte[] decompressed)
+    {
+        decompressed = [];
+        try
+        {
+            using var input = new MemoryStream(compressed.ToArray(), writable: false);
+            using var zlib = new ZLibStream(input, CompressionMode.Decompress);
+            using var output = new MemoryStream();
+            byte[] buffer = new byte[81920];
+            while (true)
+            {
+                int read = zlib.Read(buffer, 0, buffer.Length);
+                if (read == 0) break;
+                if (output.Length > TerminalImageData.MaxDecodedBytes - read) return false;
+                output.Write(buffer, 0, read);
+            }
+
+            decompressed = output.ToArray();
+            return decompressed.Length > 0;
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    private void DispatchItermImage(string value)
+    {
+        if (!value.StartsWith("File=", StringComparison.OrdinalIgnoreCase)) return;
+        int separator = value.IndexOf(':');
+        if (separator < 0) return;
+
+        var parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string item in value[5..separator].Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            int equals = item.IndexOf('=');
+            if (equals > 0) parameters[item[..equals]] = item[(equals + 1)..];
+        }
+
+        // Without inline=1 this is a file transfer, not something to draw: the payload is an
+        // arbitrary file (what it2dl-style helpers use) and must not be handed to an image decoder.
+        if (!parameters.TryGetValue("inline", out string? inline) || inline != "1") return;
+
+        if (!TerminalImageData.TryDecodeBase64(value[(separator + 1)..], out byte[] bytes)) return;
+        string? mimeType = GuessImageMimeType(bytes);
+        if (mimeType is null) return;
+
+        TerminalImageData.TryGetEncodedPixelSize(bytes, out int pixelWidth, out int pixelHeight);
+        AddImage(new TerminalImage(
+            bytes, TerminalImageDataKind.Encoded, mimeType, pixelWidth, pixelHeight,
+            _cursorColumn, ParseItermCells(parameters, "width"), ParseItermCells(parameters, "height"),
+            ParseItermPixels(parameters, "width"), ParseItermPixels(parameters, "height"),
+            !parameters.TryGetValue("preserveAspectRatio", out string? preserve) || preserve != "0"));
+    }
+
+    // An image is an overlay anchored to the current cell and never moves the cursor; see the
+    // remarks on TerminalImage for why staying in lockstep with ConPTY's model matters.
+    private void AddImage(TerminalImage image)
+    {
+        _screen[_cursorRow].Images.Add(image);
+        InvalidateScreenRenderCache();
+    }
+
+    private static int? TryGetNonNegativeInt(Dictionary<char, string> values, char key) =>
+        values.TryGetValue(key, out string? value) && int.TryParse(value, out int parsed) && parsed >= 0 ? parsed : null;
+
+    private static int? ParseKittyDimension(Dictionary<char, string> values, char key) =>
+        TryGetNonNegativeInt(values, key) is int value && value > 0 ? value : null;
+
+    private static int? ParseItermCells(Dictionary<string, string> values, string key) =>
+        values.TryGetValue(key, out string? value) && !value.Equals("auto", StringComparison.OrdinalIgnoreCase) &&
+        !value.EndsWith("px", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int cells) && cells > 0
+            ? cells : null;
+
+    private static int? ParseItermPixels(Dictionary<string, string> values, string key) =>
+        values.TryGetValue(key, out string? value) && value.EndsWith("px", StringComparison.OrdinalIgnoreCase) &&
+        int.TryParse(value[..^2], out int pixels) && pixels > 0 ? pixels : null;
+
+    private static string? GuessImageMimeType(ReadOnlySpan<byte> bytes) =>
+        bytes.Length >= 8 && bytes[..8].SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 })
+            ? "image/png" : bytes.Length >= 2 && bytes[0] == 0xff && bytes[1] == 0xd8 ? "image/jpeg" : null;
+
+    private static bool TryConvertKittyRawPixels(byte[] source, bool hasAlpha, int width, int height, out byte[] pixels)
+    {
+        pixels = [];
+        int sourceStride = hasAlpha ? 4 : 3;
+        long required = (long)width * height * sourceStride;
+        if (width <= 0 || height <= 0 || required != source.Length || required > TerminalImageData.MaxDecodedBytes)
+        {
+            return false;
+        }
+
+        pixels = new byte[width * height * 4];
+        for (int index = 0, target = 0; index < source.Length; index += sourceStride, target += 4)
+        {
+            pixels[target] = source[index + 2];
+            pixels[target + 1] = source[index + 1];
+            pixels[target + 2] = source[index];
+            pixels[target + 3] = hasAlpha ? source[index + 3] : (byte)255;
+        }
+
+        return true;
     }
 
     private void DispatchOscTaskbarProgress(string value)
@@ -3009,6 +3316,18 @@ internal sealed class AnsiTerminalBuffer
                     ClearEntireLine(row, selective);
                 }
 
+                if (!selective)
+                {
+                    // Erase-below also removes the images the erased cells carried; ESC[H ESC[J is
+                    // a common full-screen clear, and leaving images behind would also keep those
+                    // rows non-blank forever.
+                    _screenStore.ClearImages(_cursorRow, _cursorColumn, _columns);
+                    for (int row = _cursorRow + 1; row < _rows; row++)
+                    {
+                        _screenStore.ClearImages(row);
+                    }
+                }
+
                 break;
             case 1:
                 for (int row = 0; row < _cursorRow; row++)
@@ -3017,12 +3336,27 @@ internal sealed class AnsiTerminalBuffer
                 }
 
                 ClearLine(1, selective);
+                if (!selective)
+                {
+                    for (int row = 0; row < _cursorRow; row++)
+                    {
+                        _screenStore.ClearImages(row);
+                    }
+
+                    _screenStore.ClearImages(_cursorRow, 0, _cursorColumn + 1);
+                }
+
                 break;
             case 2:
                 CaptureSyntheticAlternateScreenCandidate();
                 for (int row = 0; row < _rows; row++)
                 {
                     ClearEntireLine(row, selective);
+                }
+
+                if (!selective)
+                {
+                    _screenStore.ClearImages();
                 }
 
                 break;
@@ -3032,6 +3366,11 @@ internal sealed class AnsiTerminalBuffer
                 for (int row = 0; row < _rows; row++)
                 {
                     ClearEntireLine(row, selective);
+                }
+
+                if (!selective)
+                {
+                    _screenStore.ClearImages();
                 }
 
                 break;
@@ -3506,6 +3845,11 @@ internal sealed class AnsiTerminalBuffer
 
     private static bool IsLineBlank(TerminalLine line)
     {
+        if (line.Images.Count > 0)
+        {
+            return false;
+        }
+
         foreach (TerminalCell cell in line.Cells)
         {
             if ((!cell.IsContinuation && cell.Text != " ") || cell.Style != TerminalStyle.Default)
@@ -3817,7 +4161,8 @@ internal sealed class AnsiTerminalBuffer
         int AnchorSegmentIndex,
         int CellLength,
         TerminalRenderSegmentSnapshot[] Segments,
-        TerminalLineSize LineSize = TerminalLineSize.SingleWidth)
+        TerminalLineSize LineSize = TerminalLineSize.SingleWidth,
+        TerminalImage[]? Images = null)
     {
         public bool ContentEquals(TerminalRenderLineSnapshot other)
         {
@@ -3837,7 +4182,9 @@ internal sealed class AnsiTerminalBuffer
                 }
             }
 
-            return true;
+            TerminalImage[] leftImages = Images ?? [];
+            TerminalImage[] rightImages = other.Images ?? [];
+            return leftImages.AsSpan().SequenceEqual(rightImages.AsSpan());
         }
     }
 

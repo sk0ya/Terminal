@@ -1,4 +1,5 @@
-using System.IO;
+﻿using System.IO;
+using System.IO.Compression;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
@@ -269,12 +270,11 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
-    public void Osc1337InlineImageSequenceIsConsumedAndNotRendered()
+    public void Osc1337InlineImageSequenceIsConsumedAndAttachedToTheRenderSnapshot()
     {
         var buffer = new AnsiTerminalBuffer(40, 10);
 
-        // Inline images are unsupported: the OSC 1337 sequence (including its base64 payload) is
-        // consumed silently - nothing is drawn - and ordinary text after it prints normally.
+        // The payload is consumed as an image, and ordinary text after it still prints normally.
         buffer.Process(
             "]1337;File=inline=1;width=4:" +
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC" +
@@ -282,6 +282,312 @@ public sealed class AnsiTerminalBufferTests
         buffer.Process("X");
 
         Assert.Equal("X", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal(0, buffer.CursorRow);
+        Assert.Equal(1, buffer.CursorColumn);
+        Assert.Single(buffer.CreateRenderSnapshot(showCursor: false).Lines[0].Images!);
+    }
+
+    [Fact]
+    public void Osc1337FileTransferWithoutInlineIsNotRendered()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        // Without inline=1 the payload is a file download, not an image, and must never reach a
+        // decoder - here it is a gzip header, which is exactly what it2dl-style helpers send.
+        buffer.Process("]1337;File=name=YS50YXI=;size=3:H4sIAAAAAAAA");
+
+        Assert.Empty(buffer.CreateRenderSnapshot(showCursor: false).Lines.SelectMany(line => line.Images ?? []));
+    }
+
+    [Fact]
+    public void KittyPngImageIsAttachedToTheRenderSnapshot()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
+
+        buffer.Process("\u001b_Ga=T,f=100,c=2;" + png + "\u001b\\");
+
+        Assert.Single(buffer.CreateRenderSnapshot(showCursor: false).Lines[0].Images!);
+    }
+
+    [Fact]
+    public void KittyZlibCompressedPngIsAttachedToTheRenderSnapshot()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
+        byte[] source = Convert.FromBase64String(png);
+        using var compressedStream = new MemoryStream();
+        using (var zlib = new ZLibStream(compressedStream, CompressionMode.Compress, leaveOpen: true))
+        {
+            zlib.Write(source);
+        }
+
+        string payload = Convert.ToBase64String(compressedStream.ToArray());
+        buffer.Process("\u001b_Ga=T,f=100,o=z,c=2;" + payload + "\u001b\\");
+
+        Assert.Single(buffer.CreateRenderSnapshot(showCursor: false).Lines[0].Images!);
+    }
+
+    [Fact]
+    public void ImagesNeverMoveTheCursor()
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
+
+        // ConPTY runs in its normal (non-passthrough) mode and never advances its own cursor
+        // for an image, so neither may we: an image is an overlay pinned to the cell it arrived
+        // at. Moving our cursor would leave a program that repaints with absolute positioning
+        // computing its rows against ConPTY's model and landing its text above where we put it.
+        var iterm = new AnsiTerminalBuffer(40, 10);
+        iterm.Process("ab" + "\u001b]1337;File=inline=1;width=4;height=3:" + png + "\u0007X");
+        Assert.Equal(0, iterm.CursorRow);
+        Assert.Equal(3, iterm.CursorColumn);
+        Assert.Equal("abX", iterm.GetScreenLineText(0).TrimEnd());
+        Assert.Single(iterm.CreateRenderSnapshot(showCursor: false).Lines[0].Images!);
+
+        var kitty = new AnsiTerminalBuffer(40, 10);
+        kitty.Process("ab" + "\u001b_Ga=T,f=100,c=4,r=3;" + png + "\u001b\\X");
+        Assert.Equal(0, kitty.CursorRow);
+        Assert.Equal(3, kitty.CursorColumn);
+        Assert.Equal("abX", kitty.GetScreenLineText(0).TrimEnd());
+        Assert.Single(kitty.CreateRenderSnapshot(showCursor: false).Lines[0].Images!);
+    }
+
+    [Fact]
+    public void KittyChunkedTransferReadsControlKeysFromTheFirstChunk()
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        // Only the first chunk carries the control keys; every continuation chunk is m= plus
+        // payload. Reading a, f, o or i off a continuation chunk loses the whole transfer.
+        buffer.Process("\u001b_Ga=T,f=100,i=7,c=2,m=1;" + png[..48] + "\u001b\\");
+        Assert.Empty(buffer.CreateRenderSnapshot(showCursor: false).Lines.SelectMany(line => line.Images ?? []));
+
+        buffer.Process("\u001b_Gm=0;" + png[48..] + "\u001b\\");
+
+        var images = buffer.CreateRenderSnapshot(showCursor: false).Lines[0].Images!;
+        Assert.Single(images);
+        Assert.Equal(TerminalImageDataKind.Encoded, images[0].DataKind);
+        Assert.Equal(Convert.FromBase64String(png), images[0].Data);
+
+        // The transfer completed under i=7, so it can be placed again from the stored copy.
+        buffer.Process("\u001b[5;1H" + "\u001b_Ga=p,i=7;\u001b\\");
+        Assert.Single(buffer.CreateRenderSnapshot(showCursor: false).Lines[4].Images!);
+    }
+
+    [Fact]
+    public void KittyRawPixelsUseTheSourceSizeKeys()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+        // Raw pixel dimensions are s (width) and v (height); w/h are the source crop rectangle
+        // and are left unset by senders of raw data.
+        string payload = Convert.ToBase64String(new byte[2 * 2 * 4]);
+
+        buffer.Process("\u001b_Ga=T,f=32,s=2,v=2;" + payload + "\u001b\\");
+
+        var images = buffer.CreateRenderSnapshot(showCursor: false).Lines[0].Images!;
+        Assert.Single(images);
+        Assert.Equal(TerminalImageDataKind.Bgra32, images[0].DataKind);
+        Assert.Equal(2, images[0].PixelWidth);
+        Assert.Equal(2, images[0].PixelHeight);
+    }
+
+    [Fact]
+    public void KittyDeleteRemovesPlacedImages()
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        buffer.Process("\u001b_Ga=T,f=100,i=7,c=2;" + png + "\u001b\\");
+        Assert.Single(buffer.CreateRenderSnapshot(showCursor: false).Lines[0].Images!);
+
+        buffer.Process("\u001b_Ga=d,d=i,i=7;\u001b\\");
+
+        Assert.Empty(buffer.CreateRenderSnapshot(showCursor: false).Lines.SelectMany(line => line.Images ?? []));
+    }
+
+    // The (row, column) an image is anchored at in the current render snapshot.
+    private static (int Row, int Column) FindImageAnchor(AnsiTerminalBuffer buffer)
+    {
+        var snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        for (int row = 0; row < snapshot.Lines.Length; row++)
+        {
+            if (snapshot.Lines[row].Images is { Length: > 0 } images)
+            {
+                return (row, images[0].Column);
+            }
+        }
+
+        return (-1, -1);
+    }
+
+    [Fact]
+    public void ResizeMovesAnImageWithTheCellItIsAnchoredTo()
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==";
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        // 32 characters on one row, with the image anchored at column 24.
+        buffer.Process("abcdefghijklmnopqrstuvwxyz012345");
+        buffer.Process("\u001b[1;25H");
+        buffer.Process("\u001b]1337;File=inline=1;width=2;height=2:" + png + "\u0007");
+        Assert.Equal((0, 24), FindImageAnchor(buffer));
+
+        // Narrowing wraps the line; logical offset 24 becomes row 1, column 4 - still the
+        // 'y' the image was anchored to.
+        buffer.Resize(20, 10);
+
+        Assert.Equal("abcdefghijklmnopqrst", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("uvwxyz012345", buffer.GetScreenLineText(1).TrimEnd());
+        Assert.Equal((1, 4), FindImageAnchor(buffer));
+    }
+
+    [Fact]
+    public void ResizingBackRestoresTheOriginalImageAnchor()
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==";
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        buffer.Process("abcdefghijklmnopqrstuvwxyz012345");
+        buffer.Process("\u001b[1;25H");
+        buffer.Process("\u001b]1337;File=inline=1;width=2;height=2:" + png + "\u0007");
+
+        buffer.Resize(20, 10);
+        buffer.Resize(40, 10);
+
+        Assert.Equal("abcdefghijklmnopqrstuvwxyz012345", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal((0, 24), FindImageAnchor(buffer));
+    }
+
+    [Fact]
+    public void ResizeKeepsImagesAnchoredOnContinuationRows()
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==";
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        // One logical line wrapped across two physical rows, image on the second row - the
+        // row a reflow that only carried the first row's images would drop it from.
+        buffer.Process("abcdefghijklmnopqrstuvwxyz012345");
+        buffer.Process("\u001b[2;5H");
+        buffer.Process("\u001b]1337;File=inline=1;width=2;height=2:" + png + "\u0007");
+        Assert.Equal((1, 4), FindImageAnchor(buffer));
+
+        // Widening unwraps the line; logical offset 20 + 4 lands on row 0, column 24.
+        buffer.Resize(40, 10);
+
+        Assert.Equal("abcdefghijklmnopqrstuvwxyz012345", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal((0, 24), FindImageAnchor(buffer));
+    }
+
+    [Fact]
+    public void ResizeClampsAnImageAnchoredPastTheNewWidth()
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==";
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        // Anchored on an otherwise empty row, so there is no cell for it to follow.
+        buffer.Process("\u001b[1;36H");
+        buffer.Process("\u001b]1337;File=inline=1;width=2;height=2:" + png + "\u0007");
+        Assert.Equal((0, 35), FindImageAnchor(buffer));
+
+        buffer.Resize(20, 10);
+
+        (int row, int column) = FindImageAnchor(buffer);
+        Assert.Equal(0, row);
+        Assert.InRange(column, 0, 19);
+    }
+
+    [Fact]
+    public void AmbiguousWidthReflowKeepsImagesAnchoredToTheirCell()
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==";
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        // Ambiguous-width characters double in width, so the line rewraps and every cell after
+        // them moves. This reflow runs through a separate calculator from a window resize.
+        buffer.Process("¡¡¡¡abcdefgh");
+        buffer.Process("\u001b[1;7H");
+        buffer.Process("\u001b]1337;File=inline=1;width=2;height=2:" + png + "\u0007");
+        Assert.Equal((0, 6), FindImageAnchor(buffer));
+
+        buffer.AmbiguousWidthIsWide = true;
+
+        // The four leading characters now occupy eight columns, so the image - anchored two
+        // cells past them - moves to column 10 and is not dropped.
+        Assert.Equal((0, 10), FindImageAnchor(buffer));
+    }
+    [Fact]
+    public void EraseBelowRemovesImagesOnTheRowsItErases()
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        // ESC[H ESC[J is a common full-screen clear. Leaving the images behind would also keep
+        // the erased rows permanently non-blank.
+        buffer.Process("\u001b[1;1H" + "\u001b]1337;File=inline=1;width=2:" + png + "\u0007");
+        buffer.Process("\u001b[5;1H" + "\u001b]1337;File=inline=1;width=2:" + png + "\u0007");
+
+        buffer.Process("\u001b[3;1H" + "\u001b[J");
+
+        var lines = buffer.CreateRenderSnapshot(showCursor: false).Lines;
+        Assert.Single(lines.SelectMany(line => line.Images ?? []));
+        Assert.Single(lines[0].Images!);
+    }
+
+    [Fact]
+    public void EraseAboveRemovesImagesOnTheRowsItErases()
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        buffer.Process("\u001b[1;1H" + "\u001b]1337;File=inline=1;width=2:" + png + "\u0007");
+        buffer.Process("\u001b[5;1H" + "\u001b]1337;File=inline=1;width=2:" + png + "\u0007");
+
+        buffer.Process("\u001b[3;1H" + "\u001b[1J");
+
+        var lines = buffer.CreateRenderSnapshot(showCursor: false).Lines;
+        Assert.Single(lines.SelectMany(line => line.Images ?? []));
+        Assert.Single(lines[4].Images!);
+    }
+    [Fact]
+    public void RedrawingACommandLineDoesNotEraseAnEarlierImage()
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        buffer.Process("\u001b]1337;File=inline=1;width=4;height=3:" + png + "\u0007");
+        buffer.Process("\u001b[A\u001b[A\u001b[A\u001b[2K");
+
+        Assert.Single(buffer.CreateRenderSnapshot(showCursor: false).Lines[0].Images!);
+    }
+
+    [Fact]
+    public void ImageOnlyRowsRemainInTheRenderSnapshot()
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        buffer.Process("a\r\nb\r\nc\r\n");
+        buffer.Process("\u001b]1337;File=inline=1;width=4;height=3:" + png + "\u0007");
+
+        var snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.True(snapshot.Lines.Length >= 4);
+        Assert.Single(snapshot.Lines[3].Images!);
+    }
+
+    [Fact]
+    public void ClearDisplayMode2RemovesInlineImages()
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        buffer.Process("\u001b]1337;File=inline=1;width=4;height=3:" + png + "\u0007");
+        Assert.Single(buffer.CreateRenderSnapshot(showCursor: false).Lines[0].Images!);
+
+        // Ctrl+L is handled by the shell, which normally emits clear-screen + cursor-home.
+        buffer.Process("\u001b[2J\u001b[H");
+
+        Assert.Empty(buffer.CreateRenderSnapshot(showCursor: false).Lines.SelectMany(line => line.Images ?? []));
     }
 
     [Fact]

@@ -320,6 +320,47 @@ internal sealed class TerminalScreenStore
             }
 
             line.IsWrapped = false;
+            line.Images.Clear();
+        }
+    }
+
+    public void ClearImages()
+    {
+        foreach (TerminalLine line in Screen)
+        {
+            line.Images.Clear();
+        }
+    }
+
+    /// <summary>Drops every image anchored in <paramref name="row"/>, ignoring rows out of range.</summary>
+    public void ClearImages(int row)
+    {
+        if ((uint)row < (uint)Screen.Count)
+        {
+            Screen[row].Images.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Drops the images anchored in <paramref name="row"/> whose column falls inside
+    /// [<paramref name="fromColumn"/>, <paramref name="toColumnExclusive"/>), for a partial erase.
+    /// </summary>
+    public void ClearImages(int row, int fromColumn, int toColumnExclusive)
+    {
+        if ((uint)row >= (uint)Screen.Count)
+        {
+            return;
+        }
+
+        Screen[row].Images.RemoveAll(
+            image => image.Column >= fromColumn && image.Column < toColumnExclusive);
+    }
+
+    public void RemoveImages(Func<TerminalImage, bool> predicate)
+    {
+        foreach (TerminalLine line in Screen)
+        {
+            line.Images.RemoveAll(image => predicate(image));
         }
     }
 
@@ -378,6 +419,7 @@ internal sealed class TerminalScreenStore
     {
         var clone = new TerminalLine(line.Cells.Length, TerminalStyle.Default);
         Array.Copy(line.Cells, clone.Cells, line.Cells.Length);
+        clone.Images.AddRange(line.Images);
         clone.IsWrapped = line.IsWrapped;
         clone.LineSize = line.LineSize;
         return clone;
