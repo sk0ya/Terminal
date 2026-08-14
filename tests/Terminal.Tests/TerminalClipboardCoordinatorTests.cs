@@ -1,4 +1,4 @@
-using Terminal.Tabs;
+﻿using Terminal.Tabs;
 
 namespace Terminal.Tests;
 
@@ -42,7 +42,7 @@ public sealed class TerminalClipboardCoordinatorTests
             TerminalPasteActionKind.ConfirmMultiline,
             _coordinator.ResolvePaste(true, true, text, false, false).Kind);
         Assert.Equal(
-            new TerminalPasteAction(TerminalPasteActionKind.Send, text),
+            new TerminalPasteAction(TerminalPasteActionKind.Send, "one\rtwo"),
             _coordinator.ResolvePaste(true, true, text, false, true));
     }
 
@@ -50,7 +50,37 @@ public sealed class TerminalClipboardCoordinatorTests
     public void BracketedPasteFramesTextWithoutConfirmation()
     {
         TerminalPasteAction action = _coordinator.ResolvePaste(true, true, "one\r\ntwo", true, false);
-        Assert.Equal(new TerminalPasteAction(TerminalPasteActionKind.Send, "\u001b[200~one\r\ntwo\u001b[201~"), action);
+        Assert.Equal(new TerminalPasteAction(TerminalPasteActionKind.Send, "\u001b[200~one\rtwo\u001b[201~"), action);
+    }
+
+    [Theory]
+    // Every line break reaches the pty as the single CR a terminal sends for Enter, whether the
+    // clipboard used CRLF (Windows), LF (Unix text), or CR, and whichever form they are mixed in.
+    [InlineData("a\r\nb", "a\rb")]
+    [InlineData("a\nb", "a\rb")]
+    [InlineData("a\rb", "a\rb")]
+    [InlineData("a\r\n\nb", "a\r\rb")]
+    [InlineData("a\n\rb", "a\r\rb")]
+    [InlineData("a\r\nb\nc\rd", "a\rb\rc\rd")]
+    [InlineData("plain", "plain")]
+    public void PasteCollapsesLineBreaksToCarriageReturn(string clipboard, string expected)
+    {
+        Assert.Equal(
+            new TerminalPasteAction(TerminalPasteActionKind.Send, "\u001b[200~" + expected + "\u001b[201~"),
+            _coordinator.ResolvePaste(true, true, clipboard, bracketedPasteEnabled: true, multilinePasteApproved: false));
+        Assert.Equal(
+            new TerminalPasteAction(TerminalPasteActionKind.Send, expected),
+            _coordinator.ResolvePaste(true, true, clipboard, bracketedPasteEnabled: false, multilinePasteApproved: true));
+    }
+
+    [Fact]
+    public void LineFeedOnlyClipboardStillCountsAsMultiline()
+    {
+        // The confirmation gate has to see the normalized form, or LF-only text (anything copied
+        // from a Unix file) would be sent as several commands without asking.
+        Assert.Equal(
+            TerminalPasteActionKind.ConfirmMultiline,
+            _coordinator.ResolvePaste(true, true, "one\ntwo", false, false).Kind);
     }
 
     [Theory]
