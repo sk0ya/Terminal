@@ -107,6 +107,72 @@ public sealed class TerminalCursorWrapTests
     }
 
     /// <summary>
+    /// The single-character escapes follow the same rule as CSI: shifts, keypad modes, tab stops
+    /// and queries do not place the cursor, so they do not cancel a pending wrap. The C1 controls
+    /// they are the 7-bit spelling of already behaved this way, so clearing here made the two
+    /// spellings of one control disagree.
+    /// </summary>
+    [Theory]
+    [InlineData("H")]     // HTS: sets a tab stop where the cursor already is
+    [InlineData("N")]     // SS2
+    [InlineData("O")]     // SS3
+    [InlineData("n")]     // LS2
+    [InlineData("o")]     // LS3
+    [InlineData("=")]     // DECKPAM
+    [InlineData(">")]     // DECKPNM
+    [InlineData("Z")]     // DECID
+    [InlineData("(B")]    // designate ASCII as G0
+    [InlineData("7")]     // DECSC
+    public void EscapeCommandThatDoesNotPlaceTheCursorKeepsTheDeferredWrap(string sequence)
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process(new string('A', 20));
+        buffer.Process(sequence);
+
+        Assert.True(buffer.WrapPendingForTests);
+    }
+
+    [Theory]
+    [InlineData("D")]     // IND
+    [InlineData("E")]     // NEL
+    [InlineData("M")]     // RI
+    [InlineData("c")]     // RIS
+    public void EscapeCommandThatMovesTheCursorCancelsTheDeferredWrap(string sequence)
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process(new string('A', 20));
+        buffer.Process(sequence);
+
+        Assert.False(buffer.WrapPendingForTests);
+    }
+
+    /// <summary>
+    /// A control written as an escape and as its C1 code point is one control, so both spellings
+    /// have to leave the pending wrap in the same state.
+    /// </summary>
+    [Theory]
+    [InlineData("H", "\u0088")]   // HTS
+    [InlineData("N", "\u008E")]   // SS2
+    [InlineData("O", "\u008F")]   // SS3
+    [InlineData("D", "\u0084")]   // IND
+    [InlineData("E", "\u0085")]   // NEL
+    [InlineData("M", "\u008D")]   // RI
+    public void SevenBitAndEightBitSpellingsAgreeOnTheDeferredWrap(string escapeForm, string c1Form)
+    {
+        var sevenBit = new AnsiTerminalBuffer(20, 10);
+        sevenBit.Process(new string('A', 20));
+        sevenBit.Process(escapeForm);
+
+        var eightBit = new AnsiTerminalBuffer(20, 10);
+        eightBit.Process(new string('A', 20));
+        eightBit.Process(c1Form);
+
+        Assert.Equal(eightBit.WrapPendingForTests, sevenBit.WrapPendingForTests);
+    }
+
+    /// <summary>
     /// DECSC/DECRC and their CSI spellings carry the pending wrap across, so a save taken at the
     /// last column has to record that the wrap was still owed.
     /// </summary>

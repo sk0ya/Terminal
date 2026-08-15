@@ -98,7 +98,9 @@ CSI ?25h  CSI ?2026l
 
 `?2026h` / `?25l` / SGR のどれで落としても `❯` は罫線の最終セルに重なって描かれ、罫線に埋もれて見えなくなる。同時に入力行が1セル右へずれる。
 
-保留を維持する CSI: `m`（SGR・modifyOtherKeys）、`n`（DSR）、`c`（DA）、`i`（Media Copy）、`t`（XTWINOPS）、`q`（カーソル形状・DECSCA・XTVERSION）、`h`/`l`（モード）、`u`（kitty keyboard・SCORC）、`s`（SCOSC。ただし DECSLRM はカーソルをホームへ動かすので除く）。位置を動かすモード（DECCOLM・DECOM・代替画面・save/restore）は各自で保留状態を管理する。`ESC 7` / `ESC 8` を除外しているのと同じ理由。
+保留を維持する CSI: `m`（SGR・modifyOtherKeys）、`n`（DSR）、`c`（DA）、`i`（Media Copy）、`t`（XTWINOPS）、`q`（カーソル形状・DECSCA・XTVERSION）、`h`/`l`（モード）、`u`（kitty keyboard・SCORC）、`s`（SCOSC。ただし DECSLRM はカーソルをホームへ動かすので除く）。位置を動かすモード（DECCOLM・DECOM・代替画面・save/restore）は各自で保留状態を管理する。
+
+保留を維持する ESC: `7`/`8`（DECSC/DECRC）、`H`（HTS）、`N`/`O`（SS2/SS3）、`n`/`o`（LS2/LS3）、`=`/`>`（DECKPAM/DECKPNM）、`Z`（DECID）、および文字集合指定（`ESC ( B` など）。落とすのは `D`（IND）、`E`（NEL）、`M`（RI）、`c`（RIS）。**判断基準は 8bit の C1 等価物と一致させること** — `ProcessControl` の `U+0088`(HTS)・`U+008E`/`U+008F`(SS2/SS3) は元から保留を維持しており、`ESC H` / `ESC N` / `ESC O` だけが落としていた。同じ制御の2つの綴りは同じ挙動でなければならない。
 
 ### 描画・カーソル
 

@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.IO.Compression;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -1123,7 +1123,7 @@ internal sealed class AnsiTerminalBuffer
 
     private void ProcessEscapeCommand(char ch)
     {
-        if (ch is not ('7' or '8'))
+        if (!KeepsDeferredWrap(ch))
         {
             ClearWrapPending();
         }
@@ -1176,6 +1176,23 @@ internal sealed class AnsiTerminalBuffer
                 break;
         }
     }
+
+    /// <summary>
+    /// The same rule as the CSI overload, for the single-character escapes. The C1 controls these
+    /// are the 7-bit spelling of already behave this way - U+0088 (HTS) and U+008E / U+008F
+    /// (SS2/SS3) leave the flag alone in <see cref="ProcessControl"/> - so clearing it
+    /// here made the two spellings of one control disagree.
+    /// </summary>
+    private static bool KeepsDeferredWrap(char escapeCommand) => escapeCommand switch
+    {
+        '7' or '8' => true,        // DECSC / DECRC carry the flag themselves
+        'H' => true,               // HTS: sets a tab stop where the cursor already is
+        'N' or 'O' => true,        // SS2 / SS3: shift the next graphic character's set
+        'n' or 'o' => true,        // LS2 / LS3: locking shifts
+        '=' or '>' => true,        // DECKPAM / DECKPNM: keypad mode
+        'Z' => true,               // DECID: a query
+        _ => false
+    };
 
     private void ProcessCharsetDesignation(int target, char ch)
     {
