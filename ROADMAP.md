@@ -49,6 +49,20 @@ function Show-Image { param([Parameter(Mandatory)][string]$Path,[int]$Width=40,[
 
 Sixel と Kitty はこちらのパーサに到達しないため、実装があっても実機では表示されない。`CreatePseudoConsole` に `PSEUDOCONSOLE_PASSTHROUGH_MODE`(8) を渡しても当該ビルドでは挙動が変わらなかった。実機で画像を出すには `chafa -f iterm` や `wezterm imgcat` など **iTerm2 形式で出力するツールを使う**。Sixel/Kitty を通すには、Sixel を実装した新しい conhost/conpty（Windows Terminal 同梱の OpenConsole 等）へ差し替える必要がある — 未検証。
 
+### 代替画面と Claude Code（実測: claude.exe 2.1.233 / pwsh 7.6.3）
+
+ConPTY は `CSI ?1049h` を**通さず自前で処理する**。代替バッファは conhost 側にあり、こちらのパーサには一切届かない。そのため全画面アプリの検出はタイトル（`OSC 0`）に頼っている（擬似代替画面）。実測したタイトルの流れ:
+
+```
+C:\Program Files\...\pwsh.exe   ← シェル
+claude → ✳ Claude Code → ◐ Claude Code → ◑ Say hi in one word → ◐ Say hi… → ✳ Say hi…   ← 実行中
+（空）→ C:\Program Files\...\pwsh.exe   ← 終了
+```
+
+**Claude Code は作業中にウィンドウタイトルを作業内容へ書き換え、先頭のスピナー字形（✳ ◐ ◑ …）を回す。** 「Claude らしくないタイトルになった＝終了」と判定すると、まだ描画中のアプリの下で主画面を復元してしまい、以降の絶対位置指定がすべて別の行に落ちる（画像を出していると、プロンプトやカーソルが画像の帯に重なって見える）。終了の判定は**タイトルが空になる**か、**起動前のシェルのタイトルへ戻る**ことで行う（後者は異常終了時の復帰も兼ねる）。
+
+終了時、ConPTY は保存していた主画面ビューポートを**同じ行位置へ1行ずつ描き直してから**タイトルを落とす。したがってテキストは ConPTY 側が復元し、画像はこちらのアンカー行に残る — 両者は一致する。
+
 ### 描画・カーソル
 
 - 画像は端末行のセルへアンカーして保持し、既存のスクロールバックと WPF surface の描画サイクルに乗せる。テキストの背面へ描画する。

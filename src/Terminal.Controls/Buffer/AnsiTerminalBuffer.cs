@@ -143,6 +143,9 @@ internal sealed class AnsiTerminalBuffer
     private bool _synchronizedUpdateActive;
     private bool _synchronizedUpdateEndedDuringProcess;
     private bool _syntheticAlternateScreenActive;
+    // The window title the shell owned before the synthetic alternate screen was entered; getting
+    // it back is what ends that screen. See UpdateSyntheticAlternateScreenFromTitle.
+    private string _syntheticAlternateScreenEntryTitle = string.Empty;
     private int _glLevel; // GL invocation: 0=G0, 1=G1, 2=G2, 3=G3 (SI / SO / LS2 / LS3)
     private int _savedGlLevel;
     private int _singleShift = -1; // -1 = none, 2 = SS2 (G2), 3 = SS3 (G3); applies to next graphic char only
@@ -966,6 +969,7 @@ internal sealed class AnsiTerminalBuffer
         _synchronizedUpdateActive = false;
         _leftRightMarginEnabled = false;
         _syntheticAlternateScreenActive = false;
+        _syntheticAlternateScreenEntryTitle = string.Empty;
         _savedPrivateModes.Clear();
         _g0CharacterSet = TerminalCharacterSet.Ascii;
         _g1CharacterSet = TerminalCharacterSet.Ascii;
@@ -2922,7 +2926,18 @@ internal sealed class AnsiTerminalBuffer
         bool nextTitleIsClaude = IsClaudeSyntheticAlternateScreenTitle(nextTitle);
         if (_syntheticAlternateScreenActive)
         {
-            if (IsClaudeSyntheticAlternateScreenTitle(previousTitle) && !nextTitleIsClaude)
+            // Claude Code renames the window as it works - "◐ Check git status", "◑ Check git
+            // status", "✳ Check git status" - cycling the spinner glyph, so a title that no longer
+            // looks like Claude does not mean Claude is gone. Leaving on one of those restores the
+            // primary screen underneath a program that is still drawing, and every absolute
+            // position it sends from then on lands on the wrong row.
+            //
+            // What does mean it is gone is the title returning to the shell's: Claude Code clears
+            // the title (OSC 0 with no text) as it tears down, and the shell's next prompt puts
+            // back the title it had before the launch - which also covers a program that was killed
+            // without tearing down.
+            if (nextTitle.Length == 0 ||
+                string.Equals(nextTitle, _syntheticAlternateScreenEntryTitle, StringComparison.Ordinal))
             {
                 ExitAlternateScreen();
             }
@@ -2946,6 +2961,7 @@ internal sealed class AnsiTerminalBuffer
         _screenStore.PromotePendingOrCapturePrimaryScreen();
         _pendingSyntheticAlternateScreenBackup = null;
         _syntheticAlternateScreenActive = true;
+        _syntheticAlternateScreenEntryTitle = previousTitle;
         InvalidateScreenRenderCache();
     }
 

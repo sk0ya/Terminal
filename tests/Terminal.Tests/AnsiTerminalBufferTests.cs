@@ -1129,6 +1129,199 @@ public sealed class AnsiTerminalBufferTests
         Assert.Equal("PS C:\\Projects\\Terminal>", buffer.GetScreenLineText(1).TrimEnd());
     }
 
+    /// <summary>
+    /// The whole round trip a user goes through: an imgcat-style image, a Claude Code session on
+    /// top of it, and the history recall right afterwards. The escape sequences follow a ConPTY
+    /// capture of pwsh + claude.exe 2.1.233 taken on this machine.
+    ///
+    /// ConPTY hands the app a console alternate buffer of its own - it swallows the DECSET instead
+    /// of forwarding it, which is why the synthetic alternate screen has to key off the title - and
+    /// on exit it repaints the saved primary viewport row by row, onto the rows it came from,
+    /// before the title is dropped. The image therefore has to come back on its own anchor row,
+    /// with the rows it covers still blank and the new prompt still below them.
+    /// </summary>
+    [Fact]
+    public void ClaudeSessionKeepsAnImageOnItsAnchorRowAndTheNewPromptBelowIt()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        PlaceImageWithReservedRows(buffer);
+        buffer.Process("PS> claude\r\n");
+        Assert.Equal((1, 0), FindImageAnchor(buffer));
+
+        RunClaudeSession(buffer);
+        Assert.True(buffer.IsAlternateScreenActive);
+
+        RepaintPrimaryViewportAndDropTheTitle(buffer);
+        buffer.Process("PS> ");
+
+        Assert.False(buffer.IsAlternateScreenActive);
+        Assert.Equal((1, 0), FindImageAnchor(buffer));
+        Assert.Equal("PS> Show-Image sample.png", buffer.GetScreenLineText(0).TrimEnd());
+        for (int row = 1; row <= 3; row++)
+        {
+            Assert.Equal(string.Empty, buffer.GetScreenLineText(row).TrimEnd());
+        }
+
+        Assert.Equal("PS> claude", buffer.GetScreenLineText(4).TrimEnd());
+        Assert.Equal("PS>", buffer.GetScreenLineText(5).TrimEnd());
+
+        // The history recall redraws the prompt line in place. It has to land on the prompt row,
+        // below the rows the image covers (anchor row 1 plus its three rows), not inside them.
+        buffer.Process("[?25l[6;5Hclaude[?25h");
+
+        Assert.Equal(5, buffer.CursorRow);
+        Assert.Equal("PS> claude", buffer.GetScreenLineText(5).TrimEnd());
+        Assert.Equal(
+            1,
+            buffer.CreateRenderSnapshot(showCursor: false).Lines.Count(line => line.Images is { Length: > 0 }));
+    }
+
+    /// <summary>
+    /// The modes Claude Code turns on have to be off again once it is gone, or the next key the
+    /// shell sees is encoded for a program that already exited.
+    /// </summary>
+    [Fact]
+    public void ClaudeSessionLeavesKeyboardModesBackAtTheirDefaults()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        PlaceImageWithReservedRows(buffer);
+        buffer.Process("PS> claude\r\n");
+
+        RunClaudeSession(buffer);
+        Assert.Equal(1, buffer.KittyKeyboardFlags);
+        Assert.True(buffer.BracketedPasteEnabled);
+
+        RepaintPrimaryViewportAndDropTheTitle(buffer);
+
+        Assert.Equal(0, buffer.KittyKeyboardFlags);
+        Assert.False(buffer.BracketedPasteEnabled);
+        Assert.False(buffer.ApplicationCursorKeysEnabled);
+        Assert.False(buffer.ApplicationKeypadEnabled);
+    }
+
+    /// <summary>
+    /// Claude Code renames the window while it works, cycling a spinner glyph through the task
+    /// summary - the titles here are the ones a live claude.exe 2.1.233 emitted for one request.
+    /// None of them mean it exited, so the synthetic alternate screen has to survive all of them;
+    /// leaving on one restores the primary screen under a program that is still drawing, and every
+    /// absolute cursor position it sends afterwards lands on the wrong row.
+    /// </summary>
+    [Theory]
+    [InlineData("◐ Check git status")]
+    [InlineData("◑ Check git status")]
+    [InlineData("✳ Check git status")]
+    [InlineData("✳ Claude Code")]
+    public void ClaudeTaskTitleDoesNotEndTheSyntheticAlternateScreen(string taskTitle)
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        buffer.Process("\u001b]0;C:\\Program Files\\pwsh.exe\u0007");
+        PlaceImageWithReservedRows(buffer);
+        buffer.Process("PS> claude\r\n");
+
+        RunClaudeSession(buffer);
+        buffer.Process("\u001b]0;" + taskTitle + "\u0007");
+        buffer.Process("\u001b[4;3Hstill drawing");
+
+        Assert.True(buffer.IsAlternateScreenActive);
+        Assert.Empty(buffer.CreateRenderSnapshot(showCursor: false).Lines.SelectMany(line => line.Images ?? []));
+
+        RepaintPrimaryViewportAndDropTheTitle(buffer);
+        buffer.Process("PS> ");
+
+        Assert.False(buffer.IsAlternateScreenActive);
+        Assert.Equal((1, 0), FindImageAnchor(buffer));
+        Assert.Equal("PS>", buffer.GetScreenLineText(5).TrimEnd());
+    }
+
+    /// <summary>
+    /// The shell getting its own title back also ends the synthetic alternate screen, so a program
+    /// that was killed without clearing the title cannot leave the screen stuck.
+    /// </summary>
+    [Fact]
+    public void ShellReclaimingItsTitleEndsTheSyntheticAlternateScreen()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        buffer.Process("\u001b]0;C:\\Program Files\\pwsh.exe\u0007");
+        buffer.Process("PS> claude\r\n");
+        RunClaudeSession(buffer);
+        buffer.Process("\u001b]0;◐ Check git status\u0007");
+
+        Assert.True(buffer.IsAlternateScreenActive);
+
+        buffer.Process("\u001b]0;C:\\Program Files\\pwsh.exe\u0007");
+
+        Assert.False(buffer.IsAlternateScreenActive);
+    }
+
+    /// <summary>
+    /// A real alternate screen is a different contract: the program asked the terminal itself to
+    /// save and restore the primary screen, so its images come back with it.
+    /// </summary>
+    [Fact]
+    public void RealAlternateScreenStillRestoresImagesOnExit()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        PlaceImageWithReservedRows(buffer);
+
+        buffer.Process("[?1049h");
+        Assert.Empty(buffer.CreateRenderSnapshot(showCursor: false).Lines.SelectMany(line => line.Images ?? []));
+
+        buffer.Process("full screen app");
+        buffer.Process("[?1049l");
+
+        Assert.Single(buffer.CreateRenderSnapshot(showCursor: false).Lines[1].Images!);
+    }
+
+    /// <summary>Emits an image the way imgcat does: anchored on its own row, with the rows it
+    /// covers reserved by newlines so ConPTY's cursor advances with ours.</summary>
+    private static void PlaceImageWithReservedRows(AnsiTerminalBuffer buffer)
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
+
+        buffer.Process("PS> Show-Image sample.png\r\n");
+        buffer.Process("]1337;File=inline=1;width=4;height=3:" + png + "");
+        buffer.Process("\n\n\n");
+    }
+
+    /// <summary>Claude Code's startup as ConPTY relays it: the title and its input modes, then the
+    /// cleared alternate buffer ConPTY hands it, then a UI drawn with absolute positioning.</summary>
+    private static void RunClaudeSession(AnsiTerminalBuffer buffer)
+    {
+        buffer.Process("]0;claude[?2004h[?1004h[?2031h[<u[>1u[>4;2m[?25l");
+        buffer.Process("[H");
+        for (int row = 0; row < 10; row++)
+        {
+            buffer.Process("[K\r\n");
+        }
+
+        buffer.Process("[2J[?1000h[?1002h[?1006h");
+        buffer.Process("]0;✳ Claude Code");
+        buffer.Process("[2;2HClaude Code v2.1.233[9;3H> Try \"how does <filepath> work?\"[9;5H[?25h");
+    }
+
+    /// <summary>Claude Code's exit as ConPTY relays it: the modes are popped, the saved primary
+    /// viewport is repainted row by row onto the rows it came from, and only then is the title
+    /// dropped - which is what the synthetic alternate screen keys off.</summary>
+    private static void RepaintPrimaryViewportAndDropTheTitle(AnsiTerminalBuffer buffer)
+    {
+        buffer.Process("[?1006l[?1002l[?1000l[<u[>4m[?1004l[?2031l[?2004l");
+        buffer.Process("[?25l[H");
+        buffer.Process("PS> Show-Image sample.png[K\r\n");
+        buffer.Process("[K\r\n[K\r\n[K\r\n");
+        buffer.Process("PS> claude[K\r\n");
+        for (int row = 5; row < 10; row++)
+        {
+            buffer.Process("[K\r\n");
+        }
+
+        buffer.Process("[6;1H]0;[?25h");
+    }
+
     [Theory]
     [InlineData("4;1;50", 1, 50)]
     [InlineData("4;2;75", 2, 75)]
