@@ -1988,9 +1988,44 @@ internal sealed class AnsiTerminalBuffer
 
     private void DecodeCsi(char final, string rawParameters)
     {
-        ClearWrapPending();
-        DispatchCsi(CsiDecoder.Decode(final, rawParameters));
+        CsiCommand command = CsiDecoder.Decode(final, rawParameters);
+        if (!KeepsDeferredWrap(command))
+        {
+            ClearWrapPending();
+        }
+
+        DispatchCsi(command);
     }
+
+    /// <summary>
+    /// Whether a CSI sequence leaves a deferred wrap standing. A character written into the last
+    /// column does not move the cursor past it; it leaves the wrap pending, and the next printable
+    /// character is what performs it. Only placing the cursor or editing the line under it cancels
+    /// that. Attribute changes and queries do not, and cancelling on those puts the next character
+    /// on top of the last cell instead of at the start of the following row - which is how Claude
+    /// Code's input caret ended up hidden in the rule above it, the rule filling the row and the
+    /// caret's colour arriving between the two.
+    /// </summary>
+    private bool KeepsDeferredWrap(CsiCommand command) => command.Final switch
+    {
+        'm' => true, // SGR, and CSI > 4 ; Ps m (modifyOtherKeys)
+        'n' => true, // device status report
+        'c' => true, // device attributes
+        'i' => true, // media copy - consumed, no printer is attached
+        't' => true, // window operations: reports and the title stack only
+        'q' => true, // cursor style, DECSCA, XTVERSION
+        // Mode changes. These are the ones that matter in practice: a program redrawing a full-width
+        // rule wraps the redraw in DECSET 2026 and hides the cursor with DECSET 25, so one of these
+        // is what usually sits between the last column and the character that should wrap. The few
+        // modes that do reposition - DECCOLM, DECOM, the alternate screen, save/restore - each set
+        // the flag themselves rather than relying on it having been cleared up front.
+        'h' or 'l' => true,
+        // Save and restore carry the flag themselves, so they must see it intact - the same reason
+        // ESC 7 and ESC 8 are excluded. CSI u is also the kitty keyboard stack, which is a query.
+        'u' => true,
+        's' => command.IsPrivate || !_leftRightMarginEnabled, // DECSLRM does home the cursor
+        _ => false
+    };
 
     private void DispatchCsi(CsiCommand command)
     {
@@ -3753,6 +3788,7 @@ internal sealed class AnsiTerminalBuffer
 
     private void MoveCursorHome()
     {
+        ClearWrapPending();
         _cursorRow = GetTopRowLimit();
         _cursorColumn = _originMode && _leftRightMarginEnabled ? _leftMargin : 0;
     }
