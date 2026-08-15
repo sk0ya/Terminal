@@ -656,6 +656,124 @@ public sealed class TerminalSurfaceControlTests
         });
     }
 
+    /// <summary>
+    /// A glyph the font draws wider than the cells the width table gave it has to be squeezed back
+    /// into them. U+26A0 is one cell by the table - and by the reckoning of whatever program laid
+    /// out the screen - but no monospace font on this machine draws it that narrow: Cascadia Mono
+    /// has no glyph for it and lands on Segoe UI Emoji at over two cells, HackGen has one and draws
+    /// it full width. Letting it paint at its own size puts its ink in the next character's cell.
+    /// </summary>
+    [Fact]
+    public void SurfaceKeepsAnOversizedGlyphInsideItsCell()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot([CreateLine("⚠")]));
+
+            bool[] columns = RenderInkColumns(surface);
+            int rightmost = LastInkColumn(columns);
+            double cellWidth = surface.CharacterCellSize.Width;
+
+            Assert.True(rightmost >= 0, "Expected the glyph to paint something.");
+            Assert.True(
+                rightmost < surface.Padding.Left + cellWidth,
+                $"Ink reached column {rightmost}, past the one cell (width {cellWidth:0.##}) the glyph owns.");
+        });
+    }
+
+    /// <summary>
+    /// The bug this guards: a font that carries a full-width glyph for a codepoint the width table
+    /// counts as one cell - HackGen does this for U+26A0, U+23BF, U+2713 and friends, all of which
+    /// Claude Code puts at the head of its lines - used to shift every character after it one cell
+    /// right for the rest of the segment, because the whole segment was handed to a single
+    /// FormattedText that advanced by the font's widths rather than by cells.
+    /// </summary>
+    [Fact]
+    public void SurfaceKeepsTextOnTheGridAfterAGlyphTheFontDrawsWide()
+    {
+        RunSta(() =>
+        {
+            if (!TryGetInstalledFontFamily("HackGenNerd Console", out FontFamily? family))
+            {
+                return;
+            }
+
+            int WithLeadingCharacter(string leading)
+            {
+                var surface = CreateSurface();
+                surface.FontFamily = family;
+                surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+                    [CreateLine(leading + "|")]));
+                return LastInkColumn(RenderInkColumns(surface));
+            }
+
+            int reference = WithLeadingCharacter(" ");
+            int afterWideGlyph = WithLeadingCharacter("⚠");
+
+            Assert.True(reference >= 0, "Expected the reference line to paint something.");
+            Assert.True(
+                Math.Abs(afterWideGlyph - reference) <= 1,
+                $"The '|' landed at column {afterWideGlyph} behind U+26A0 but at {reference} behind a space; "
+                    + "the cell grid must not depend on what precedes a character.");
+        });
+    }
+
+    private static bool TryGetInstalledFontFamily(string name, out FontFamily? family)
+    {
+        family = Fonts.SystemFontFamilies.FirstOrDefault(
+            candidate => candidate.FamilyNames.Values.Contains(name, StringComparer.OrdinalIgnoreCase));
+        return family is not null;
+    }
+
+    /// <summary>Columns of the painted surface that carry ink, i.e. anything lighter than the background.</summary>
+    private static bool[] RenderInkColumns(TerminalSurfaceControl surface)
+    {
+        const int Width = 640;
+        const int Height = 320;
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var onRender = typeof(TerminalSurfaceControl).GetMethod("OnRender", flags, [typeof(DrawingContext)])!;
+        var visual = new DrawingVisual();
+        using (DrawingContext context = visual.RenderOpen())
+        {
+            onRender.Invoke(surface, [context]);
+        }
+
+        var bitmap = new RenderTargetBitmap(Width, Height, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(visual);
+        byte[] pixels = new byte[Width * Height * 4];
+        bitmap.CopyPixels(pixels, Width * 4, 0);
+
+        var columns = new bool[Width];
+        for (int y = 0; y < Height; y++)
+        {
+            int row = y * Width * 4;
+            for (int x = 0; x < Width; x++)
+            {
+                int offset = row + (x * 4);
+                if (pixels[offset] + pixels[offset + 1] + pixels[offset + 2] > 150)
+                {
+                    columns[x] = true;
+                }
+            }
+        }
+
+        return columns;
+    }
+
+    private static int LastInkColumn(bool[] columns)
+    {
+        for (int x = columns.Length - 1; x >= 0; x--)
+        {
+            if (columns[x])
+            {
+                return x;
+            }
+        }
+
+        return -1;
+    }
+
     private static void ForceRender(TerminalSurfaceControl surface)
     {
         var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;

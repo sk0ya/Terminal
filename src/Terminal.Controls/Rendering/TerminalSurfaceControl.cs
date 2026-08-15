@@ -56,6 +56,16 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private FontFallbackResolver? _fontFallback;
     private bool _fontLigaturesEnabled;
     private TextFormatter? _textFormatter;
+    // Distance from a line's top to its baseline, measured the way FormattedText places text, so a
+    // grid-locked glyph run lands on exactly the row FormattedText used to draw.
+    private double _baselineY;
+    // Advance of one cell expressed in em units of the primary font. A font's own advance divided by
+    // this gives the cells that glyph wants, with the em size cancelling out.
+    private double _primaryAdvanceEm;
+    // Weight/style variants of an already-resolved glyph typeface, keyed by the regular face the
+    // fallback resolver hands back. Building a Typeface and pulling its GlyphTypeface is far too
+    // costly to repeat per character.
+    private readonly Dictionary<(GlyphTypeface Resolved, bool Italic, bool Bold), GlyphTypeface?> _glyphVariants = [];
     private Size _cellSize = new(8, 16);
     private double _pixelsPerDip = 1.0;
     private bool _metricsDirty = true;
@@ -1290,62 +1300,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                     continue;
                 }
 
-                string segText = segment.Snapshot.Text;
-                Typeface primaryTypeface = segment.Snapshot.Italic ? _italicTypeface! : _typeface!;
-                FontWeight fontWeight = segment.Snapshot.Bold ? FontWeights.SemiBold : FontWeights.Regular;
-                Brush foreground = GetBrush(ResolveForegroundColor(segment.Snapshot.Foreground));
-                TextDecorationCollection? decorations = BuildDecorations(segment.Snapshot);
-                FontFallbackResolver? fallback = _fontFallback;
-                bool ambiguousAsWide = _ambiguousAsWide;
-                bool italic = segment.Snapshot.Italic;
-                bool blink = segment.Snapshot.Blink;
-
-                if (fallback is null)
-                {
-                    commands.Add(CreateRunCommand(segText, primaryTypeface, isPrimary: true, fontWeight, foreground,
-                        decorations, segment.StartCell * _cellSize.Width, blink));
-                    continue;
-                }
-
-                int[] starts = StringInfo.ParseCombiningCharacters(segText);
-                double cellX = segment.StartCell * _cellSize.Width;
-                int runStart = 0;
-                double runCellX = cellX;
-                GlyphTypeface? runGlyph = null;
-
-                for (int i = 0; i < starts.Length; i++)
-                {
-                    int elemStart = starts[i];
-                    int elemEnd = i + 1 < starts.Length ? starts[i + 1] : segText.Length;
-                    int codepoint = char.ConvertToUtf32(segText, elemStart);
-                    GlyphTypeface? resolved = fallback.Resolve(codepoint);
-
-                    if (i == 0)
-                    {
-                        runGlyph = resolved;
-                    }
-                    else if (!ReferenceEquals(resolved, runGlyph))
-                    {
-                        string runText = segText[runStart..elemStart];
-                        Typeface tf = ResolveTypeface(runGlyph, primaryTypeface, italic);
-                        commands.Add(CreateRunCommand(runText, tf, IsPrimaryGlyph(runGlyph), fontWeight, foreground,
-                            decorations, runCellX, blink));
-                        runStart = elemStart;
-                        runCellX = cellX;
-                        runGlyph = resolved;
-                    }
-
-                    string elem = segText[elemStart..elemEnd];
-                    cellX += EstimateTextElementCellWidth(elem, ambiguousAsWide) * _cellSize.Width;
-                }
-
-                if (runStart < segText.Length)
-                {
-                    string runText = segText[runStart..];
-                    Typeface tf = ResolveTypeface(runGlyph, primaryTypeface, italic);
-                    commands.Add(CreateRunCommand(runText, tf, IsPrimaryGlyph(runGlyph), fontWeight, foreground,
-                        decorations, runCellX, blink));
-                }
+                AppendSegmentCommands(commands, segment);
             }
 
             // Images are pinned to a cell and never move the cursor, so the text of the rows they
@@ -1375,8 +1330,333 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         }
     }
 
-    private bool IsPrimaryGlyph(GlyphTypeface? glyphTypeface)
-        => glyphTypeface is null || ReferenceEquals(glyphTypeface, _primaryGlyphTypeface);
+    // One segment's paint commands, with every glyph locked to the cell grid: a grapheme cluster is
+    // advanced by the number of cells the buffer gave it, never by the advance its font happens to
+    // carry. Fonts disagree with the width table more often than they look like they would - HackGen
+    // draws U+26A0, U+23BF and U+2713 full width while the table, and the program that laid out the
+    // screen, count them as one cell each - and those glyphs live in the primary font, so nothing
+    // about the font selection gives the disagreement away. Handing a whole segment to one
+    // FormattedText therefore slid every character after such a glyph one cell right for the rest of
+    // the line, while its background, selection and cursor stayed on the grid.
+    private void AppendSegmentCommands(List<IDrawCommand> commands, TerminalLineSegmentLayout segment)
+    {
+        AnsiTerminalBuffer.TerminalRenderSegmentSnapshot snapshot = segment.Snapshot;
+        string segText = snapshot.Text;
+        Typeface primaryTypeface = snapshot.Italic ? _italicTypeface! : _typeface!;
+        FontWeight fontWeight = snapshot.Bold ? FontWeights.SemiBold : FontWeights.Regular;
+        Brush foreground = GetBrush(ResolveForegroundColor(snapshot.Foreground));
+        bool blink = snapshot.Blink;
+        double cellWidth = _cellSize.Width;
+        double startX = segment.StartCell * cellWidth;
+
+        // Ligatures deliberately leave the cell grid - joining -> into one glyph is the whole point -
+        // so that path keeps shaping the segment as a unit, decorations included.
+        FontFallbackResolver? fallback = _fontFallback;
+        if (_fontLigaturesEnabled || fallback is null || _primaryGlyphTypeface is null || _primaryAdvanceEm <= 0)
+        {
+            commands.Add(CreateRunCommand(
+                segText, primaryTypeface, fontWeight, foreground,
+                BuildDecorations(snapshot), startX, blink));
+            return;
+        }
+
+        bool ambiguousAsWide = _ambiguousAsWide;
+        bool italic = snapshot.Italic;
+        bool bold = snapshot.Bold;
+        int[] starts = StringInfo.ParseCombiningCharacters(segText);
+        var glyphIndices = new List<ushort>();
+        var advances = new List<double>();
+        GlyphTypeface? runFont = null;
+        double runX = startX;
+        double x = startX;
+
+        for (int i = 0; i < starts.Length; i++)
+        {
+            int elemStart = starts[i];
+            int elemEnd = i + 1 < starts.Length ? starts[i + 1] : segText.Length;
+            string elem = segText[elemStart..elemEnd];
+            int cellSpan = EstimateTextElementCellWidth(elem, ambiguousAsWide);
+            double advance = cellSpan * cellWidth;
+
+            if (TryResolveGridGlyph(elem, primaryTypeface, italic, bold, fallback,
+                    out GlyphTypeface? font, out ushort glyphIndex, out double naturalCells))
+            {
+                // A glyph drawn wider than the cells it owns may reach over the blank cells that
+                // follow it - they have nothing to hide, and terminal UIs put a space after a
+                // leading symbol almost as a rule. Only what still does not fit is shrunk, and
+                // either way the advance stays one cell so nothing downstream moves.
+                double room = cellSpan + CountFollowingBlankCells(segText, starts, i + 1);
+                if (naturalCells > room * OversizeGlyphTolerance)
+                {
+                    FlushRun();
+                    commands.Add(new GlyphRunCommand(
+                        font!, [glyphIndex], [advance], x, _baselineY, FontSize,
+                        (float)_pixelsPerDip, foreground, room / naturalCells, _cellSize.Height / 2, blink));
+                }
+                else
+                {
+                    if (glyphIndices.Count > 0 && !ReferenceEquals(font, runFont))
+                    {
+                        FlushRun();
+                    }
+
+                    if (glyphIndices.Count == 0)
+                    {
+                        runFont = font;
+                        runX = x;
+                    }
+
+                    glyphIndices.Add(glyphIndex);
+                    advances.Add(advance);
+                }
+            }
+            else
+            {
+                // Combining sequences, emoji sequences and codepoints no font on the list covers:
+                // hand the cluster to FormattedText, which shapes and font-links it properly. It is
+                // drawn on its own at its own cell, so whatever width it comes out at stays there.
+                FlushRun();
+                double room = cellSpan + CountFollowingBlankCells(segText, starts, i + 1);
+                commands.Add(CreateClusterFallbackCommand(
+                    elem, primaryTypeface, italic, fontWeight, fallback, foreground, x,
+                    room * cellWidth, blink));
+            }
+
+            x += advance;
+        }
+
+        FlushRun();
+        AppendDecorationCommands(commands, snapshot, startX, snapshot.CellLength * cellWidth, foreground, blink);
+
+        void FlushRun()
+        {
+            if (glyphIndices.Count == 0)
+            {
+                return;
+            }
+
+            commands.Add(new GlyphRunCommand(
+                runFont!, [.. glyphIndices], [.. advances], runX, _baselineY, FontSize,
+                (float)_pixelsPerDip, foreground, scale: 1.0, fitAnchorY: 0, blink));
+            glyphIndices.Clear();
+            advances.Clear();
+            runFont = null;
+        }
+    }
+
+    // How far past its cells a glyph may reach before it is shrunk. Rounding between the cell
+    // width (a measured, pixel-snapped FormattedText) and a font's own advance is worth a fraction
+    // of a percent, so anything under a few percent is left alone.
+    private const double OversizeGlyphTolerance = 1.02;
+
+    /// <summary>
+    /// Blank cells immediately after <paramref name="index"/> within the same segment - room an
+    /// over-wide glyph can reach into without covering anything. Only this segment is looked at, so
+    /// the space borrowed always carries this segment's own background.
+    /// </summary>
+    private static int CountFollowingBlankCells(string text, int[] starts, int index)
+    {
+        int cells = 0;
+        for (int i = index; i < starts.Length; i++)
+        {
+            int start = starts[i];
+            int end = i + 1 < starts.Length ? starts[i + 1] : text.Length;
+            if (end - start != 1 || text[start] != ' ')
+            {
+                break;
+            }
+
+            cells++;
+        }
+
+        return cells;
+    }
+
+    /// <summary>
+    /// Resolves a grapheme cluster to a single glyph that can be placed on the grid by index, along
+    /// with the number of cells the font wants for it. Clusters that are not exactly one scalar
+    /// value - combining sequences, emoji sequences, unpaired surrogates - are refused, because
+    /// placing those correctly needs the shaping a raw glyph run does not do.
+    /// </summary>
+    private bool TryResolveGridGlyph(
+        string element,
+        Typeface primaryTypeface,
+        bool italic,
+        bool bold,
+        FontFallbackResolver fallback,
+        out GlyphTypeface? font,
+        out ushort glyphIndex,
+        out double naturalCells)
+    {
+        font = null;
+        glyphIndex = 0;
+        naturalCells = 1;
+
+        if (!TryGetSingleRune(element, out Rune rune))
+        {
+            return false;
+        }
+
+        GlyphTypeface? resolved = fallback.Resolve(rune.Value);
+        if (resolved is null)
+        {
+            return false;
+        }
+
+        GlyphTypeface? variant = ResolveGlyphVariant(resolved, primaryTypeface, italic, bold);
+        GlyphTypeface use = variant is not null && variant.CharacterToGlyphMap.ContainsKey(rune.Value)
+            ? variant
+            : resolved;
+        if (!use.CharacterToGlyphMap.TryGetValue(rune.Value, out glyphIndex))
+        {
+            return false;
+        }
+
+        font = use;
+        naturalCells = use.AdvanceWidths[glyphIndex] / _primaryAdvanceEm;
+        return true;
+    }
+
+    private static bool TryGetSingleRune(string element, out Rune rune)
+    {
+        if (Rune.TryGetRuneAt(element, 0, out rune))
+        {
+            return rune.Utf16SequenceLength == element.Length;
+        }
+
+        rune = default;
+        return false;
+    }
+
+    private GlyphTypeface? ResolveGlyphVariant(
+        GlyphTypeface resolved,
+        Typeface primaryTypeface,
+        bool italic,
+        bool bold)
+    {
+        var key = (resolved, italic, bold);
+        if (_glyphVariants.TryGetValue(key, out GlyphTypeface? cached))
+        {
+            return cached;
+        }
+
+        Typeface typeface = ResolveTypeface(resolved, primaryTypeface, italic);
+        if (bold)
+        {
+            typeface = new Typeface(typeface.FontFamily, typeface.Style, FontWeights.SemiBold, typeface.Stretch);
+        }
+
+        GlyphTypeface? variant = typeface.TryGetGlyphTypeface(out GlyphTypeface? glyphTypeface)
+            ? glyphTypeface
+            : null;
+        _glyphVariants[key] = variant;
+        return variant;
+    }
+
+    private IDrawCommand CreateClusterFallbackCommand(
+        string element,
+        Typeface primaryTypeface,
+        bool italic,
+        FontWeight fontWeight,
+        FontFallbackResolver fallback,
+        Brush foreground,
+        double x,
+        double allotted,
+        bool blink)
+    {
+        GlyphTypeface? resolved = Rune.TryGetRuneAt(element, 0, out Rune first)
+            ? fallback.Resolve(first.Value)
+            : null;
+        var formatted = new FormattedText(
+            element,
+            CultureInfo.CurrentCulture,
+            FlowDirection.LeftToRight,
+            ResolveTypeface(resolved, primaryTypeface, italic),
+            FontSize,
+            foreground,
+            _pixelsPerDip);
+        formatted.SetFontWeight(fontWeight);
+
+        double width = formatted.WidthIncludingTrailingWhitespace;
+        double scale = width > allotted * OversizeGlyphTolerance && width > 0 ? allotted / width : 1.0;
+        return new FormattedTextCommand(formatted, x, scale, _cellSize.Height / 2, blink);
+    }
+
+    // Underlines and their relatives used to ride along on the run's FormattedText, which meant they
+    // drifted with it. They belong to the cells, not to the glyphs, so they are drawn across the
+    // segment's own cell span - the same span its background rectangle covers.
+    private void AppendDecorationCommands(
+        List<IDrawCommand> commands,
+        AnsiTerminalBuffer.TerminalRenderSegmentSnapshot snapshot,
+        double x,
+        double width,
+        Brush foreground,
+        bool blink)
+    {
+        if (snapshot.UnderlineStyle == UnderlineStyle.None && !snapshot.Strikethrough && !snapshot.Overline)
+        {
+            return;
+        }
+
+        GlyphTypeface metrics = _primaryGlyphTypeface!;
+        double size = FontSize;
+
+        if (snapshot.UnderlineStyle != UnderlineStyle.None)
+        {
+            Brush brush = snapshot.UnderlineColor is Color color
+                ? GetBrush(ResolveForegroundColor(color))
+                : foreground;
+            double thickness = Math.Max(1.0, metrics.UnderlineThickness * size);
+            double y = _baselineY - (metrics.UnderlinePosition * size);
+            Pen pen = CreateDecorationPen(brush, thickness, snapshot.UnderlineStyle);
+            commands.Add(new DecorationCommand(pen, x, width, y, blink));
+            if (snapshot.UnderlineStyle == UnderlineStyle.Double)
+            {
+                commands.Add(new DecorationCommand(pen, x, width, y + thickness + 1, blink));
+            }
+        }
+
+        if (snapshot.Strikethrough)
+        {
+            double thickness = Math.Max(1.0, metrics.StrikethroughThickness * size);
+            commands.Add(new DecorationCommand(
+                CreateDecorationPen(foreground, thickness, UnderlineStyle.Single),
+                x,
+                width,
+                _baselineY - (metrics.StrikethroughPosition * size),
+                blink));
+        }
+
+        if (snapshot.Overline)
+        {
+            double thickness = Math.Max(1.0, metrics.UnderlineThickness * size);
+            commands.Add(new DecorationCommand(
+                CreateDecorationPen(foreground, thickness, UnderlineStyle.Single),
+                x,
+                width,
+                Math.Max(thickness / 2, _baselineY - (metrics.Baseline * size)),
+                blink));
+        }
+    }
+
+    private static Pen CreateDecorationPen(Brush brush, double thickness, UnderlineStyle style)
+    {
+        var pen = new Pen(brush, thickness)
+        {
+            DashStyle = style switch
+            {
+                UnderlineStyle.Dotted => DashStyles.Dot,
+                UnderlineStyle.Dashed => DashStyles.Dash,
+                _ => DashStyles.Solid
+            }
+        };
+        if (pen.CanFreeze)
+        {
+            pen.Freeze();
+        }
+
+        return pen;
+    }
 
     // Positions one image relative to its anchor line's top-left. Cells win over pixels; when only
     // one axis is given and the aspect ratio is preserved, the other is derived from the bitmap.
@@ -1498,14 +1778,13 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private IDrawCommand CreateRunCommand(
         string text,
         Typeface typeface,
-        bool isPrimary,
         FontWeight fontWeight,
         Brush foreground,
         TextDecorationCollection? decorations,
         double relativeX,
         bool blink)
     {
-        if (_fontLigaturesEnabled && isPrimary)
+        if (_fontLigaturesEnabled)
         {
             TextLine line = FormatLigatureRun(text, typeface, fontWeight, foreground, decorations);
             return new TextLineCommand(line, relativeX, blink);
@@ -1525,7 +1804,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             formatted.SetTextDecorations(decorations);
         }
 
-        return new FormattedTextCommand(formatted, relativeX, blink);
+        return new FormattedTextCommand(formatted, relativeX, scale: 1.0, fitAnchorY: 0, blink);
     }
 
     private TextLine FormatLigatureRun(
@@ -1618,6 +1897,12 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         _cellSize = new Size(
             Math.Max(1.0, text.WidthIncludingTrailingWhitespace),
             SnapToDevicePixelsUp(measuredHeight, dpi.DpiScaleY));
+        _baselineY = text.Baseline;
+        _glyphVariants.Clear();
+        _primaryAdvanceEm = _primaryGlyphTypeface is { } primary &&
+            primary.CharacterToGlyphMap.TryGetValue('W', out ushort cellGlyph)
+                ? primary.AdvanceWidths[cellGlyph]
+                : 0;
         _metricsDirty = false;
     }
 
@@ -1869,12 +2154,106 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         void Render(DrawingContext drawingContext, double offsetX, double offsetY);
     }
 
-    private sealed class FormattedTextCommand(FormattedText text, double relativeX, bool blink) : IDrawCommand
+    private sealed class FormattedTextCommand(
+        FormattedText text,
+        double relativeX,
+        double scale,
+        double fitAnchorY,
+        bool blink) : IDrawCommand
     {
         public bool Blink => blink;
 
         public void Render(DrawingContext drawingContext, double offsetX, double offsetY)
-            => drawingContext.DrawText(text, new Point(relativeX + offsetX, offsetY));
+        {
+            var origin = new Point(relativeX + offsetX, offsetY);
+            if (scale >= 1.0)
+            {
+                drawingContext.DrawText(text, origin);
+                return;
+            }
+
+            drawingContext.PushTransform(
+                CreateFitTransform(scale, origin.X, fitAnchorY + offsetY));
+            drawingContext.DrawText(text, origin);
+            drawingContext.Pop();
+        }
+    }
+
+    // Paints a run of glyphs at exact cell positions: the advance handed to each glyph is the cell
+    // width the buffer assigned it, so nothing downstream of an odd glyph can drift. A glyph the
+    // font draws wider than its cells arrives as a run of its own, with scale shrinking it back in.
+    private sealed class GlyphRunCommand(
+        GlyphTypeface typeface,
+        ushort[] glyphIndices,
+        double[] advanceWidths,
+        double relativeX,
+        double baselineY,
+        double emSize,
+        float pixelsPerDip,
+        Brush foreground,
+        double scale,
+        double fitAnchorY,
+        bool blink) : IDrawCommand
+    {
+        public bool Blink => blink;
+
+        public void Render(DrawingContext drawingContext, double offsetX, double offsetY)
+        {
+            var origin = new Point(relativeX + offsetX, baselineY + offsetY);
+            // The origin is what moves between repaints, and a GlyphRun bakes it in, so the run is
+            // assembled here from the arrays that were the expensive part to work out.
+            var run = new GlyphRun(
+                typeface,
+                bidiLevel: 0,
+                isSideways: false,
+                renderingEmSize: emSize,
+                pixelsPerDip: pixelsPerDip,
+                glyphIndices: glyphIndices,
+                baselineOrigin: origin,
+                advanceWidths: advanceWidths,
+                glyphOffsets: null,
+                characters: null,
+                deviceFontName: null,
+                clusterMap: null,
+                caretStops: null,
+                language: null);
+
+            if (scale >= 1.0)
+            {
+                drawingContext.DrawGlyphRun(foreground, run);
+                return;
+            }
+
+            drawingContext.PushTransform(CreateFitTransform(scale, origin.X, fitAnchorY + offsetY));
+            drawingContext.DrawGlyphRun(foreground, run);
+            drawingContext.Pop();
+        }
+    }
+
+    private sealed class DecorationCommand(Pen pen, double relativeX, double width, double relativeY, bool blink)
+        : IDrawCommand
+    {
+        public bool Blink => blink;
+
+        public void Render(DrawingContext drawingContext, double offsetX, double offsetY)
+        {
+            double y = relativeY + offsetY;
+            drawingContext.DrawLine(
+                pen,
+                new Point(relativeX + offsetX, y),
+                new Point(relativeX + width + offsetX, y));
+        }
+    }
+
+    // Shrinks an over-wide glyph into the cells it owns. The scale is uniform - squeezing only the
+    // horizontal axis turns a warning triangle into a sliver - anchored at the left edge of the
+    // cell so the glyph's width maps onto its span exactly, and vertically at the middle of the row
+    // so the smaller glyph stays where the eye expects it instead of sinking to the baseline.
+    private static Transform CreateFitTransform(double scale, double anchorX, double anchorY)
+    {
+        var transform = new ScaleTransform(scale, scale, anchorX, anchorY);
+        transform.Freeze();
+        return transform;
     }
 
     private sealed class TextLineCommand(TextLine line, double relativeX, bool blink) : IDrawCommand, IDisposable
