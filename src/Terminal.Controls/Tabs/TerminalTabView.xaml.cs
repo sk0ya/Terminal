@@ -1013,6 +1013,8 @@ public partial class TerminalTabView : UserControl
                 launchCommandLine,
                 workingDirectory,
                 CreateTerminalEnvironmentVariables());
+            // Innermost, so a capture records exactly what the pty produced and consumed.
+            inner = RawSessionCapture.WrapIfEnabled(inner, launchCommandLine);
             if (!settings.EnableSessionLogging)
             {
                 return inner;
