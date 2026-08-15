@@ -60,14 +60,12 @@ public sealed class TerminalLineSnapshotBuilderTests
         AnsiTerminalBuffer.TerminalRenderLineSnapshot snapshot = TerminalLineSnapshotBuilder.CreateSnapshot(
             line,
             cursorColumn: 1,
-            anchorColumn: 1,
             showCursor: true,
             screenReverse: false,
             defaultForeground: Colors.White,
             defaultBackground: Colors.Black,
             cursorAccent: Colors.Orange);
 
-        Assert.Equal(1, snapshot.AnchorSegmentIndex);
         Assert.Equal(2, snapshot.Segments.Length);
         Assert.Equal(Colors.Black, snapshot.Segments[1].Foreground);
         Assert.Equal(Colors.White, snapshot.Segments[1].Background);
@@ -77,7 +75,6 @@ public sealed class TerminalLineSnapshotBuilderTests
         TerminalLineSnapshotBuilder.CreateSnapshot(
             line,
             cursorColumn: -1,
-            anchorColumn: -1,
             showCursor: false,
             screenReverse: false,
             defaultForeground: Colors.White,

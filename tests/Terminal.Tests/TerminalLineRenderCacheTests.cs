@@ -224,7 +224,7 @@ public sealed class TerminalLineRenderCacheTests
     }
 
     private static AnsiTerminalBuffer.TerminalRenderLineSnapshot Line(string text, int? cellLength = null) =>
-        new(-1, cellLength ?? text.Length, [new AnsiTerminalBuffer.TerminalRenderSegmentSnapshot(
+        new(cellLength ?? text.Length, [new AnsiTerminalBuffer.TerminalRenderSegmentSnapshot(
             text, cellLength ?? text.Length, Colors.White, Colors.Black, false, false, UnderlineStyle.None,
             null, false, false, null, false)]);
 

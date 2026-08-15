@@ -57,7 +57,6 @@ public sealed class TerminalSurfaceControlTests
             surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
             [
                 new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
-                    AnchorSegmentIndex: -1,
                     CellLength: 0,
                     Segments: [],
                     Images: [image])
@@ -110,7 +109,6 @@ public sealed class TerminalSurfaceControlTests
                 surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
                 [
                     new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
-                        AnchorSegmentIndex: -1,
                         CellLength: 0,
                         Segments: [],
                         Images: [placed])
@@ -151,7 +149,6 @@ public sealed class TerminalSurfaceControlTests
             surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
             [
                 new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
-                    AnchorSegmentIndex: -1,
                     CellLength: 0,
                     Segments: [],
                     Images: [image]),
@@ -802,7 +799,6 @@ public sealed class TerminalSurfaceControlTests
     private static AnsiTerminalBuffer.TerminalRenderLineSnapshot CreateLine(string text)
     {
         return new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
-            AnchorSegmentIndex: -1,
             CellLength: text.Length,
             [
                 new AnsiTerminalBuffer.TerminalRenderSegmentSnapshot(
@@ -823,7 +819,6 @@ public sealed class TerminalSurfaceControlTests
     private static AnsiTerminalBuffer.TerminalRenderLineSnapshot CreateDecoratedLine(string text)
     {
         return new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
-            AnchorSegmentIndex: -1,
             CellLength: text.Length,
             [
                 new AnsiTerminalBuffer.TerminalRenderSegmentSnapshot(

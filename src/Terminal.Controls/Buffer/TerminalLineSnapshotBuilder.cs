@@ -22,7 +22,6 @@ internal static class TerminalLineSnapshotBuilder
     public static AnsiTerminalBuffer.TerminalRenderLineSnapshot CreateSnapshot(
         TerminalLine line,
         int cursorColumn,
-        int anchorColumn,
         bool showCursor,
         bool screenReverse,
         Color defaultForeground,
@@ -33,7 +32,6 @@ internal static class TerminalLineSnapshotBuilder
         if (visibleLength == 0)
         {
             return new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
-                anchorColumn == 0 ? 0 : -1,
                 0,
                 [],
                 line.LineSize,
@@ -44,15 +42,8 @@ internal static class TerminalLineSnapshotBuilder
         var segments = new List<AnsiTerminalBuffer.TerminalRenderSegmentSnapshot>();
         ResolvedStyle? currentStyle = null;
         int currentSegmentCellLength = 0;
-        int anchorSegmentIndex = -1;
         for (int column = 0; column < visibleLength; column++)
         {
-            if (anchorColumn == column)
-            {
-                FlushSegment(segments, text, currentStyle, ref currentSegmentCellLength);
-                anchorSegmentIndex = segments.Count;
-            }
-
             TerminalCell cell = line.Cells[column];
             if (cell.IsContinuation)
             {
@@ -79,13 +70,7 @@ internal static class TerminalLineSnapshotBuilder
         }
 
         FlushSegment(segments, text, currentStyle, ref currentSegmentCellLength);
-        if (anchorColumn == visibleLength)
-        {
-            anchorSegmentIndex = segments.Count;
-        }
-
         return new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
-            anchorSegmentIndex,
             visibleLength,
             segments.ToArray(),
             line.LineSize,

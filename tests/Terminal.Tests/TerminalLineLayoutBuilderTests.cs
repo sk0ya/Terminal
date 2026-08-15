@@ -27,7 +27,7 @@ public sealed class TerminalLineLayoutBuilderTests
             "", 0, Colors.Green, italic: true);
         AnsiTerminalBuffer.TerminalRenderSegmentSnapshot last = Segment(
             "界x", 3, Colors.Blue, italic: true, hyperlink: "file:///tmp/x");
-        var snapshot = new AnsiTerminalBuffer.TerminalRenderLineSnapshot(0, 4, [first, empty, last]);
+        var snapshot = new AnsiTerminalBuffer.TerminalRenderLineSnapshot(4, [first, empty, last]);
 
         TerminalLineLayout layout = TerminalLineLayoutBuilder.Create(snapshot, ambiguousAsWide: false);
 
@@ -62,7 +62,7 @@ public sealed class TerminalLineLayoutBuilderTests
     [Fact]
     public void CreateSupportsAnEmptyLine()
     {
-        var snapshot = new AnsiTerminalBuffer.TerminalRenderLineSnapshot(-1, 0, []);
+        var snapshot = new AnsiTerminalBuffer.TerminalRenderLineSnapshot(0, []);
 
         TerminalLineLayout layout = TerminalLineLayoutBuilder.Create(snapshot, ambiguousAsWide: false);
 
@@ -77,7 +77,7 @@ public sealed class TerminalLineLayoutBuilderTests
     public void CreatePassesAmbiguousWidthPolicyToTextCellMapping()
     {
         var snapshot = new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
-            -1, 3, [Segment("·X", 3, Colors.White)]);
+            3, [Segment("·X", 3, Colors.White)]);
 
         TerminalLineLayout narrow = TerminalLineLayoutBuilder.Create(snapshot, ambiguousAsWide: false);
         TerminalLineLayout wide = TerminalLineLayoutBuilder.Create(snapshot, ambiguousAsWide: true);
@@ -90,7 +90,7 @@ public sealed class TerminalLineLayoutBuilderTests
     public void CreateTreatsACombiningGraphemeAsOneMappedCell()
     {
         var snapshot = new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
-            -1, 2, [Segment("e\u0301", 1, Colors.White), Segment("x", 1, Colors.White)]);
+            2, [Segment("e\u0301", 1, Colors.White), Segment("x", 1, Colors.White)]);
 
         TerminalLineLayout layout = TerminalLineLayoutBuilder.Create(snapshot, ambiguousAsWide: false);
 
@@ -108,7 +108,7 @@ public sealed class TerminalLineLayoutBuilderTests
         int expectedTextIndexAtOneAndAHalfCells)
     {
         var snapshot = new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
-            -1, lineCellLength, [Segment("x", 3, Colors.White)]);
+            lineCellLength, [Segment("x", 3, Colors.White)]);
 
         TerminalLineLayout layout = TerminalLineLayoutBuilder.Create(snapshot, ambiguousAsWide: false);
 

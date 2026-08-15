@@ -4,8 +4,6 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Terminal.Unicode;
@@ -732,34 +730,6 @@ internal sealed class AnsiTerminalBuffer
         return new TerminalRenderSnapshot(_combinedRenderCache, _ambiguousWidthIsWide);
     }
 
-    public TerminalDocumentSnapshot CreateDocument(FontFamily fontFamily, double fontSize, bool showCursor)
-    {
-        var document = new FlowDocument
-        {
-            FontFamily = fontFamily,
-            FontSize = fontSize,
-            Background = GetBrush(_defaultBackground),
-            TextAlignment = TextAlignment.Left
-        };
-
-        var paragraph = new Paragraph();
-        FrameworkElement? cursorAnchor = null;
-
-        bool isFirstLine = true;
-        foreach (TerminalRenderLineSnapshot lineSnapshot in CreateRenderSnapshot(showCursor).Lines)
-        {
-            AppendLineSnapshot(paragraph.Inlines, lineSnapshot, ref isFirstLine, ref cursorAnchor);
-        }
-
-        if (paragraph.Inlines.Count == 0)
-        {
-            paragraph.Inlines.Add(new Run(string.Empty));
-        }
-
-        document.Blocks.Add(paragraph);
-        return new TerminalDocumentSnapshot(document, cursorAnchor);
-    }
-
     public void ClearScrollback()
     {
         _screenStore.ClearScrollback();
@@ -870,7 +840,7 @@ internal sealed class AnsiTerminalBuffer
         _scrollbackRenderCache.Clear();
         foreach (TerminalLine line in _scrollback)
         {
-            _scrollbackRenderCache.Add(CreateLineSnapshot(line, -1, -1, showCursor: false));
+            _scrollbackRenderCache.Add(CreateLineSnapshot(line, -1, showCursor: false));
         }
 
         _scrollbackCombinedCacheDirty = true;
@@ -912,8 +882,7 @@ internal sealed class AnsiTerminalBuffer
         for (int row = 0; row < _rows; row++)
         {
             int cursorColumn = showCursor && _cursorVisible && row == _cursorRow ? _cursorColumn : -1;
-            int anchorColumn = row == _cursorRow ? _cursorColumn : -1;
-            _screenRenderCache[row] = CreateLineSnapshot(_screen[row], cursorColumn, anchorColumn, showCursor);
+            _screenRenderCache[row] = CreateLineSnapshot(_screen[row], cursorColumn, showCursor);
         }
 
         _screenRenderCacheDirty = false;
@@ -3862,7 +3831,7 @@ internal sealed class AnsiTerminalBuffer
 
         for (int index = expectedPreviousCount; index < newCount; index++)
         {
-            _scrollbackRenderCache.Add(CreateLineSnapshot(_scrollback[index], -1, -1, showCursor: false));
+            _scrollbackRenderCache.Add(CreateLineSnapshot(_scrollback[index], -1, showCursor: false));
         }
 
         _scrollbackCombinedCacheDirty = true;
@@ -3951,12 +3920,11 @@ internal sealed class AnsiTerminalBuffer
         builder.Append(ExtractLineText(line).TrimEnd());
     }
 
-    private TerminalRenderLineSnapshot CreateLineSnapshot(TerminalLine line, int cursorColumn, int anchorColumn, bool showCursor)
+    private TerminalRenderLineSnapshot CreateLineSnapshot(TerminalLine line, int cursorColumn, bool showCursor)
     {
         return TerminalLineSnapshotBuilder.CreateSnapshot(
             line,
             cursorColumn,
-            anchorColumn,
             showCursor,
             _screenReverse,
             _defaultForeground,
@@ -3964,85 +3932,9 @@ internal sealed class AnsiTerminalBuffer
             _cursorAccent);
     }
 
-    private void AppendLineSnapshot(InlineCollection inlines, TerminalRenderLineSnapshot lineSnapshot, ref bool isFirstLine, ref FrameworkElement? cursorAnchor)
-    {
-        if (!isFirstLine)
-        {
-            inlines.Add(new LineBreak());
-        }
-
-        isFirstLine = false;
-        if (lineSnapshot.Segments.Length == 0)
-        {
-            if (lineSnapshot.AnchorSegmentIndex == 0)
-            {
-                InsertCursorAnchor(inlines, ref cursorAnchor);
-            }
-
-            return;
-        }
-
-        for (int index = 0; index < lineSnapshot.Segments.Length; index++)
-        {
-            if (lineSnapshot.AnchorSegmentIndex == index)
-            {
-                InsertCursorAnchor(inlines, ref cursorAnchor);
-            }
-
-            AppendSegment(inlines, lineSnapshot.Segments[index]);
-        }
-
-        if (lineSnapshot.AnchorSegmentIndex == lineSnapshot.Segments.Length)
-        {
-            InsertCursorAnchor(inlines, ref cursorAnchor);
-        }
-    }
 
 
-    internal static void AppendSegment(InlineCollection inlines, TerminalRenderSegmentSnapshot segment)
-    {
-        var run = new Run(segment.Text);
-        run.FontWeight = segment.Bold ? FontWeights.SemiBold : FontWeights.Regular;
-        if (segment.Italic) run.FontStyle = FontStyles.Italic;
 
-        if (segment.Hyperlink is not null &&
-            Uri.TryCreate(segment.Hyperlink, UriKind.Absolute, out Uri? navigateUri))
-        {
-            var hyperlink = new Hyperlink(run)
-            {
-                NavigateUri = navigateUri,
-                Foreground = GetBrush(segment.Foreground),
-                Background = GetBrush(segment.Background),
-            };
-            ApplyTextDecorations(hyperlink, segment.UnderlineStyle, segment.UnderlineColor, segment.Strikethrough, segment.Overline);
-            inlines.Add(hyperlink);
-            return;
-        }
-
-        ApplyTextDecorations(run, segment.UnderlineStyle, segment.UnderlineColor, segment.Strikethrough, segment.Overline);
-        run.Foreground = GetBrush(segment.Foreground);
-        run.Background = GetBrush(segment.Background);
-        inlines.Add(run);
-    }
-
-    private static void ApplyTextDecorations(Inline element, UnderlineStyle underlineStyle, Color? underlineColor, bool strikethrough, bool overline)
-    {
-        if (underlineStyle == UnderlineStyle.None && !strikethrough && !overline)
-        {
-            element.TextDecorations = null;
-            return;
-        }
-
-        var combined = new TextDecorationCollection();
-        if (underlineStyle != UnderlineStyle.None)
-        {
-            AddUnderlineDecorations(combined, underlineStyle, underlineColor, foreground: null);
-        }
-
-        if (strikethrough) foreach (TextDecoration d in TextDecorations.Strikethrough) combined.Add(d);
-        if (overline) foreach (TextDecoration d in TextDecorations.OverLine) combined.Add(d);
-        element.TextDecorations = combined;
-    }
 
     internal static void AddUnderlineDecorations(TextDecorationCollection decorations, UnderlineStyle style, Color? underlineColor, Color? foreground)
     {
@@ -4077,30 +3969,6 @@ internal sealed class AnsiTerminalBuffer
     }
 
 
-    internal static void InsertCursorAnchor(InlineCollection inlines, ref FrameworkElement? cursorAnchor)
-    {
-        if (cursorAnchor is not null)
-        {
-            return;
-        }
-
-        var anchor = new Border
-        {
-            Width = 0,
-            Height = 0,
-            Background = Brushes.Transparent,
-            Focusable = false,
-            IsHitTestVisible = false
-        };
-
-        var container = new InlineUIContainer(anchor)
-        {
-            BaselineAlignment = BaselineAlignment.TextBottom
-        };
-
-        inlines.Add(container);
-        cursorAnchor = anchor;
-    }
 
 
     private static void CopyPalette(IReadOnlyList<Color> source, Color[] destination)
@@ -4227,7 +4095,6 @@ internal sealed class AnsiTerminalBuffer
         bool AmbiguousWidthIsWide = false);
 
     internal readonly record struct TerminalRenderLineSnapshot(
-        int AnchorSegmentIndex,
         int CellLength,
         TerminalRenderSegmentSnapshot[] Segments,
         TerminalLineSize LineSize = TerminalLineSize.SingleWidth,
@@ -4235,8 +4102,7 @@ internal sealed class AnsiTerminalBuffer
     {
         public bool ContentEquals(TerminalRenderLineSnapshot other)
         {
-            if (AnchorSegmentIndex != other.AnchorSegmentIndex ||
-                CellLength != other.CellLength ||
+            if (CellLength != other.CellLength ||
                 LineSize != other.LineSize ||
                 Segments.Length != other.Segments.Length)
             {
@@ -4271,7 +4137,4 @@ internal sealed class AnsiTerminalBuffer
         string? Hyperlink,
         bool Blink = false);
 
-    internal readonly record struct TerminalDocumentSnapshot(
-        FlowDocument Document,
-        FrameworkElement? CursorAnchor);
 }
