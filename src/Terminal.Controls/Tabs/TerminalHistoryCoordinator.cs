@@ -59,6 +59,7 @@ internal sealed class TerminalHistoryCoordinator(int limit)
 
     public bool Record(string command)
     {
+        command = SanitizeCommand(command);
         if (string.IsNullOrWhiteSpace(command))
         {
             return false;
@@ -122,7 +123,7 @@ internal sealed class TerminalHistoryCoordinator(int limit)
         _history.Clear();
         for (int index = combined.Count - 1; index >= 0; index--)
         {
-            string command = combined[index];
+            string command = SanitizeCommand(combined[index]);
             if (!string.IsNullOrWhiteSpace(command) && seen.Add(command))
             {
                 _history.Add(command);
@@ -319,4 +320,78 @@ internal sealed class TerminalHistoryCoordinator(int limit)
 
     private static bool IsWordBoundary(char value) =>
         value is ' ' or '/' or '\\' or '-' or '_' or '.' or ':' or '\t';
+
+    /// <summary>
+    /// Removes OSC 133 shell-integration markers before a command enters the
+    /// terminal's history. They are terminal metadata, not part of the command
+    /// the user entered, and can otherwise leak in through a shell's persisted
+    /// history or a malformed shell-integration report.
+    /// </summary>
+    internal static string SanitizeCommand(string command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        if (command.Length == 0)
+        {
+            return command;
+        }
+
+        var sanitized = new System.Text.StringBuilder(command.Length);
+        for (int index = 0; index < command.Length; index++)
+        {
+            if (TrySkipOsc133(command, index, out int nextIndex))
+            {
+                index = nextIndex - 1;
+                continue;
+            }
+
+            sanitized.Append(command[index]);
+        }
+
+        return sanitized.ToString();
+    }
+
+    private static bool TrySkipOsc133(string text, int start, out int nextIndex)
+    {
+        nextIndex = start;
+        int payloadStart;
+        if (text[start] == '\u001b' && start + 1 < text.Length && text[start + 1] == ']')
+        {
+            payloadStart = start + 2;
+        }
+        else if (text[start] == '\u009d')
+        {
+            payloadStart = start + 1;
+        }
+        else
+        {
+            return false;
+        }
+
+        int separator = text.IndexOf(';', payloadStart);
+        if (separator < 0 || !text.AsSpan(payloadStart, separator - payloadStart).SequenceEqual("133"))
+        {
+            return false;
+        }
+
+        for (int index = separator + 1; index < text.Length; index++)
+        {
+            if (text[index] == '\a' || text[index] == '\u009c')
+            {
+                nextIndex = index + 1;
+                return true;
+            }
+
+            if (text[index] == '\u001b' && index + 1 < text.Length && text[index + 1] == '\\')
+            {
+                nextIndex = index + 2;
+                return true;
+            }
+        }
+
+        // A truncated marker has no command text after it, so discard the
+        // remainder rather than exposing terminal control data in history.
+        nextIndex = text.Length;
+        return true;
+    }
 }

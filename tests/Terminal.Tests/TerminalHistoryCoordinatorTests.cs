@@ -342,4 +342,33 @@ public sealed class TerminalHistoryCoordinatorTests
         Assert.Equal(0, action.SelectionDelta);
         Assert.False(action.Handled);
     }
+
+    [Theory]
+    [InlineData("\u001b]133;A\a", "")]
+    [InlineData("git status\u001b]133;C\a", "git status")]
+    [InlineData("\u009d133;D;0\u009cgit status", "git status")]
+    [InlineData("git\u001b]133;A\u001b\\ status", "git status")]
+    public void SanitizeCommandRemovesOsc133Markers(string command, string expected)
+    {
+        Assert.Equal(expected, TerminalHistoryCoordinator.SanitizeCommand(command));
+    }
+
+    [Fact]
+    public void RecordIgnoresCommandThatOnlyContainsOsc133()
+    {
+        var history = new TerminalHistoryCoordinator(10);
+
+        Assert.False(history.Record("\u001b]133;A\a"));
+        Assert.Empty(history.History);
+    }
+
+    [Fact]
+    public void MergeSeedHistorySanitizesPersistedCommands()
+    {
+        var history = new TerminalHistoryCoordinator(10);
+
+        history.MergeSeedHistory(["ls", "\u001b]133;D;0\a", "git status\u001b]133;C\a"]);
+
+        Assert.Equal(["ls", "git status"], history.History);
+    }
 }
