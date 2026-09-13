@@ -16,10 +16,11 @@ There is only one package to bump and push.
 
 ## Version bump
 
-Bump the single `<Version>` in `src/Terminal.Controls/Terminal.Controls.csproj`
-(a patch bump, e.g. `1.0.22 → 1.0.23`, unless told otherwise) regardless of whether
-the change was in `Terminal.Core/**` or `Terminal.Controls/**` — Core ships inside
-the Controls package now. Leave `Terminal.Core`'s `<Version>` alone; it is unused for packaging.
+Bump the single `<Version>` in the root `Directory.Build.props` (the PropertyGroup
+conditioned on `Terminal.Core`/`Terminal.Controls`) — a patch bump, e.g. `1.0.22 → 1.0.23`,
+unless told otherwise — regardless of whether the change was in `Terminal.Core/**` or
+`Terminal.Controls/**`. Core ships inside the Controls package, so both assemblies share
+that one version. The csproj files do not carry a `<Version>`.
 
 ## Steps
 
@@ -28,7 +29,7 @@ the Controls package now. Leave `Terminal.Core`'s `<Version>` alone; it is unuse
    dotnet test tests/Terminal.Tests/Terminal.Tests.csproj -c Debug --nologo
    ```
 
-2. **Bump version** — edit the `<Version>` in the relevant csproj(s), then commit:
+2. **Bump version** — edit the `<Version>` in `Directory.Build.props`, then commit:
    ```pwsh
    git commit -am "Bump Terminal.Controls package to <X.Y.Z>"
    ```
