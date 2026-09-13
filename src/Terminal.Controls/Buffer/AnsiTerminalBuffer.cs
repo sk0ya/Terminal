@@ -180,7 +180,6 @@ internal sealed class AnsiTerminalBuffer
     private ScreenState? _pendingSyntheticAlternateScreenBackup;
     private string _lastPrintedClusterText = string.Empty;
     private int _lastPrintedClusterWidth;
-    private int _pendingClusterWidth;
     private bool _pendingClusterJoinNext;
     private int _pendingClusterRegionalIndicatorCount;
     private bool _renderCacheDirty = true;
@@ -1066,28 +1065,28 @@ internal sealed class AnsiTerminalBuffer
 
         if (_pendingClusterText.Length == 0)
         {
-            if (TryExtendPreviousCluster(mappedRune, width))
+            if (TryExtendPreviousCluster(mappedRune))
             {
                 return;
             }
 
-            StartPendingCluster(mappedRune, width);
+            StartPendingCluster(mappedRune);
             return;
         }
 
         if (ShouldAppendToPendingCluster(mappedRune))
         {
-            AppendPendingClusterRune(mappedRune, width);
+            AppendPendingClusterRune(mappedRune);
             return;
         }
 
         FlushPendingCluster();
-        if (TryExtendPreviousCluster(mappedRune, width))
+        if (TryExtendPreviousCluster(mappedRune))
         {
             return;
         }
 
-        StartPendingCluster(mappedRune, width);
+        StartPendingCluster(mappedRune);
     }
 
     private void ProcessEscapeCommand(char ch)
@@ -3537,39 +3536,80 @@ internal sealed class AnsiTerminalBuffer
         }
 
         TerminalCell cell = targetLine.Cells[targetColumn];
-        targetLine.Cells[targetColumn] = cell with { Text = cell.Text + rune.ToString() };
-        _lastPrintedClusterText = targetLine.Cells[targetColumn].Text;
-        _lastPrintedClusterWidth = Math.Max(1, cell.Width);
+        string clusterText = cell.Text + rune.ToString();
+        int clusterWidth = TerminalWidthCalculator.EstimateGraphemeWidth(
+            clusterText.AsSpan(),
+            _ambiguousWidthIsWide);
+        int normalizedWidth = Math.Clamp(clusterWidth, 1, 2);
+        targetLine.Cells[targetColumn] = cell with
+        {
+            Text = clusterText,
+            Width = normalizedWidth
+        };
+        _lastPrintedClusterText = clusterText;
+        _lastPrintedClusterWidth = normalizedWidth;
+
+        if (cell.Width == 1 && normalizedWidth == 2 && targetColumn + 1 < _columns)
+        {
+            targetLine.Cells[targetColumn + 1] = new TerminalCell(
+                string.Empty,
+                cell.Style,
+                cell.Hyperlink,
+                IsContinuation: true,
+                Width: 0);
+
+            // A combining selector can arrive after the base character has already advanced the
+            // cursor. Only move the cursor when the affected cluster is on the current line; a base
+            // character at the end of a wrapped line must not move a cursor that is already on the
+            // next row.
+            if (ReferenceEquals(targetLine, _screen[_cursorRow]))
+            {
+                int nextColumn = Math.Max(_cursorColumn, targetColumn + 2);
+                if (nextColumn >= _columns)
+                {
+                    _cursorColumn = _columns - 1;
+                    _wrapPending = _autoWrapEnabled;
+                }
+                else
+                {
+                    _cursorColumn = nextColumn;
+                }
+            }
+        }
+        else if (cell.Width == 2 && normalizedWidth == 1 && targetColumn + 1 < _columns &&
+            targetLine.Cells[targetColumn + 1].IsContinuation)
+        {
+            targetLine.Cells[targetColumn + 1] = CreateBlankCell(cell.Style);
+            if (ReferenceEquals(targetLine, _screen[_cursorRow]) && _cursorColumn > targetColumn + 1)
+            {
+                _cursorColumn = targetColumn + 1;
+                _wrapPending = false;
+            }
+        }
     }
 
     private void AppendClusterExtension(Rune rune)
     {
         if (_pendingClusterText.Length > 0)
         {
-            AppendPendingClusterRune(rune, width: 0);
+            AppendPendingClusterRune(rune);
             return;
         }
 
         AppendCombiningRune(rune);
     }
 
-    private void StartPendingCluster(Rune rune, int width)
+    private void StartPendingCluster(Rune rune)
     {
         ClearPendingCluster();
         _pendingClusterText.Append(rune.ToString());
-        _pendingClusterWidth = Math.Clamp(width, 1, 2);
         _pendingClusterJoinNext = false;
         _pendingClusterRegionalIndicatorCount = IsRegionalIndicator(rune) ? 1 : 0;
     }
 
-    private void AppendPendingClusterRune(Rune rune, int width)
+    private void AppendPendingClusterRune(Rune rune)
     {
         _pendingClusterText.Append(rune.ToString());
-        if (width > 0)
-        {
-            _pendingClusterWidth = Math.Max(_pendingClusterWidth, Math.Clamp(width, 1, 2));
-        }
-
         _pendingClusterJoinNext = IsZeroWidthJoiner(rune);
         _pendingClusterRegionalIndicatorCount = IsRegionalIndicator(rune)
             ? _pendingClusterRegionalIndicatorCount + 1
@@ -3589,19 +3629,22 @@ internal sealed class AnsiTerminalBuffer
             return;
         }
 
-        PutText(_pendingClusterText.ToString(), _pendingClusterWidth);
+        string clusterText = _pendingClusterText.ToString();
+        int clusterWidth = TerminalWidthCalculator.EstimateGraphemeWidth(
+            clusterText.AsSpan(),
+            _ambiguousWidthIsWide);
+        PutText(clusterText, clusterWidth);
         ClearPendingCluster();
     }
 
     private void ClearPendingCluster()
     {
         _pendingClusterText.Clear();
-        _pendingClusterWidth = 0;
         _pendingClusterJoinNext = false;
         _pendingClusterRegionalIndicatorCount = 0;
     }
 
-    private bool TryExtendPreviousCluster(Rune rune, int width)
+    private bool TryExtendPreviousCluster(Rune rune)
     {
         int targetColumn = FindPreviousClusterColumn();
         if (targetColumn < 0)
@@ -3616,10 +3659,14 @@ internal sealed class AnsiTerminalBuffer
             return false;
         }
 
-        int normalizedWidth = Math.Clamp(Math.Max(cell.Width, width), 1, 2);
+        string clusterText = cell.Text + rune.ToString();
+        int clusterWidth = TerminalWidthCalculator.EstimateGraphemeWidth(
+            clusterText.AsSpan(),
+            _ambiguousWidthIsWide);
+        int normalizedWidth = Math.Clamp(Math.Max(cell.Width, clusterWidth), 1, 2);
         line.Cells[targetColumn] = cell with
         {
-            Text = cell.Text + rune.ToString(),
+            Text = clusterText,
             Width = normalizedWidth
         };
         _lastPrintedClusterText = line.Cells[targetColumn].Text;

@@ -59,9 +59,6 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     // Distance from a line's top to its baseline, measured the way FormattedText places text, so a
     // grid-locked glyph run lands on exactly the row FormattedText used to draw.
     private double _baselineY;
-    // Advance of one cell expressed in em units of the primary font. A font's own advance divided by
-    // this gives the cells that glyph wants, with the em size cancelling out.
-    private double _primaryAdvanceEm;
     // Weight/style variants of an already-resolved glyph typeface, keyed by the regular face the
     // fallback resolver hands back. Building a Typeface and pulling its GlyphTypeface is far too
     // costly to repeat per character.
@@ -1350,9 +1347,20 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         double startX = segment.StartCell * cellWidth;
 
         // Ligatures deliberately leave the cell grid - joining -> into one glyph is the whole point -
-        // so that path keeps shaping the segment as a unit, decorations included.
+        // so that path keeps shaping a safe primary-font run as a unit, decorations included.
+        // Non-ASCII and width-sensitive segments must stay on the grid even when ligatures are on;
+        // sending those through one FormattedText would reintroduce the same advance-width drift.
         FontFallbackResolver? fallback = _fontFallback;
-        if (_fontLigaturesEnabled || fallback is null || _primaryGlyphTypeface is null || _primaryAdvanceEm <= 0)
+        if (_fontLigaturesEnabled &&
+            (IsLigatureSafeRun(segText, snapshot.CellLength) || RequiresTextShaping(segText)))
+        {
+            commands.Add(CreateRunCommand(
+                segText, primaryTypeface, fontWeight, foreground,
+                BuildDecorations(snapshot), startX, blink));
+            return;
+        }
+
+        if (fallback is null || _primaryGlyphTypeface is null)
         {
             commands.Add(CreateRunCommand(
                 segText, primaryTypeface, fontWeight, foreground,
@@ -1379,19 +1387,20 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             double advance = cellSpan * cellWidth;
 
             if (TryResolveGridGlyph(elem, primaryTypeface, italic, bold, fallback,
-                    out GlyphTypeface? font, out ushort glyphIndex, out double naturalCells))
+                    out GlyphTypeface? font, out ushort glyphIndex, out double naturalWidth))
             {
                 // A glyph drawn wider than the cells it owns may reach over the blank cells that
                 // follow it - they have nothing to hide, and terminal UIs put a space after a
                 // leading symbol almost as a rule. Only what still does not fit is shrunk, and
                 // either way the advance stays one cell so nothing downstream moves.
                 double room = cellSpan + CountFollowingBlankCells(segText, starts, i + 1);
-                if (naturalCells > room * OversizeGlyphTolerance)
+                double allottedWidth = room * cellWidth;
+                if (naturalWidth > allottedWidth * OversizeGlyphTolerance)
                 {
                     FlushRun();
                     commands.Add(new GlyphRunCommand(
                         font!, [glyphIndex], [advance], x, _baselineY, FontSize,
-                        (float)_pixelsPerDip, foreground, room / naturalCells, _cellSize.Height / 2, blink));
+                        (float)_pixelsPerDip, foreground, allottedWidth / naturalWidth, _cellSize.Height / 2, blink));
                 }
                 else
                 {
@@ -1444,6 +1453,68 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         }
     }
 
+    private static bool IsLigatureSafeRun(string text, int cellLength)
+    {
+        if (text.Length == 0 || text.Length != cellLength)
+        {
+            return false;
+        }
+
+        // The terminal width table gives every printable ASCII scalar one cell, and programming
+        // fonts define their ASCII glyphs on one common advance. Unicode, combining marks, emoji,
+        // and fallback fonts do not have that guarantee and therefore use the grid path above.
+        foreach (char ch in text)
+        {
+            if (ch > 0x7F || char.IsControl(ch))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // GlyphRun only consumes nominal glyph mappings. These scripts need the shaping engine to
+    // form joining/contextual glyphs and, for the RTL ranges, to resolve visual order as well.
+    // Keep this list conservative: a false positive retains correct shaping at the cost of giving
+    // up programming-font ligatures for that segment, while a false negative corrupts the text.
+    private static readonly (int Start, int End)[] ComplexShapingRanges =
+    [
+        (0x0590, 0x08FF), // Hebrew, Arabic, Syriac, Thaana, NKo and related RTL scripts
+        (0x0900, 0x0FFF), // Indic, Thai, Lao and Tibetan scripts
+        (0x1000, 0x109F), // Myanmar
+        (0x10A00, 0x10A5F), // Kharoshthi
+        (0x11000, 0x11FFF), // Brahmic and related Indic scripts
+        (0x1200, 0x137F), // Ethiopic
+        (0x1780, 0x17FF), // Khmer
+        (0x1800, 0x18AF), // Mongolian
+        (0x1A00, 0x1AAF), // Tai Tham and related scripts
+        (0x1B00, 0x1BFF), // Balinese, Sundanese and Batak scripts
+        (0x1C00, 0x1CFF), // Lepcha, Ol Chiki and related scripts
+        (0x1E900, 0x1E95F), // Adlam
+        (0x1EE00, 0x1EEFF), // Arabic mathematical alphabetic symbols
+        (0xA800, 0xA87F), // Syloti Nagri and Phags-pa
+        (0xFB1D, 0xFDFF), // Hebrew and Arabic presentation forms
+        (0xFE70, 0xFEFF), // Arabic presentation forms
+    ];
+
+    private static bool RequiresTextShaping(string text)
+    {
+        foreach (Rune rune in text.EnumerateRunes())
+        {
+            int value = rune.Value;
+            foreach ((int start, int end) in ComplexShapingRanges)
+            {
+                if (value >= start && value <= end)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     // How far past its cells a glyph may reach before it is shrunk. Rounding between the cell
     // width (a measured, pixel-snapped FormattedText) and a font's own advance is worth a fraction
     // of a percent, so anything under a few percent is left alone.
@@ -1486,11 +1557,11 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         FontFallbackResolver fallback,
         out GlyphTypeface? font,
         out ushort glyphIndex,
-        out double naturalCells)
+        out double naturalWidth)
     {
         font = null;
         glyphIndex = 0;
-        naturalCells = 1;
+        naturalWidth = 0;
 
         if (!TryGetSingleRune(element, out Rune rune))
         {
@@ -1513,7 +1584,11 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         }
 
         font = use;
-        naturalCells = use.AdvanceWidths[glyphIndex] / _primaryAdvanceEm;
+        // GlyphTypeface.AdvanceWidths are normalized to the em square. Convert them to the same
+        // DIPs used by GlyphRun's renderingEmSize before comparing against the terminal cell width.
+        // Comparing normalized advances through the primary font loses precision when the cell width
+        // came from FormattedText (Display mode and DPI rounding make the two values differ slightly).
+        naturalWidth = use.AdvanceWidths[glyphIndex] * FontSize;
         return true;
     }
 
@@ -1899,10 +1974,6 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             SnapToDevicePixelsUp(measuredHeight, dpi.DpiScaleY));
         _baselineY = text.Baseline;
         _glyphVariants.Clear();
-        _primaryAdvanceEm = _primaryGlyphTypeface is { } primary &&
-            primary.CharacterToGlyphMap.TryGetValue('W', out ushort cellGlyph)
-                ? primary.AdvanceWidths[cellGlyph]
-                : 0;
         _metricsDirty = false;
     }
 

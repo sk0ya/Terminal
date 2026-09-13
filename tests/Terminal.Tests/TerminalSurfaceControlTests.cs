@@ -1,4 +1,5 @@
-﻿using System.Linq;
+﻿using System.Globalization;
+using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Windows;
@@ -653,6 +654,22 @@ public sealed class TerminalSurfaceControlTests
         });
     }
 
+    [Fact]
+    public void Surface_UsesTextFormatterForComplexScriptsWhenLigaturesAreEnabled()
+    {
+        RunSta(() =>
+        {
+            var surface = CreateSurface();
+            surface.FontLigaturesEnabled = true;
+            surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+                [CreateLine("العربية")]));
+
+            ForceRender(surface);
+
+            Assert.True(surface.HasTextFormatter);
+        });
+    }
+
     /// <summary>
     /// A glyph the font draws wider than the cells the width table gave it has to be squeezed back
     /// into them. U+26A0 is one cell by the table - and by the reckoning of whatever program laid
@@ -700,6 +717,7 @@ public sealed class TerminalSurfaceControlTests
             {
                 var surface = CreateSurface();
                 surface.FontFamily = family;
+                surface.FontLigaturesEnabled = true;
                 surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
                     [CreateLine(leading + "|")]));
                 return LastInkColumn(RenderInkColumns(surface));
@@ -713,6 +731,33 @@ public sealed class TerminalSurfaceControlTests
                 Math.Abs(afterWideGlyph - reference) <= 1,
                 $"The '|' landed at column {afterWideGlyph} behind U+26A0 but at {reference} behind a space; "
                     + "the cell grid must not depend on what precedes a character.");
+        });
+    }
+
+    [Theory]
+    [InlineData("1️⃣")]
+    [InlineData("♥️")]
+    [InlineData("👨‍👩‍👧‍👦")]
+    public void SurfaceKeepsTextOnTheGridAfterUnicodeClusters(string prefix)
+    {
+        RunSta(() =>
+        {
+            int LastMarkerColumn(string leading)
+            {
+                var surface = CreateSurface();
+                surface.FontLigaturesEnabled = true;
+                surface.UpdateSnapshot(new AnsiTerminalBuffer.TerminalRenderSnapshot(
+                    [CreateLine(leading + "|")]));
+                return LastInkColumn(RenderInkColumns(surface));
+            }
+
+            int reference = LastMarkerColumn(new string(' ', EstimateCellLength(prefix)));
+            int afterCluster = LastMarkerColumn(prefix);
+
+            Assert.True(reference >= 0, "Expected the reference marker to paint something.");
+            Assert.True(
+                Math.Abs(afterCluster - reference) <= 1,
+                $"The marker landed at {afterCluster} after {prefix}, but at {reference} after a space.");
         });
     }
 
@@ -798,12 +843,13 @@ public sealed class TerminalSurfaceControlTests
 
     private static AnsiTerminalBuffer.TerminalRenderLineSnapshot CreateLine(string text)
     {
+        int cellLength = EstimateCellLength(text);
         return new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
-            CellLength: text.Length,
+            CellLength: cellLength,
             [
                 new AnsiTerminalBuffer.TerminalRenderSegmentSnapshot(
                     text,
-                    CellLength: text.Length,
+                    CellLength: cellLength,
                     Colors.White,
                     Colors.Black,
                     Bold: false,
@@ -818,12 +864,13 @@ public sealed class TerminalSurfaceControlTests
 
     private static AnsiTerminalBuffer.TerminalRenderLineSnapshot CreateDecoratedLine(string text)
     {
+        int cellLength = EstimateCellLength(text);
         return new AnsiTerminalBuffer.TerminalRenderLineSnapshot(
-            CellLength: text.Length,
+            CellLength: cellLength,
             [
                 new AnsiTerminalBuffer.TerminalRenderSegmentSnapshot(
                     text,
-                    CellLength: text.Length,
+                    CellLength: cellLength,
                     Colors.White,
                     Colors.Black,
                     Bold: true,
@@ -834,6 +881,22 @@ public sealed class TerminalSurfaceControlTests
                     Overline: true,
                     Hyperlink: null)
             ]);
+    }
+
+    private static int EstimateCellLength(string text)
+    {
+        int[] starts = StringInfo.ParseCombiningCharacters(text);
+        int total = 0;
+        for (int index = 0; index < starts.Length; index++)
+        {
+            int start = starts[index];
+            int end = index + 1 < starts.Length ? starts[index + 1] : text.Length;
+            total += TerminalWidthCalculator.EstimateGraphemeWidth(
+                text.AsSpan(start, end - start),
+                ambiguousAsWide: false);
+        }
+
+        return total;
     }
 
     private static double MeasureTextWidth(TerminalSurfaceControl surface, string text)

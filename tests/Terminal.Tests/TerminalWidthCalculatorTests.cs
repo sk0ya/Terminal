@@ -23,11 +23,56 @@ public sealed class TerminalWidthCalculatorTests
     [InlineData("e\u0301", false, 1)]
     [InlineData("👩‍💻", false, 2)]
     [InlineData("🇯🇵", false, 2)]
+    [InlineData("1️⃣", false, 2)]
+    [InlineData("#️⃣", false, 2)]
+    [InlineData("♥️", false, 2)]
+    [InlineData("♥︎", false, 1)]
+    [InlineData("A\uFE0F", false, 1)]
+    [InlineData("·\uFE0F", false, 1)]
+    [InlineData("👨‍👩‍👧‍👦", false, 2)]
+    [InlineData("👍🏽", false, 2)]
     [InlineData("·", false, 1)]
     [InlineData("·", true, 2)]
     public void GraphemeWidthUsesTheMaximumVisibleScalarWidth(string text, bool ambiguousAsWide, int expected)
     {
         Assert.Equal(expected, TerminalWidthCalculator.EstimateGraphemeWidth(text.AsSpan(), ambiguousAsWide));
+    }
+
+    [Theory]
+    [InlineData("1️⃣X", 3)]
+    [InlineData("♥️X", 3)]
+    [InlineData("♥︎X", 2)]
+    [InlineData("A\uFE0FX", 2)]
+    [InlineData("·\uFE0FX", 2)]
+    [InlineData("👨‍👩‍👧‍👦X", 3)]
+    public void BufferUsesClusterWidthForCursorAndSnapshot(string text, int expectedCursorColumn)
+    {
+        var buffer = new AnsiTerminalBuffer(40, 5);
+        buffer.Process(text);
+
+        Assert.Equal(expectedCursorColumn, buffer.CursorColumn);
+        AnsiTerminalBuffer.TerminalRenderLineSnapshot line =
+            buffer.CreateRenderSnapshot(showCursor: false).Lines[0];
+        Assert.Equal(expectedCursorColumn, line.CellLength);
+        Assert.Equal(text, line.Segments.Single().Text);
+    }
+
+    [Fact]
+    public void PresentationSelectorsAndKeycapMarksRemainCorrectAcrossInputChunks()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 5);
+
+        buffer.Process("1");
+        Assert.Equal(1, buffer.CursorColumn);
+
+        buffer.Process("\uFE0F");
+        buffer.Process("\u20E3X");
+
+        Assert.Equal(3, buffer.CursorColumn);
+        AnsiTerminalBuffer.TerminalRenderLineSnapshot line =
+            buffer.CreateRenderSnapshot(showCursor: false).Lines[0];
+        Assert.Equal(3, line.CellLength);
+        Assert.Equal("1️⃣X", line.Segments.Single().Text);
     }
 
     [Fact]

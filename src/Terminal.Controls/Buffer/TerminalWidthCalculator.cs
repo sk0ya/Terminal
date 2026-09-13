@@ -13,21 +13,5 @@ internal static class TerminalWidthCalculator
         UnicodeWidth.GetWidth(rune, ambiguousAsWide);
 
     public static int EstimateGraphemeWidth(ReadOnlySpan<char> element, bool ambiguousAsWide)
-    {
-        bool hasVisibleRune = false;
-        int maxWidth = 1;
-        foreach (Rune rune in element.EnumerateRunes())
-        {
-            int width = GetWidth(rune, ambiguousAsWide);
-            if (width <= 0)
-            {
-                continue;
-            }
-
-            hasVisibleRune = true;
-            maxWidth = Math.Max(maxWidth, width);
-        }
-
-        return hasVisibleRune ? maxWidth : 1;
-    }
+        => UnicodeWidth.GetGraphemeWidth(element, ambiguousAsWide);
 }
