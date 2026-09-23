@@ -155,6 +155,32 @@ public sealed class TerminalKeyboardCoordinatorTests
         Assert.Equal(TerminalKeyboardActionKind.Paste, newChord.Kind);
     }
 
+    // Ctrl+L is an ordinary control chord: it has to reach the shell as \f so PSReadLine's
+    // ClearScreen runs. It is not a terminal shortcut and must not be swallowed.
+    [Fact]
+    public void CtrlLFromTheSurfaceIsSentToTheShellAsAControlChord()
+    {
+        AssertCtrlLIsSent(TerminalKeyboardSource.Output);
+    }
+
+    [Fact]
+    public void CtrlLFromTheInputProxyIsSentToTheShellAsAControlChord()
+    {
+        AssertCtrlLIsSent(TerminalKeyboardSource.Proxy);
+    }
+
+    private void AssertCtrlLIsSent(TerminalKeyboardSource source)
+    {
+        TerminalKeyboardAction action = Resolve(
+            source,
+            TerminalKeyboardKey.Other,
+            TerminalKeyboardModifiers.Control,
+            control: "\f");
+
+        Assert.Equal(TerminalKeyboardActionKind.SendText, action.Kind);
+        Assert.Equal("\f", action.Text);
+    }
+
     private TerminalKeyboardAction Resolve(
         TerminalKeyboardSource source,
         TerminalKeyboardKey key,

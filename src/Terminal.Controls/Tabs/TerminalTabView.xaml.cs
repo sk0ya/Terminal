@@ -703,7 +703,7 @@ public partial class TerminalTabView : UserControl
             TerminalKeyboardActionKind.LocalSelection => TerminalOutput.MoveKeyboardCursor(GetEffectiveKey(e), extend: true),
             TerminalKeyboardActionKind.QueueProxyFlush => Execute(QueuePendingProxyTextFlushAfterImeConfirm, handled: false),
             TerminalKeyboardActionKind.Interrupt => Execute(SendInterrupt),
-            TerminalKeyboardActionKind.SendText => action.Text is not null && SendTerminalInput(action.Text),
+            TerminalKeyboardActionKind.SendText => action.Text is not null && SendUserInput(action.Text),
             _ => false
         };
     }
@@ -720,7 +720,7 @@ public partial class TerminalTabView : UserControl
             _ = FlushInputProxyText();
         }
 
-        return action.Text is not null && SendTerminalInput(action.Text);
+        return action.Text is not null && SendUserInput(action.Text);
     }
 
     private static bool Execute(Action action, bool handled = true)
@@ -1277,9 +1277,39 @@ public partial class TerminalTabView : UserControl
         }
     }
 
+    /// <summary>Send input the human typed or pasted, and bring the viewport back to the live
+    /// screen. Terminals scroll on keystroke: while the scrollback is being read the input still
+    /// reaches the shell, so leaving the viewport behind shows a screen that no longer exists.
+    /// Ctrl+L makes it obvious — it clears the screen and redraws the prompt at the top, and
+    /// without this the old output just stays put as though the key did nothing. Mouse reporting
+    /// and focus events deliberately do not come through here; they are not the human typing.</summary>
+    private bool SendUserInput(string text)
+    {
+        if (!SendTerminalInput(text))
+        {
+            return false;
+        }
+
+        ScrollToLiveScreen();
+        return true;
+    }
+
+    private void ScrollToLiveScreen()
+    {
+        if (_terminalBuffer.IsAlternateScreenActive)
+        {
+            return;
+        }
+
+        _viewportState.ResumeFollowing();
+        TerminalScrollHost.ScrollToVerticalOffset(
+            Math.Max(0, TerminalOutput.ExtentHeight - TerminalOutput.ViewportHeight));
+        UpdateTerminalChrome();
+    }
+
     private void SendInterrupt()
     {
-        _ = SendTerminalInput("\u0003");
+        _ = SendUserInput("\u0003");
     }
 
     private void PasteFromClipboard()
@@ -1318,7 +1348,7 @@ public partial class TerminalTabView : UserControl
 
         if (action is { Kind: TerminalPasteActionKind.Send, Text: not null })
         {
-            _ = SendTerminalInput(action.Text);
+            _ = SendUserInput(action.Text);
         }
     }
 
@@ -1863,7 +1893,7 @@ public partial class TerminalTabView : UserControl
             }
         }
 
-        return SendTerminalInput(text);
+        return SendUserInput(text);
     }
 
     private bool FlushInputProxyText()

@@ -41,6 +41,11 @@ internal sealed class TerminalViewportCoordinator(
 
     public void StopFollowing() => FollowOutput = false;
 
+    /// <summary>Follow the live screen again. Reading the scrollback stops the viewport from
+    /// following, but sending input means the human is back at the prompt, so the next render
+    /// must land on the cursor rather than leave the old output on screen.</summary>
+    public void ResumeFollowing() => FollowOutput = true;
+
     public double ResolveRestoredVerticalOffset(
         bool isAlternateScreenActive,
         double preservedDistanceFromBottom,

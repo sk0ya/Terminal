@@ -95,6 +95,46 @@ public sealed class TerminalTabViewViewportTests
         Assert.True(_coordinator.FollowOutput);
     }
 
+    // Reading the scrollback pins the viewport, but sending input means the human is back at the
+    // prompt: the next render has to land on the cursor. Without this, Ctrl+L clears the screen
+    // while the viewport stays in the history, so the key looks like it did nothing.
+    [Fact]
+    public void ResumeFollowingBringsThePinnedViewportBackToTheLiveScreen()
+    {
+        _coordinator.StopFollowing();
+        Assert.False(_coordinator.FollowOutput);
+
+        _coordinator.ResumeFollowing();
+
+        Assert.True(_coordinator.FollowOutput);
+    }
+
+    [Fact]
+    public void ResumeFollowingMakesTheNextRestoreLandAtTheBottom()
+    {
+        _coordinator.StopFollowing();
+
+        _coordinator.ResumeFollowing();
+        double offset = _coordinator.ResolveRestoredVerticalOffset(
+            isAlternateScreenActive: false,
+            preservedDistanceFromBottom: 400,
+            extentHeight: 1200,
+            viewportHeight: 700);
+
+        Assert.Equal(500, offset);
+        Assert.True(_coordinator.FollowOutput);
+    }
+
+    [Fact]
+    public void ResumeFollowingIsIdempotentWhileAlreadyFollowing()
+    {
+        Assert.True(_coordinator.FollowOutput);
+
+        _coordinator.ResumeFollowing();
+
+        Assert.True(_coordinator.FollowOutput);
+    }
+
     [Fact]
     public void AlternateScreenAlwaysFollowsAndModeTransitionIsIdempotent()
     {
