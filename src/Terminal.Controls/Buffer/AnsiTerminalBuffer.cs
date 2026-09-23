@@ -390,6 +390,16 @@ internal sealed class AnsiTerminalBuffer
             out bool mappedSavedCursorWrapPending);
 
         int screenStart = Math.Max(0, reflowed.Count - newRows);
+        // The new screen is cut from the end of the document, but trailing blank rows are not
+        // content. With scrollback present the screen's blank tail is part of the document (so a
+        // column-only resize, which keeps the row count, leaves the screen untouched), so shrinking
+        // the row count lets that blank tail fill the whole new screen and evicts the real content
+        // — including the cursor line — into the history. ConPTY then repaints the prompt into the
+        // now-blank screen, leaving the same line in both the history and the screen; the viewport
+        // still shows the stale history copy, so typing looks like it does nothing. Pull the cut
+        // back to a row that keeps the content on screen.
+        int contentEnd = Math.Max(cursorRow + 1, FindLastContentRow(reflowed) + 1);
+        screenStart = Math.Min(screenStart, Math.Max(cursorRow, contentEnd - newRows));
         int historyStart = Math.Max(0, screenStart - _screenStore.ScrollbackLimit);
         var history = new List<TerminalLine>(screenStart - historyStart);
         for (int row = historyStart; row < screenStart; row++)
@@ -398,7 +408,9 @@ internal sealed class AnsiTerminalBuffer
         }
 
         List<TerminalLine> screen = CreateScreen(newRows, newColumns, TerminalStyle.Default);
-        int copiedRows = reflowed.Count - screenStart;
+        // Pulling the cut back leaves more rows than fit; what overflows is the blank tail below
+        // the content, so drop it.
+        int copiedRows = Math.Min(newRows, reflowed.Count - screenStart);
         int targetStart = hadScrollback ? newRows - copiedRows : 0;
         for (int row = 0; row < copiedRows; row++)
         {
@@ -3926,6 +3938,20 @@ internal sealed class AnsiTerminalBuffer
         }
 
         return FindLastVisibleScreenRow(showCursor);
+    }
+
+    /// <summary>Index of the last non-blank line, ignoring the trailing blank rows; -1 when every line is blank.</summary>
+    private static int FindLastContentRow(List<TerminalLine> lines)
+    {
+        for (int row = lines.Count - 1; row >= 0; row--)
+        {
+            if (!IsLineBlank(lines[row]))
+            {
+                return row;
+            }
+        }
+
+        return -1;
     }
 
     private static bool IsLineBlank(TerminalLine line)
