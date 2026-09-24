@@ -178,6 +178,11 @@ internal sealed class AnsiTerminalBuffer
     // XTWINOPS 22/23 window-title stack (vim / tmux save & restore the title around their session).
     private readonly Stack<string> _windowTitleStack = new();
     private ScreenState? _pendingSyntheticAlternateScreenBackup;
+    // How much the last erase-all moved into the scrollback, and how long the scrollback was
+    // afterwards — enough to take the rows back if that clear turns out to have been a program
+    // entering a synthetic alternate screen. See ScrollClearedScreenIntoScrollback.
+    private int _clearedScreenScrollbackAppended;
+    private int _clearedScreenScrollbackCount;
     private string _lastPrintedClusterText = string.Empty;
     private int _lastPrintedClusterWidth;
     private bool _pendingClusterJoinNext;
@@ -904,6 +909,8 @@ internal sealed class AnsiTerminalBuffer
         ClearScrollback();
         _screenStore.ReplaceScreen(CreateScreen(_rows, _columns, TerminalStyle.Default));
         _primaryScreenBackup = null;
+        _clearedScreenScrollbackAppended = 0;
+        _clearedScreenScrollbackCount = 0;
         _screenStore.ResetAlternateState();
         _kittyImages.Clear();
         _kittyImageOrder.Clear();
@@ -2857,6 +2864,9 @@ internal sealed class AnsiTerminalBuffer
         }
 
         _pendingSyntheticAlternateScreenBackup = null;
+        // A real alternate screen restores the screen as it is now, after the clear, so whatever an
+        // earlier erase-all moved into the scrollback keeps its place there.
+        _clearedScreenScrollbackAppended = 0;
         _syntheticAlternateScreenActive = false;
         _primaryScreenBackup = CaptureScreenState();
         _screenStore.EnterAlternateScreen(_rows, _columns);
@@ -2921,6 +2931,8 @@ internal sealed class AnsiTerminalBuffer
 
     private void CaptureSyntheticAlternateScreenCandidate()
     {
+        _clearedScreenScrollbackAppended = 0;
+        _clearedScreenScrollbackCount = 0;
         if (_primaryScreenBackup is not null)
         {
             return;
@@ -2928,6 +2940,71 @@ internal sealed class AnsiTerminalBuffer
 
         _pendingSyntheticAlternateScreenBackup = CaptureScreenState();
         _screenStore.CapturePendingPrimaryScreen();
+    }
+
+    /// <summary>
+    /// Moves what the screen is showing into the scrollback, just before an erase-all blanks it.
+    /// </summary>
+    /// <remarks>
+    /// ESC[2J is what pwsh's Ctrl+L arrives as — ConPTY passes the bare sequence through — and
+    /// erasing the rows in place is how history went missing: lines that had not yet scrolled off
+    /// the screen existed nowhere else, so a clear on a screen that had never overflowed threw
+    /// everything away, while one with a scrollback appeared to keep it. Windows Terminal answers
+    /// the same sequence by scrolling the viewport away rather than blanking it, which is the
+    /// behaviour this restores: the screen empties and its contents stay reachable above.
+    /// Discarding the scrollback is ESC[3J's job alone. Trailing blank rows are left behind so the
+    /// history does not gain a gap to scroll past, and the alternate screen never contributes —
+    /// a full-screen program redrawing itself is not history.
+    /// </remarks>
+    private void ScrollClearedScreenIntoScrollback()
+    {
+        if (_primaryScreenBackup is not null)
+        {
+            return;
+        }
+
+        int lastContentRow = FindLastContentRow(_screen);
+        if (lastContentRow < 0)
+        {
+            return;
+        }
+
+        int previousScrollbackCount = _scrollback.Count;
+        int appendedCount = _screenStore.AppendScreenToScrollback(lastContentRow + 1);
+        if (appendedCount <= 0)
+        {
+            return;
+        }
+
+        UpdateAppendedScrollbackRenderCache(previousScrollbackCount, appendedCount);
+        _renderCacheDirty = true;
+        _clearedScreenScrollbackAppended = appendedCount;
+        _clearedScreenScrollbackCount = _scrollback.Count;
+    }
+
+    /// <summary>
+    /// Takes the rows back out when that same erase-all turns out to have been a program entering
+    /// a synthetic alternate screen: leaving it restores the very screen they were copied from, so
+    /// without this the shell's last screenful would also sit in the scrollback directly above it,
+    /// shown twice. Only an untouched append is taken back — if anything has reached the scrollback
+    /// since, the rows are left where they are.
+    /// </summary>
+    private void TakeBackClearedScreenScrollback()
+    {
+        int appendedCount = _clearedScreenScrollbackAppended;
+        _clearedScreenScrollbackAppended = 0;
+        if (appendedCount <= 0 || _scrollback.Count != _clearedScreenScrollbackCount)
+        {
+            return;
+        }
+
+        _screenStore.RemoveScrollbackTail(appendedCount);
+        int cachedRemoveCount = Math.Min(appendedCount, _scrollbackRenderCache.Count);
+        _scrollbackRenderCache.RemoveRange(
+            _scrollbackRenderCache.Count - cachedRemoveCount,
+            cachedRemoveCount);
+        _renderCacheDirty = true;
+        _scrollbackCombinedCacheDirty = true;
     }
 
     private ScreenState CaptureScreenState()
@@ -2979,6 +3056,9 @@ internal sealed class AnsiTerminalBuffer
 
         if (!nextTitleIsClaude)
         {
+            // The clear was an ordinary one after all, so the rows it moved into the scrollback
+            // stay there.
+            _clearedScreenScrollbackAppended = 0;
             _pendingSyntheticAlternateScreenBackup = null;
             _screenStore.ClearPendingPrimaryScreen();
             return;
@@ -2992,6 +3072,7 @@ internal sealed class AnsiTerminalBuffer
         _primaryScreenBackup = _pendingSyntheticAlternateScreenBackup ?? CaptureScreenState();
         _screenStore.PromotePendingOrCapturePrimaryScreen();
         _pendingSyntheticAlternateScreenBackup = null;
+        TakeBackClearedScreenScrollback();
         _syntheticAlternateScreenActive = true;
         _syntheticAlternateScreenEntryTitle = previousTitle;
         InvalidateScreenRenderCache();
@@ -3397,6 +3478,11 @@ internal sealed class AnsiTerminalBuffer
                 break;
             case 2:
                 CaptureSyntheticAlternateScreenCandidate();
+                if (!selective)
+                {
+                    ScrollClearedScreenIntoScrollback();
+                }
+
                 for (int row = 0; row < _rows; row++)
                 {
                     ClearEntireLine(row, selective);

@@ -102,6 +102,29 @@ internal sealed class TerminalScreenStore
         return Math.Max(overflow, 0);
     }
 
+    /// <summary>Copies the screen's first <paramref name="rowCount"/> rows into the scrollback,
+    /// and answers how many of them the scrollback kept.</summary>
+    public int AppendScreenToScrollback(int rowCount)
+    {
+        int count = Math.Clamp(rowCount, 0, Screen.Count);
+        for (int row = 0; row < count; row++)
+        {
+            AppendScrollback(CloneLine(Screen[row]));
+        }
+
+        return Math.Min(count, Scrollback.Count);
+    }
+
+    /// <summary>Drops the last <paramref name="count"/> scrollback rows.</summary>
+    public void RemoveScrollbackTail(int count)
+    {
+        int removeCount = Math.Clamp(count, 0, Scrollback.Count);
+        if (removeCount > 0)
+        {
+            Scrollback.RemoveRange(Scrollback.Count - removeCount, removeCount);
+        }
+    }
+
     public TerminalScreenMutation ScrollUp(
         int lines,
         int top,

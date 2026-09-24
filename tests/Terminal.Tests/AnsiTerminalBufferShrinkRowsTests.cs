@@ -97,10 +97,11 @@ public sealed class AnsiTerminalBufferShrinkRowsTests
 
         buffer.Resize(Columns, 12);
 
-        // 4 scrollback + 40 screen rows becomes 4 scrollback + 12 screen rows: only blanks go.
+        // 44 scrollback rows (the 4 that overflowed plus the 40 the clear scrolled away) and 40
+        // screen rows become the same 44 plus 12: only blanks go.
         int after = DocumentLines(buffer).Length;
-        Assert.Equal(44, before);
-        Assert.Equal(16, after);
+        Assert.Equal(84, before);
+        Assert.Equal(56, after);
     }
 
     // ----- the cases that already worked, and must keep working -----

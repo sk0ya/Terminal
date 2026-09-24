@@ -576,7 +576,7 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
-    public void ClearDisplayMode2RemovesInlineImages()
+    public void ClearDisplayMode2ScrollsInlineImagesOffTheScreenButKeepsThem()
     {
         const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
         var buffer = new AnsiTerminalBuffer(40, 10);
@@ -586,6 +586,24 @@ public sealed class AnsiTerminalBufferTests
 
         // Ctrl+L is handled by the shell, which normally emits clear-screen + cursor-home.
         buffer.Process("\u001b[2J\u001b[H");
+
+        // The image leaves the screen with the line it was drawn on — and rides that line into the
+        // scrollback, where the rest of the cleared screen went.
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.Empty(snapshot.Lines.Skip(buffer.ScrollbackLineCount).SelectMany(line => line.Images ?? []));
+        Assert.Single(snapshot.Lines.Take(buffer.ScrollbackLineCount).SelectMany(line => line.Images ?? []));
+    }
+
+    [Fact]
+    public void ClearDisplayMode3RemovesInlineImagesWithTheScrollback()
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
+        var buffer = new AnsiTerminalBuffer(40, 10);
+
+        buffer.Process("\u001b]1337;File=inline=1;width=4;height=3:" + png + "\u0007");
+
+        // ESC[3J is the sequence that does throw history away.
+        buffer.Process("\u001b[3J\u001b[H");
 
         Assert.Empty(buffer.CreateRenderSnapshot(showCursor: false).Lines.SelectMany(line => line.Images ?? []));
     }
@@ -3020,6 +3038,138 @@ public sealed class AnsiTerminalBufferTests
         // The active screen must still occupy its full height so the stale scrollback is
         // pushed above the viewport rather than rendered directly beneath the prompt.
         Assert.Equal(10, buffer.VisibleLineCount);
+    }
+
+    /// <summary>
+    /// The bug this guards: Ctrl+L on a screen that had never overflowed threw the session's whole
+    /// history away, while the same key on a screen with a scrollback appeared to keep it — the
+    /// difference being only that the older lines had already scrolled off. A clear scrolls the
+    /// screen away; it does not delete it.
+    /// </summary>
+    [Fact]
+    public void ClearingAScreenThatNeverOverflowedKeepsItsContentInTheScrollback()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("line0\r\nline1\r\nline2");
+        Assert.Equal(0, buffer.ScrollbackLineCount);
+
+        buffer.Process("\u001b[2J\u001b[H");
+
+        Assert.Equal(3, buffer.ScrollbackLineCount);
+        string history = buffer.CreatePlainTextSnapshot();
+        Assert.Contains("line0", history, StringComparison.Ordinal);
+        Assert.Contains("line2", history, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ClearingTheScreenLeavesTheScreenItselfEmpty()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("line0\r\nline1\r\nline2");
+        buffer.Process("\u001b[2J\u001b[H");
+
+        for (int row = 0; row < 10; row++)
+        {
+            Assert.Equal(string.Empty, buffer.GetScreenLineText(row).TrimEnd());
+        }
+    }
+
+    [Fact]
+    public void ClearingTheScreenKeepsTheLinesThatHadAlreadyScrolledOff()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        for (int i = 0; i < 14; i++)
+        {
+            buffer.Process($"line{i}\r\n");
+        }
+
+        // 5 in the scrollback, line5..line13 still on screen.
+        Assert.Equal(5, buffer.ScrollbackLineCount);
+
+        buffer.Process("\u001b[2J\u001b[H");
+
+        Assert.Equal(14, buffer.ScrollbackLineCount);
+        string history = buffer.CreatePlainTextSnapshot();
+        Assert.Contains("line0", history, StringComparison.Ordinal);
+        Assert.Contains("line13", history, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ClearingAnAlreadyBlankScreenAddsNothingToTheScrollback()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("line0");
+        buffer.Process("\u001b[2J\u001b[H");
+        Assert.Equal(1, buffer.ScrollbackLineCount);
+
+        // Ctrl+L at a prompt that has printed nothing must not pile blank rows into the history.
+        buffer.Process("\u001b[2J\u001b[H");
+
+        Assert.Equal(1, buffer.ScrollbackLineCount);
+    }
+
+    [Fact]
+    public void ClearDisplayMode3StillDiscardsTheHistory()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("line0\r\nline1");
+        buffer.Process("\u001b[3J\u001b[H");
+
+        Assert.Equal(0, buffer.ScrollbackLineCount);
+        Assert.DoesNotContain("line0", buffer.CreatePlainTextSnapshot(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ClearingTheAlternateScreenDoesNotReachTheScrollback()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("primary");
+        buffer.Process("\u001b[?1049h");
+        buffer.Process("full screen program");
+        buffer.Process("\u001b[2J\u001b[H");
+
+        Assert.Equal(0, buffer.ScrollbackLineCount);
+    }
+
+    /// <summary>
+    /// A clear that turns out to have been a program entering a synthetic alternate screen gives
+    /// its rows back: leaving restores that very screen, so a copy left in the scrollback would
+    /// show the shell's last screenful twice.
+    /// </summary>
+    [Fact]
+    public void SyntheticAlternateScreenTakesItsClearedRowsBackOutOfTheScrollback()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("primary");
+        buffer.Process("\u001b[2J\u001b[H\u001b]0;claude\u0007");
+        buffer.Process("alternate");
+
+        Assert.True(buffer.IsAlternateScreenActive);
+        Assert.Equal(0, buffer.ScrollbackLineCount);
+
+        buffer.Process("\u001b]0;\u0007");
+
+        Assert.Equal("primary", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal(0, buffer.ScrollbackLineCount);
+    }
+
+    [Fact]
+    public void AnOrdinaryClearKeepsItsRowsWhenTheTitleIsNotAProgram()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 10);
+
+        buffer.Process("primary");
+        buffer.Process("\u001b[2J\u001b[H\u001b]0;editor\u0007");
+
+        Assert.False(buffer.IsAlternateScreenActive);
+        Assert.Equal(1, buffer.ScrollbackLineCount);
     }
 
     [Fact]
