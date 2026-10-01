@@ -710,6 +710,91 @@ public sealed class AnsiTerminalBufferTests
         Assert.Equal("echo a;b\n\\", command);
     }
 
+    // A diff renderer (Claude Code's input box, for one) rewrites the tail of a line after the user
+    // inserts or deletes a character, so wide glyphs land one cell off from the ones they replace.
+    // Each case below used to leave half a glyph behind, making the line one cell wider than the
+    // screen and drawing everything after it one column to the right.
+    [Theory]
+    [InlineData("a漢b\u001b[1Gい", "い b")]              // wide over narrow + the lead of another wide
+    [InlineData("a漢b\u001b[1GいX", "いXb")]             // ...then a narrow onto the old continuation
+    [InlineData("ab漢c\u001b[4G\u001b[K", "ab")]         // EL starting on a continuation
+    [InlineData("漢字\u001b[2G\u001b[1X", "  字")]        // ECH covering only a continuation
+    [InlineData("漢字\u001b[1G\u001b[1X", "  字")]        // ECH covering only a lead
+    [InlineData("漢字\u001b[3G\u001b[1K", "")]           // EL to the left ending on a lead
+    [InlineData("a漢b\u001b[3G\u001b[P", "a b")]         // DCH starting on a continuation
+    [InlineData("a漢b\u001b[3G\u001b[@", "a   b")]       // ICH splitting a wide glyph
+    [InlineData("abcdefghijklmnopqr漢\u001b[1G\u001b[@", " abcdefghijklmnopqr")] // ICH pushing a wide glyph half off
+    public void WritesAndEditsNeverLeaveHalfAWideGlyph(string input, string expected)
+    {
+        const int columns = 20; // the buffer's minimum width
+        var buffer = new AnsiTerminalBuffer(columns, 3);
+
+        buffer.Process(input);
+
+        Assert.Equal(expected, buffer.GetScreenLineText(0).TrimEnd());
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.True(snapshot.Lines[0].CellLength <= columns);
+        AssertNoOrphanContinuationCells(buffer, row: 0);
+    }
+
+    // Selective erase must break an unprotected glyph on its edge like a plain erase does, while a
+    // protected glyph keeps both halves.
+    [Theory]
+    [InlineData("ab漢c\u001b[4G\u001b[?0K", "ab")]
+    [InlineData("ab\u001b[1\"q漢\u001b[0\"qc\u001b[4G\u001b[?0K", "ab漢")]
+    [InlineData("漢字\u001b[2G\u001b[?1K", "  字")]
+    public void SelectiveEraseNeverLeavesHalfAnUnprotectedWideGlyph(string input, string expected)
+    {
+        const int columns = 20;
+        var buffer = new AnsiTerminalBuffer(columns, 3);
+
+        buffer.Process(input);
+
+        Assert.Equal(expected, buffer.GetScreenLineText(0).TrimEnd());
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.True(snapshot.Lines[0].CellLength <= columns);
+        AssertNoOrphanContinuationCells(buffer, row: 0);
+    }
+
+    // A selector or joiner arriving late widens an already-placed narrow cell into the cell to its
+    // right. When that cell is the lead of another wide glyph, the glyph has to go as a whole.
+    [Theory]
+    [InlineData("✔漢\u001b[2G️", "✔️")]                       // VS16 widening a text-presentation symbol
+    [InlineData("a漢\u001b[1G✔‍\u001b[2G😀", "✔‍😀")]       // ZWJ joining onto the cell's cluster
+    public void WideningAClusterBreaksTheWideGlyphItTakesOver(string input, string expected)
+    {
+        const int columns = 20;
+        var buffer = new AnsiTerminalBuffer(columns, 3);
+
+        buffer.Process(input);
+
+        Assert.Equal(expected, buffer.GetScreenLineText(0).TrimEnd());
+        AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = buffer.CreateRenderSnapshot(showCursor: false);
+        Assert.True(snapshot.Lines[0].CellLength <= columns);
+        AssertNoOrphanContinuationCells(buffer, row: 0);
+    }
+
+    // An orphaned continuation is invisible to the line text and harmless on its own, which is how
+    // these bugs went unnoticed: the damage came from the next write that landed on it.
+    private static void AssertNoOrphanContinuationCells(AnsiTerminalBuffer buffer, int row)
+    {
+        var store = (TerminalScreenStore)typeof(AnsiTerminalBuffer)
+            .GetField("_screenStore", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(buffer)!;
+        TerminalCell[] cells = store.Screen[row].Cells;
+        for (int column = 0; column < cells.Length; column++)
+        {
+            if (!cells[column].IsContinuation)
+            {
+                continue;
+            }
+
+            Assert.True(
+                column > 0 && !cells[column - 1].IsContinuation && cells[column - 1].Width == 2,
+                $"Column {column} is the right half of a glyph that is not there.");
+        }
+    }
+
     [Fact]
     public void ZwjEmojiSequenceOccupiesSingleWideCluster()
     {

@@ -210,6 +210,7 @@ internal sealed class TerminalScreenStore
     public void InsertCharacters(int row, int column, int rightLimit, int count, TerminalStyle blankStyle)
     {
         int insertCount = Math.Min(Math.Max(count, 1), rightLimit - column);
+        BreakWideCellsAt(Screen[row], blankStyle, column, rightLimit - insertCount, rightLimit);
         TerminalCell[] cells = Screen[row].Cells;
         for (int target = rightLimit - 1; target >= column + insertCount; target--)
         {
@@ -222,6 +223,7 @@ internal sealed class TerminalScreenStore
     public void DeleteCharacters(int row, int column, int rightLimit, int count, TerminalStyle blankStyle)
     {
         int deleteCount = Math.Min(Math.Max(count, 1), rightLimit - column);
+        BreakWideCellsAt(Screen[row], blankStyle, column, column + deleteCount, rightLimit);
         TerminalCell[] cells = Screen[row].Cells;
         for (int target = column; target < rightLimit - deleteCount; target++)
         {
@@ -242,6 +244,7 @@ internal sealed class TerminalScreenStore
         int scrollCount = Math.Min(Math.Max(count, 1), rightLimit - left);
         for (int row = top; row <= bottom; row++)
         {
+            BreakWideCellsAt(Screen[row], blankStyle, left, left + scrollCount, rightLimit);
             TerminalCell[] cells = Screen[row].Cells;
             for (int target = left; target < rightLimit - scrollCount; target++)
             {
@@ -263,6 +266,7 @@ internal sealed class TerminalScreenStore
         int scrollCount = Math.Min(Math.Max(count, 1), rightLimit - left);
         for (int row = top; row <= bottom; row++)
         {
+            BreakWideCellsAt(Screen[row], blankStyle, left, rightLimit - scrollCount, rightLimit);
             TerminalCell[] cells = Screen[row].Cells;
             for (int target = rightLimit - 1; target >= left + scrollCount; target--)
             {
@@ -312,6 +316,10 @@ internal sealed class TerminalScreenStore
     {
         int start = Math.Clamp(startColumn, 0, columns);
         int end = Math.Clamp(endExclusive, 0, columns);
+        // Selective erase leaves protected cells alone, and a protected glyph must not lose its
+        // other half to it either - but an unprotected glyph on the edge is broken like any other.
+        BreakWideCellsStraddling(Screen[row], start, end, blankStyle, keepProtected: selective);
+
         for (int column = start; column < end; column++)
         {
             if (selective && Screen[row].Cells[column].Style.Protected)
@@ -397,7 +405,7 @@ internal sealed class TerminalScreenStore
         string? hyperlink)
     {
         TerminalLine line = Screen[row];
-        ClearWideOverlap(line, column, columns, style);
+        BreakWideCellsStraddling(line, column, column + width, style);
         line.Cells[column] = new TerminalCell(text, style, hyperlink, IsContinuation: false, Width: width);
         if (width == 2 && column + 1 < columns)
         {
@@ -410,21 +418,69 @@ internal sealed class TerminalScreenStore
         }
     }
 
-    private static void ClearWideOverlap(TerminalLine line, int column, int columns, TerminalStyle blankStyle)
+    /// <summary>
+    /// Blanks every wide character that crosses either edge of the column range about to be
+    /// rewritten, so the edit can never leave half of one behind.
+    /// </summary>
+    /// <remarks>
+    /// Only the left edge used to be checked. A wide glyph written one cell to the right of another
+    /// wide glyph took over the old lead cell but left its continuation cell standing; the next
+    /// character written onto that orphan then "repaired" it by blanking the continuation of the
+    /// glyph just written. The line ended up one cell wider than the screen and everything after it
+    /// drew one column to the right - which is exactly what an app's diff renderer produces when the
+    /// user inserts or deletes a character in the middle of Japanese text. An erase that started or
+    /// ended mid-glyph left the same kind of half behind.
+    /// </remarks>
+    private static void BreakWideCellsStraddling(
+        TerminalLine line,
+        int startColumn,
+        int endExclusive,
+        TerminalStyle blankStyle,
+        bool keepProtected = false)
     {
-        if (column > 0 && line.Cells[column].IsContinuation)
+        BreakWideCellAt(line, startColumn, blankStyle, keepProtected);
+        BreakWideCellAt(line, endExclusive, blankStyle, keepProtected);
+    }
+
+    /// <summary>
+    /// Blanks the wide characters cut by any of <paramref name="boundaries"/> before cells are shifted
+    /// sideways: the insertion/deletion point, the point past which cells fall off, and the margin.
+    /// </summary>
+    private static void BreakWideCellsAt(TerminalLine line, TerminalStyle blankStyle, params int[] boundaries)
+    {
+        foreach (int boundary in boundaries)
         {
-            line.Cells[column - 1] = TerminalCell.CreateBlank(blankStyle);
-            line.Cells[column] = TerminalCell.CreateBlank(blankStyle);
+            BreakWideCellAt(line, boundary, blankStyle, keepProtected: false);
+        }
+    }
+
+    /// <summary>Blanks the wide character whose two halves sit on either side of <paramref name="boundary"/>.</summary>
+    internal static void BreakWideCellAt(
+        TerminalLine line,
+        int boundary,
+        TerminalStyle blankStyle,
+        bool keepProtected = false)
+    {
+        TerminalCell[] cells = line.Cells;
+        if (boundary <= 0 || boundary >= cells.Length || !cells[boundary].IsContinuation)
+        {
+            return;
         }
 
-        if (column + 1 < columns &&
-            line.Cells[column + 1].IsContinuation &&
-            !line.Cells[column].IsContinuation)
+        // Both halves carry the glyph's style, so the continuation answers for the whole glyph.
+        if (keepProtected && cells[boundary].Style.Protected)
         {
-            line.Cells[column] = TerminalCell.CreateBlank(blankStyle);
-            line.Cells[column + 1] = TerminalCell.CreateBlank(blankStyle);
+            return;
         }
+
+        // A continuation whose lead is already gone is blanked on its own; the narrow cell to its
+        // left belongs to nobody's glyph and must survive.
+        if (cells[boundary - 1].Width == 2 && !cells[boundary - 1].IsContinuation)
+        {
+            cells[boundary - 1] = TerminalCell.CreateBlank(blankStyle);
+        }
+
+        cells[boundary] = TerminalCell.CreateBlank(blankStyle);
     }
 
     private static List<TerminalLine> CreateScreen(int rows, int columns, TerminalStyle blankStyle)

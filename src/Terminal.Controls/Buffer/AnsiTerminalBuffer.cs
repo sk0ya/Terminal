@@ -3649,6 +3649,9 @@ internal sealed class AnsiTerminalBuffer
 
         if (cell.Width == 1 && normalizedWidth == 2 && targetColumn + 1 < _columns)
         {
+            // The cell being taken over may be the lead of another wide glyph; break that glyph
+            // first or its continuation is left standing alone and the line grows a cell.
+            TerminalScreenStore.BreakWideCellAt(targetLine, targetColumn + 2, _currentStyle);
             targetLine.Cells[targetColumn + 1] = new TerminalCell(
                 string.Empty,
                 cell.Style,
@@ -3772,6 +3775,9 @@ internal sealed class AnsiTerminalBuffer
 
         if (cell.Width == 1 && normalizedWidth == 2 && targetColumn + 1 < _columns)
         {
+            // The cell being taken over may be the lead of another wide glyph; break that glyph
+            // first or its continuation is left standing alone and the line grows a cell.
+            TerminalScreenStore.BreakWideCellAt(line, targetColumn + 2, _currentStyle);
             line.Cells[targetColumn + 1] = new TerminalCell(
                 string.Empty,
                 cell.Style,
