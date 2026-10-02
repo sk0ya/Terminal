@@ -43,7 +43,10 @@ internal sealed class TaskbarProgressEventArgs(int state, int progress) : EventA
 internal enum TerminalMouseTrackingMode
 {
     Off,
+    // DECSET 9: presses only, no releases and no modifier bits.
     X10,
+    // DECSET 1000: presses and releases, no motion.
+    Normal,
     ButtonEvent,
     AnyEvent
 }
@@ -2493,10 +2496,13 @@ internal sealed class AnsiTerminalBuffer
                     }
 
                     break;
-                case 1000:
                 case 9:
                     if (enabled) _mouseTrackingMode = TerminalMouseTrackingMode.X10;
                     else if (_mouseTrackingMode == TerminalMouseTrackingMode.X10) _mouseTrackingMode = TerminalMouseTrackingMode.Off;
+                    break;
+                case 1000:
+                    if (enabled) _mouseTrackingMode = TerminalMouseTrackingMode.Normal;
+                    else if (_mouseTrackingMode == TerminalMouseTrackingMode.Normal) _mouseTrackingMode = TerminalMouseTrackingMode.Off;
                     break;
                 case 1002:
                     if (enabled) _mouseTrackingMode = TerminalMouseTrackingMode.ButtonEvent;
@@ -2640,7 +2646,7 @@ internal sealed class AnsiTerminalBuffer
             25 => _cursorVisible ? 1 : 2,
             47 or 1047 => _primaryScreenBackup is not null && !_syntheticAlternateScreenActive ? 1 : 2,
             66 => _applicationKeypad ? 1 : 2,
-            1000 => _mouseTrackingMode == TerminalMouseTrackingMode.X10 ? 1 : 2,
+            1000 => _mouseTrackingMode == TerminalMouseTrackingMode.Normal ? 1 : 2,
             9 => _mouseTrackingMode == TerminalMouseTrackingMode.X10 ? 1 : 2,
             1002 => _mouseTrackingMode == TerminalMouseTrackingMode.ButtonEvent ? 1 : 2,
             1003 => _mouseTrackingMode == TerminalMouseTrackingMode.AnyEvent ? 1 : 2,
@@ -2809,7 +2815,7 @@ internal sealed class AnsiTerminalBuffer
             25 => _cursorVisible,
             47 or 1047 => _primaryScreenBackup is not null && !_syntheticAlternateScreenActive,
             66 => _applicationKeypad,
-            1000 => _mouseTrackingMode == TerminalMouseTrackingMode.X10,
+            1000 => _mouseTrackingMode == TerminalMouseTrackingMode.Normal,
             1002 => _mouseTrackingMode == TerminalMouseTrackingMode.ButtonEvent,
             1003 => _mouseTrackingMode == TerminalMouseTrackingMode.AnyEvent,
             1004 => _focusReportingEnabled,

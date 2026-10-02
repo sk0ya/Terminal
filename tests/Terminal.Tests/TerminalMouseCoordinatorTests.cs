@@ -23,7 +23,32 @@ public sealed class TerminalMouseCoordinatorTests
         TerminalMouseState state = State(encoding: TerminalMouseEncoding.Sgr, modifiers: TerminalMouseModifiers.Shift | TerminalMouseModifiers.Control);
 
         Assert.Equal("\u001b[<20;4;5M", Text(_coordinator.ResolveButton(state, TerminalMouseButton.Left, true, 4, 5)));
-        Assert.Equal("\u001b[<23;4;5m", Text(_coordinator.ResolveButton(state, TerminalMouseButton.Right, false, 4, 5)));
+        Assert.Equal("\u001b[<22;4;5m", Text(_coordinator.ResolveButton(state, TerminalMouseButton.Right, false, 4, 5)));
+    }
+
+    [Fact]
+    public void SgrReleaseKeepsTheButtonWhileOlderEncodingsReportThree()
+    {
+        Assert.Equal("\u001b[<0;4;5m", Text(_coordinator.ResolveButton(State(), TerminalMouseButton.Left, false, 4, 5)));
+        Assert.Equal("\u001b[<3;4;5m", Text(_coordinator.ResolveButton(State(), TerminalMouseButton.Unsupported, false, 4, 5)));
+        Assert.Equal("\u001b[35;4;5M", Text(_coordinator.ResolveButton(State(encoding: TerminalMouseEncoding.Urxvt), TerminalMouseButton.Left, false, 4, 5)));
+    }
+
+    [Fact]
+    public void NormalTrackingReportsReleasesButNotMotion()
+    {
+        TerminalMouseState normal = State(tracking: TerminalMouseTrackingMode.Normal);
+
+        Assert.Equal("\u001b[<0;4;5m", Text(_coordinator.ResolveButton(normal, TerminalMouseButton.Left, false, 4, 5)));
+        Assert.False(_coordinator.ResolveMove(normal, TerminalMouseButton.Left, 4, 5).Handled);
+    }
+
+    [Fact]
+    public void X10TrackingLeavesModifiersOutOfThePress()
+    {
+        TerminalMouseState x10 = State(tracking: TerminalMouseTrackingMode.X10, modifiers: TerminalMouseModifiers.Shift | TerminalMouseModifiers.Control);
+
+        Assert.Equal("\u001b[<0;4;5M", Text(_coordinator.ResolveButton(x10, TerminalMouseButton.Left, true, 4, 5)));
     }
 
     [Fact]

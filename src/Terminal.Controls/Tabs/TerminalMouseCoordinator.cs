@@ -55,14 +55,19 @@ internal sealed class TerminalMouseCoordinator
             return Unhandled();
         }
 
-        int code = pressed ? (int)button : 3;
+        // SGR tells a release apart by its final character, so it keeps the number of the button
+        // that went up; the older encodings have no such marker and report every release as 3.
+        bool keepsButton = pressed ||
+            state.Encoding == TerminalMouseEncoding.Sgr && button != TerminalMouseButton.Unsupported;
+        int code = keepsButton ? (int)button : 3;
         return Encode(state, code, column, row, sgrRelease: !pressed);
     }
 
     public TerminalMouseAction ResolveMove(
         TerminalMouseState state, TerminalMouseButton pressedButton, int column, int row)
     {
-        if (!CanReport(state) || state.TrackingMode == TerminalMouseTrackingMode.X10 ||
+        if (!CanReport(state) ||
+            state.TrackingMode is TerminalMouseTrackingMode.X10 or TerminalMouseTrackingMode.Normal ||
             state.TrackingMode == TerminalMouseTrackingMode.ButtonEvent && pressedButton == TerminalMouseButton.None)
         {
             return Unhandled();
@@ -108,7 +113,12 @@ internal sealed class TerminalMouseCoordinator
     private static TerminalMouseAction Encode(
         TerminalMouseState state, int code, int column, int row, bool sgrRelease)
     {
-        code += GetModifierBits(state.Modifiers);
+        // X10 compatibility mode predates modifier reporting: the button byte is the button alone.
+        if (state.TrackingMode != TerminalMouseTrackingMode.X10)
+        {
+            code += GetModifierBits(state.Modifiers);
+        }
+
         return new(true, TerminalInputEncoder.EncodeMouseSequence(state.Encoding, code, column, row, sgrRelease));
     }
 

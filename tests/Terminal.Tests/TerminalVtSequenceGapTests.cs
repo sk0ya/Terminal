@@ -340,6 +340,19 @@ public sealed class TerminalVtSequenceGapTests
     }
 
     [Fact]
+    public void Decset1000IsNormalTrackingNotX10()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 3);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, text) => responses.Add(text);
+
+        buffer.Process("[?1000h[?1000$p[?9$p");
+
+        Assert.Equal(TerminalMouseTrackingMode.Normal, buffer.MouseTrackingMode);
+        Assert.Equal(["[?1000;1$y", "[?9;2$y"], responses);
+    }
+
+    [Fact]
     public void Decset9EnablesAndReportsX10MouseMode()
     {
         var buffer = new AnsiTerminalBuffer(20, 3);

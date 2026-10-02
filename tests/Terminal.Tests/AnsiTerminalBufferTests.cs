@@ -2109,7 +2109,7 @@ public sealed class AnsiTerminalBufferTests
         var buffer = new AnsiTerminalBuffer(32, 10);
 
         buffer.Process("[?1000h");
-        Assert.Equal(TerminalMouseTrackingMode.X10, buffer.MouseTrackingMode);
+        Assert.Equal(TerminalMouseTrackingMode.Normal, buffer.MouseTrackingMode);
 
         buffer.Process("[?1003h");
         Assert.Equal(TerminalMouseTrackingMode.AnyEvent, buffer.MouseTrackingMode);
@@ -2131,7 +2131,7 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
-    public void DisablingX10MouseDoesNotKillButtonEventMode()
+    public void DisablingNormalMouseDoesNotKillButtonEventMode()
     {
         var buffer = new AnsiTerminalBuffer(32, 10);
 
@@ -2143,15 +2143,15 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
-    public void DisablingButtonEventMouseDoesNotKillX10Mode()
+    public void DisablingButtonEventMouseDoesNotKillNormalMode()
     {
         var buffer = new AnsiTerminalBuffer(32, 10);
 
         buffer.Process("[?1000h");
-        Assert.Equal(TerminalMouseTrackingMode.X10, buffer.MouseTrackingMode);
+        Assert.Equal(TerminalMouseTrackingMode.Normal, buffer.MouseTrackingMode);
 
         buffer.Process("[?1002l");
-        Assert.Equal(TerminalMouseTrackingMode.X10, buffer.MouseTrackingMode);
+        Assert.Equal(TerminalMouseTrackingMode.Normal, buffer.MouseTrackingMode);
     }
 
     [Fact]
