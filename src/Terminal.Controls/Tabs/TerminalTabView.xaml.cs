@@ -39,6 +39,7 @@ public partial class TerminalTabView : UserControl
     private readonly TerminalKeyboardCoordinator _keyboardState = new();
     private readonly TerminalKeyBindings _keyBindings = new();
     private readonly TerminalMouseCoordinator _mouseState = new();
+    private (string Family, double Size, double CellWidth) _inputProxyFontKey;
     private readonly TerminalClipboardCoordinator _clipboardState = new();
     private ITerminalSession? _session => _sessionOrchestrator.Current;
     private AnsiTerminalBuffer _terminalBuffer = new(120, 30);
@@ -1537,6 +1538,7 @@ public partial class TerminalTabView : UserControl
             viewport.ViewportTop,
             Math.Max(0, viewport.ViewportRight - viewport.ViewportLeft),
             Math.Max(0, viewport.ViewportBottom - viewport.ViewportTop));
+        UpdateInputProxyFont(charWidth);
         Size proxyTextSize = string.IsNullOrEmpty(TerminalInputProxy.Text)
             ? new Size(charWidth, charHeight)
             : MeasureTerminalText(TerminalInputProxy.Text);
@@ -1578,6 +1580,22 @@ public partial class TerminalTabView : UserControl
             _terminalBuffer.CursorShape,
             proxyCaretBounds);
         UpdateCursorOverlay(cursorBounds);
+    }
+
+    // The proxy shows the IME composition where the committed text will go, so it has to draw it
+    // the way the grid will: same fallback fonts, full-width glyphs at the size that fills two
+    // cells. The font is rebuilt only when what it derives from - family, size, cell width - moves.
+    private void UpdateInputProxyFont(double charWidth)
+    {
+        var key = (TerminalOutput.FontFamily.Source, TerminalOutput.FontSize, charWidth);
+        if (key == _inputProxyFontKey)
+        {
+            return;
+        }
+
+        _inputProxyFontKey = key;
+        TerminalInputProxy.FontFamily = TerminalOutput.CreateInputFontFamily();
+        TerminalInputProxy.FontSize = TerminalOutput.FontSize;
     }
 
     private void ResetInputProxyText()
@@ -2589,7 +2607,7 @@ public partial class TerminalTabView : UserControl
     private Size MeasureTerminalText(string text)
     {
         var typeface = new Typeface(
-            TerminalOutput.FontFamily,
+            TerminalInputProxy.FontFamily,
             TerminalOutput.FontStyle,
             TerminalOutput.FontWeight,
             TerminalOutput.FontStretch);

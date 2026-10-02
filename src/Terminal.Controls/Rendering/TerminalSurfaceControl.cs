@@ -54,6 +54,9 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private Typeface? _italicTypeface;
     private GlyphTypeface? _primaryGlyphTypeface;
     private FontFallbackResolver? _fontFallback;
+    // Factor applied to the em size of full-width glyphs so that one em spans two cells; 1 when
+    // the primary font's cells are already half an em wide.
+    private double _wideGlyphEmScale = 1.0;
     private bool _fontLigaturesEnabled;
     private TextFormatter? _textFormatter;
     // Distance from a line's top to its baseline, measured the way FormattedText places text, so a
@@ -303,6 +306,46 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             EnsureMetrics();
             return _cellSize;
         }
+    }
+
+    /// <summary>
+    /// The font to show text in that is about to land on this surface - the IME composition - so
+    /// that it occupies the cells it will occupy once committed. Full-width ranges are mapped to
+    /// the same fallback fonts the grid draws them with, at the same enlargement.
+    /// </summary>
+    internal FontFamily CreateInputFontFamily()
+    {
+        EnsureMetrics();
+        if (_primaryGlyphTypeface is null ||
+            _primaryGlyphTypeface.CharacterToGlyphMap.ContainsKey(FontFallbackResolver.WideProbeCodepoint))
+        {
+            // The primary font draws full-width text itself, on its own advances.
+            return FontFamily;
+        }
+
+        // A composite family states its own line metrics, which pins every line to the row's
+        // height and baseline whichever of the mapped fonts a character ends up in.
+        GlyphTypeface? wideFont = _fontFallback?.Resolve(FontFallbackResolver.WideProbeCodepoint);
+        double wideBaselineShift = wideFont is null
+            ? 0
+            : (wideFont.Baseline - (wideFont.Height / 2)) * FontSize * (_wideGlyphEmScale - 1.0);
+        var family = new FontFamily
+        {
+            Baseline = (_baselineY + wideBaselineShift) / FontSize,
+            LineSpacing = _cellSize.Height / FontSize,
+        };
+        foreach (string name in FontFallbackResolver.WideFallbackFamilyNames)
+        {
+            family.FamilyMaps.Add(new FontFamilyMap
+            {
+                Unicode = FontFallbackResolver.WideUnicodeRanges,
+                Target = name,
+                Scale = _wideGlyphEmScale,
+            });
+        }
+
+        family.FamilyMaps.Add(new FontFamilyMap { Target = FontFamily.Source });
+        return family;
     }
 
     internal void UpdateSnapshot(AnsiTerminalBuffer.TerminalRenderSnapshot snapshot)
@@ -1374,7 +1417,10 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         int[] starts = StringInfo.ParseCombiningCharacters(segText);
         var glyphIndices = new List<ushort>();
         var advances = new List<double>();
+        var offsets = new List<Point>();
+        bool runHasOffsets = false;
         GlyphTypeface? runFont = null;
+        double runEmSize = FontSize;
         double runX = startX;
         double x = startX;
 
@@ -1399,12 +1445,19 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 {
                     FlushRun();
                     commands.Add(new GlyphRunCommand(
-                        font!, [glyphIndex], [advance], x, _baselineY, FontSize,
+                        font!, [glyphIndex], [advance], null, x, _baselineY, FontSize,
                         (float)_pixelsPerDip, foreground, allottedWidth / naturalWidth, _cellSize.Height / 2, blink));
                 }
                 else
                 {
-                    if (glyphIndices.Count > 0 && !ReferenceEquals(font, runFont))
+                    double emSize = FontSize;
+                    double inset = 0;
+                    if (cellSpan >= 2)
+                    {
+                        ResolveWideGlyphFit(naturalWidth, advance, out emSize, out inset);
+                    }
+
+                    if (glyphIndices.Count > 0 && (!ReferenceEquals(font, runFont) || emSize != runEmSize))
                     {
                         FlushRun();
                     }
@@ -1412,11 +1465,14 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                     if (glyphIndices.Count == 0)
                     {
                         runFont = font;
+                        runEmSize = emSize;
                         runX = x;
                     }
 
                     glyphIndices.Add(glyphIndex);
                     advances.Add(advance);
+                    offsets.Add(new Point(inset, 0));
+                    runHasOffsets |= inset != 0;
                 }
             }
             else
@@ -1444,13 +1500,53 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 return;
             }
 
+            // An enlarged glyph grows away from the baseline, mostly upwards. Lowering the baseline
+            // by the share of the growth that sits above the em square's middle keeps the glyph
+            // centred on the row it was centred on at the primary size.
+            double baselineY = _baselineY +
+                ((runFont!.Baseline - (runFont.Height / 2)) * (runEmSize - FontSize));
             commands.Add(new GlyphRunCommand(
-                runFont!, [.. glyphIndices], [.. advances], runX, _baselineY, FontSize,
+                runFont, [.. glyphIndices], [.. advances], runHasOffsets ? [.. offsets] : null,
+                runX, baselineY, runEmSize,
                 (float)_pixelsPerDip, foreground, scale: 1.0, fitAnchorY: 0, blink));
             glyphIndices.Clear();
             advances.Clear();
+            offsets.Clear();
+            runHasOffsets = false;
             runFont = null;
         }
+    }
+
+    // How much a full-width glyph may be enlarged to fill its two cells. A cell is as wide as the
+    // primary font's advance - 0.55 to 0.6 em for the usual programming fonts - so two of them
+    // are 10 to 20 percent wider than the em square a CJK glyph is drawn on. Past this the cells
+    // are unusually wide and the glyph is centred in what is left instead of growing further.
+    private const double MaxWideGlyphGrowth = 1.25;
+
+    // A glyph narrower than this share of the em is a half-width design that merely sits in a
+    // two-cell slot (an ambiguous-width symbol counted as wide). Enlarging it would make it taller
+    // than its neighbours for no gain in fit, so it is only centred.
+    private const double FullWidthDesignThreshold = 0.65;
+
+    /// <summary>
+    /// Fits a glyph that is narrower than the cells it owns: a full-width design is enlarged until
+    /// its em square spans them, and whatever room is still left is split evenly on both sides.
+    /// Left at its natural size and origin, such a glyph sat against the left edge of its cells
+    /// with all of the slack on its right, which read as a gap after every character.
+    /// </summary>
+    private void ResolveWideGlyphFit(double naturalWidth, double advance, out double emSize, out double inset)
+    {
+        emSize = FontSize;
+        double width = naturalWidth;
+        if (_wideGlyphEmScale > 1.0 &&
+            naturalWidth >= FontSize * FullWidthDesignThreshold &&
+            naturalWidth * _wideGlyphEmScale <= advance * OversizeGlyphTolerance)
+        {
+            emSize = FontSize * _wideGlyphEmScale;
+            width = naturalWidth * _wideGlyphEmScale;
+        }
+
+        inset = Math.Max(0, (advance - width) / 2);
     }
 
     private static bool IsLigatureSafeRun(string text, int cellLength)
@@ -1973,6 +2069,10 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             Math.Max(1.0, text.WidthIncludingTrailingWhitespace),
             SnapToDevicePixelsUp(measuredHeight, dpi.DpiScaleY));
         _baselineY = text.Baseline;
+        double wideEmScale = (2 * _cellSize.Width) / FontSize;
+        _wideGlyphEmScale = wideEmScale > OversizeGlyphTolerance
+            ? Math.Min(wideEmScale, MaxWideGlyphGrowth)
+            : 1.0;
         _glyphVariants.Clear();
         _metricsDirty = false;
     }
@@ -2257,6 +2357,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         GlyphTypeface typeface,
         ushort[] glyphIndices,
         double[] advanceWidths,
+        Point[]? glyphOffsets,
         double relativeX,
         double baselineY,
         double emSize,
@@ -2282,7 +2383,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 glyphIndices: glyphIndices,
                 baselineOrigin: origin,
                 advanceWidths: advanceWidths,
-                glyphOffsets: null,
+                glyphOffsets: glyphOffsets,
                 characters: null,
                 deviceFontName: null,
                 clusterMap: null,
