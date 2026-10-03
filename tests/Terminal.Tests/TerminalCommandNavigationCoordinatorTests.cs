@@ -67,4 +67,57 @@ public sealed class TerminalCommandNavigationCoordinatorTests
         Assert.Empty(coordinator.PromptLines);
         Assert.Null(coordinator.FindAdjacent(4, upward: true));
     }
+    [Fact]
+    public void FindStickyCommandLinePinsExecutedCommandOnceItsLineScrollsAway()
+    {
+        var coordinator = new TerminalCommandNavigationCoordinator();
+        coordinator.Observe(ShellCommandZoneType.PromptStart, 0);
+        coordinator.Observe(ShellCommandZoneType.CommandStart, 1);   // 2行プロンプト
+        coordinator.Observe(ShellCommandZoneType.CommandExecuted, 1);
+        coordinator.Observe(ShellCommandZoneType.CommandDone, 40);
+        coordinator.Observe(ShellCommandZoneType.PromptStart, 40);
+
+        Assert.Null(coordinator.FindStickyCommandLine(0));
+        Assert.Null(coordinator.FindStickyCommandLine(1));   // コマンド行がまだ見えている
+        Assert.Equal(1, coordinator.FindStickyCommandLine(2));
+        Assert.Equal(1, coordinator.FindStickyCommandLine(39));
+        Assert.Null(coordinator.FindStickyCommandLine(40));  // 次のプロンプト＝未実行
+        Assert.Null(coordinator.FindStickyCommandLine(45));
+    }
+
+    [Fact]
+    public void FindStickyCommandLineIgnoresPromptsThatNeverRan()
+    {
+        var coordinator = new TerminalCommandNavigationCoordinator();
+        coordinator.Observe(ShellCommandZoneType.PromptStart, 3);
+        coordinator.Observe(ShellCommandZoneType.CommandStart, 3);
+
+        Assert.Null(coordinator.FindStickyCommandLine(10));
+        Assert.Null(coordinator.FindStickyCommandLine(1));
+    }
+
+    [Fact]
+    public void FindStickyCommandLinePrefersMostRecentPromptWhenLinesAreReused()
+    {
+        var coordinator = new TerminalCommandNavigationCoordinator();
+        coordinator.Observe(ShellCommandZoneType.PromptStart, 5);
+        coordinator.Observe(ShellCommandZoneType.CommandExecuted, 5);
+        coordinator.Observe(ShellCommandZoneType.PromptStart, 9);
+        coordinator.Observe(ShellCommandZoneType.PromptStart, 5);   // 画面クリア後に同じ行を再利用
+
+        Assert.Null(coordinator.FindStickyCommandLine(7));
+    }
+
+    [Fact]
+    public void ResetSessionClearsStickyCommands()
+    {
+        var coordinator = new TerminalCommandNavigationCoordinator();
+        coordinator.Observe(ShellCommandZoneType.PromptStart, 0);
+        coordinator.Observe(ShellCommandZoneType.CommandExecuted, 0);
+
+        coordinator.ResetSession();
+
+        Assert.Empty(coordinator.Commands);
+        Assert.Null(coordinator.FindStickyCommandLine(5));
+    }
 }

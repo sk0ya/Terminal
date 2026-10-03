@@ -22,10 +22,11 @@ public enum ShellCommandPhase
 /// <summary>Event data for <see cref="TerminalTabView.ShellCommandActivity"/>.</summary>
 public sealed class ShellCommandActivityEventArgs : EventArgs
 {
-    internal ShellCommandActivityEventArgs(ShellCommandPhase phase, int? exitCode)
+    internal ShellCommandActivityEventArgs(ShellCommandPhase phase, int? exitCode, string? commandLine = null)
     {
         Phase = phase;
         ExitCode = exitCode;
+        CommandLine = commandLine;
     }
 
     public ShellCommandPhase Phase { get; }
@@ -35,4 +36,13 @@ public sealed class ShellCommandActivityEventArgs : EventArgs
     /// null for other phases or when the shell did not report one.
     /// </summary>
     public int? ExitCode { get; }
+
+    /// <summary>
+    /// The command line the shell reported via OSC 633;E for the command this marker belongs
+    /// to, as typed (not deduplicated, so a command repeated back-to-back is reported every
+    /// time — unlike <see cref="TerminalTabView.CommandHistoryRecorded"/>). Set for
+    /// <see cref="ShellCommandPhase.CommandExecuted"/> and <see cref="ShellCommandPhase.CommandDone"/>;
+    /// null for the other phases, for an empty submission, or when the shell does not report it.
+    /// </summary>
+    public string? CommandLine { get; }
 }

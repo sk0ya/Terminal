@@ -103,4 +103,46 @@ public sealed class TerminalTabViewShellIntegrationApiTests
         });
     }
 
+    [Fact]
+    public void ShellCommandActivityReportsCommandLineForEveryRunIncludingRepeats()
+    {
+        StaTestRunner.Run(() =>
+        {
+            var view = new TerminalTabView("cmd.exe", Environment.CurrentDirectory);
+            var events = new List<ShellCommandActivityEventArgs>();
+            var recorded = new List<string>();
+            view.ShellCommandActivity += (_, e) => events.Add(e);
+            view.CommandHistoryRecorded += (_, command) => recorded.Add(command);
+
+            const char esc = (char)0x1b;
+            const char bel = (char)0x07;
+            string run = $"{esc}]133;A{bel}{esc}]133;B{bel}{esc}]633;E;dotnet build{bel}{esc}]133;C{bel}{esc}]133;D;1{bel}";
+            view.FeedOutputForTests(run);
+            view.FeedOutputForTests(run);
+            view.FeedOutputForTests($"{esc}]133;A{bel}");
+
+            var done = events.Where(e => e.Phase == ShellCommandPhase.CommandDone).ToList();
+            Assert.Equal(2, done.Count);
+            Assert.All(done, e => Assert.Equal("dotnet build", e.CommandLine));
+            Assert.All(done, e => Assert.Equal(1, e.ExitCode));
+            Assert.Equal(2, events.Count(e => e.Phase == ShellCommandPhase.CommandExecuted && e.CommandLine == "dotnet build"));
+            Assert.All(events.Where(e => e.Phase is ShellCommandPhase.PromptStart or ShellCommandPhase.CommandStart),
+                e => Assert.Null(e.CommandLine));
+            Assert.Single(recorded);   // 履歴側は連続重複をまとめる
+        });
+    }
+
+    [Fact]
+    public void IsStickyScrollEnabledDefaultsTrueAndRoundTrips()
+    {
+        StaTestRunner.Run(() =>
+        {
+            var view = new TerminalTabView("cmd.exe", Environment.CurrentDirectory);
+
+            Assert.True(view.IsStickyScrollEnabled);
+            view.IsStickyScrollEnabled = false;
+            Assert.False(view.IsStickyScrollEnabled);
+            Assert.Null(view.StickyCommandLine);
+        });
+    }
 }

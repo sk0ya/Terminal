@@ -331,6 +331,27 @@
                     </rendering:TerminalSurfaceControl>
                 </ScrollViewer>
 
+                <!-- Sticky scroll: the command whose output is at the top of the viewport,
+                     pinned once its own line has scrolled away. Click to jump back to it. -->
+                <Border x:Name="StickyCommandOverlay"
+                        Panel.ZIndex="3"
+                        VerticalAlignment="Top"
+                        Visibility="Collapsed"
+                        Cursor="Hand"
+                        Focusable="False"
+                        Background="{DynamicResource HistoryPopupBackgroundBrush}"
+                        BorderBrush="{DynamicResource HistoryPopupBorderBrush}"
+                        BorderThickness="0,0,0,1"
+                        ToolTip="Scroll to this command"
+                        MouseLeftButtonUp="StickyCommandOverlay_MouseLeftButtonUp">
+                    <TextBlock x:Name="StickyCommandText"
+                               Foreground="{DynamicResource HistoryPopupForegroundBrush}"
+                               FontFamily="Cascadia Mono"
+                               FontSize="14"
+                               TextTrimming="CharacterEllipsis"
+                               TextWrapping="NoWrap" />
+                </Border>
+
                 <Canvas IsHitTestVisible="False"
                         Panel.ZIndex="1">
                     <Border x:Name="TerminalCursorOverlay"

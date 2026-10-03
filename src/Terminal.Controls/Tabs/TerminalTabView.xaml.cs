@@ -66,6 +66,8 @@ public partial class TerminalTabView : UserControl
     private readonly TerminalCommandNavigationCoordinator _commandNavigation = new();
     private readonly TerminalTaskbarProgressCoordinator _taskbarProgress = new();
     private bool _isShellCommandExecuting;
+    // The command line from the latest OSC 633;E, reported with C/D activity; cleared at the next prompt.
+    private string? _lastReportedCommandLine;
 
     // Command lines reported via OSC 633;E, most-recent last. Backs the Ctrl+R
     // history overlay and the public CommandHistory API. Capped to keep memory bounded.
@@ -1961,6 +1963,9 @@ public partial class TerminalTabView : UserControl
             QueueTerminalViewportSizeUpdate();
         }
 
+        // Before the render guard: while following live output the top line moves on every
+        // render, and the running command should pin as soon as its own line scrolls away.
+        UpdateStickyCommand();
         if (_isRenderingTerminal)
         {
             return;
@@ -2046,6 +2051,8 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ShellHistoryPathReceived -= TerminalBuffer_ShellHistoryPathReceived;
         _commandNavigation.ResetSession();
         _agentCommands.ResetSession();
+        _lastReportedCommandLine = null;
+        ResetStickyCommand();
         // Command history intentionally survives a restart so the user keeps their history.
         _terminalBuffer = nextBuffer;
         _terminalBuffer.InputSequenceGenerated += TerminalBuffer_InputSequenceGenerated;
@@ -2169,7 +2176,16 @@ public partial class TerminalTabView : UserControl
         };
         OnAgentShellCommandZone(e);
         RaiseShellCommandActivity(e);
+        if (e.ZoneType == ShellCommandZoneType.PromptStart)
+        {
+            // The E line belongs to the command that just finished; the next prompt starts afresh.
+            _lastReportedCommandLine = null;
+            // A cleared screen can reuse line numbers, so re-read the pinned text rather than trust the cache.
+            _stickyCommandLine = null;
+        }
+
         _commandNavigation.Observe(e.ZoneType, e.AbsoluteLine);
+        UpdateStickyCommand();
 
         if (e.ZoneType == ShellCommandZoneType.CommandDone && e.ExitCode.HasValue && e.ExitCode.Value != 0)
         {
@@ -2179,6 +2195,9 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalBuffer_ShellCommandLineReceived(object? sender, string command)
     {
+        // Kept verbatim (even when the history dedupes it) so ShellCommandActivity can report
+        // every run, including one repeated back-to-back.
+        _lastReportedCommandLine = string.IsNullOrWhiteSpace(command) ? null : command.Trim();
         RecordCommandHistory(command);
     }
 
@@ -2211,7 +2230,10 @@ public partial class TerminalTabView : UserControl
             ShellCommandZoneType.CommandExecuted => ShellCommandPhase.CommandExecuted,
             _ => ShellCommandPhase.CommandDone,
         };
-        handlers(this, new ShellCommandActivityEventArgs(phase, e.ExitCode));
+        string? commandLine = phase is ShellCommandPhase.CommandExecuted or ShellCommandPhase.CommandDone
+            ? _lastReportedCommandLine
+            : null;
+        handlers(this, new ShellCommandActivityEventArgs(phase, e.ExitCode, commandLine));
     }
 
     /// <summary>Feeds raw PTY output into the terminal buffer; test seam for marker-driven events.</summary>
