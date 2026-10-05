@@ -18,6 +18,14 @@ internal sealed class TerminalScreenStore
     public List<TerminalLine> Scrollback { get; } = [];
     public int ScrollbackLimit => _scrollbackLimit;
 
+    /// <summary>Lines dropped off the head of the scrollback so far. Absolute line numbers shift down
+    /// by this much, so a line number remembered earlier is corrected by the difference.</summary>
+    public long EvictedLineCount { get; private set; }
+
+    /// <summary>Bumped whenever the scrollback is rebuilt or cleared (reflow, clear). A line number
+    /// remembered under an older generation no longer points at the same text.</summary>
+    public int NumberingGeneration { get; private set; }
+
     public void ReplaceScreen(List<TerminalLine> screen)
     {
         Screen = screen;
@@ -28,11 +36,13 @@ internal sealed class TerminalScreenStore
         Screen = screen;
         Scrollback.Clear();
         Scrollback.AddRange(scrollback);
+        NumberingGeneration++;
     }
 
     public void ClearScrollback()
     {
         Scrollback.Clear();
+        NumberingGeneration++;
     }
 
     public bool EnterAlternateScreen(int rows, int columns)
@@ -97,6 +107,7 @@ internal sealed class TerminalScreenStore
         if (overflow > 0)
         {
             Scrollback.RemoveRange(0, overflow);
+            EvictedLineCount += overflow;
         }
 
         return Math.Max(overflow, 0);

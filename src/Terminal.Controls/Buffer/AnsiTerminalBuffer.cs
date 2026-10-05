@@ -22,6 +22,8 @@ internal enum ShellCommandZoneType
     CommandDone
 }
 
+internal readonly record struct TerminalLineMark(int AbsoluteLine, long EvictedLineCount, int Generation);
+
 internal sealed class ShellCommandZoneEventArgs(ShellCommandZoneType zoneType, int absoluteLine, int? exitCode) : EventArgs
 {
     public ShellCommandZoneType ZoneType { get; } = zoneType;
@@ -803,6 +805,119 @@ internal sealed class AnsiTerminalBuffer
         }
 
         return builder.ToString();
+    }
+
+    /// <summary>Remembers an absolute line so it can be resolved later even after the scrollback has
+    /// dropped lines off its head (see <see cref="TryGetPlainLinesFromMark"/>).</summary>
+    internal TerminalLineMark MarkAbsoluteLine(int absoluteLine) =>
+        new(absoluteLine, _screenStore.EvictedLineCount, _screenStore.NumberingGeneration);
+
+    /// <summary>The absolute line the cursor is on (scrollback rows first, then the screen).</summary>
+    internal int CursorAbsoluteLine => _scrollback.Count + _cursorRow;
+
+    /// <summary>The first row of the soft-wrapped run that <paramref name="absoluteLine"/> belongs to
+    /// (a long prompt that wrapped starts on an earlier row than the one the cursor is on).</summary>
+    internal int WrappedRunStart(int absoluteLine)
+    {
+        int scrollbackCount = _scrollback.Count;
+        int line = Math.Clamp(absoluteLine, 0, scrollbackCount + _screen.Count - 1);
+        while (line > 0)
+        {
+            TerminalLine previous = line - 1 < scrollbackCount
+                ? _scrollback[line - 1]
+                : _screen[line - 1 - scrollbackCount];
+            if (!previous.IsWrapped)
+            {
+                break;
+            }
+
+            line--;
+        }
+
+        return line;
+    }
+
+    /// <summary>The start of the logical line <paramref name="count"/> lines above the one starting at
+    /// <paramref name="runStart"/> (stops at the top of the buffer).</summary>
+    internal int WalkBackLogicalLines(int runStart, int count)
+    {
+        for (int index = 0; index < count && runStart > 0; index++)
+        {
+            runStart = WrappedRunStart(runStart - 1);
+        }
+
+        return runStart;
+    }
+
+    /// <summary>How many logical lines end in [<paramref name="startLine"/>, <paramref name="endExclusive"/>):
+    /// the rows there that are not soft-wrapped into the next one.</summary>
+    internal int CountHardLineBreaks(int startLine, int endExclusive)
+    {
+        int scrollbackCount = _scrollback.Count;
+        int end = Math.Min(endExclusive, scrollbackCount + _screen.Count);
+        int count = 0;
+        for (int line = Math.Max(0, startLine); line < end; line++)
+        {
+            TerminalLine row = line < scrollbackCount ? _scrollback[line] : _screen[line - scrollbackCount];
+            if (!row.IsWrapped)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>Where <paramref name="mark"/> points in the current numbering; false when the line was
+    /// evicted or the numbering was rebuilt since it was marked.</summary>
+    internal bool TryResolveMark(TerminalLineMark mark, out int absoluteLine)
+    {
+        absoluteLine = 0;
+        if (mark.Generation != _screenStore.NumberingGeneration)
+        {
+            return false;
+        }
+
+        long shifted = mark.AbsoluteLine - (_screenStore.EvictedLineCount - mark.EvictedLineCount);
+        if (shifted < 0)
+        {
+            return false;
+        }
+
+        absoluteLine = (int)shifted;
+        return true;
+    }
+
+    /// <summary>
+    /// The plain-text lines from <paramref name="start"/> up to (not including) <paramref name="endExclusive"/>,
+    /// an absolute line in the current numbering. The start is corrected for lines the scrollback evicted
+    /// since it was marked; when the start itself was evicted the lines begin at the oldest kept line and
+    /// <paramref name="headLost"/> is true. Returns false when the numbering was rebuilt in between
+    /// (reflow on resize, scrollback clear), because the mark then no longer points at the same text.
+    /// </summary>
+    internal bool TryGetPlainLinesFromMark(TerminalLineMark start, int endExclusive, out List<string> lines, out bool headLost)
+    {
+        lines = [];
+        headLost = false;
+        if (start.Generation != _screenStore.NumberingGeneration)
+        {
+            return false;
+        }
+
+        long shifted = start.AbsoluteLine - (_screenStore.EvictedLineCount - start.EvictedLineCount);
+        if (shifted < 0)
+        {
+            headLost = true;
+            shifted = 0;
+        }
+
+        if (endExclusive <= shifted)
+        {
+            return true;
+        }
+
+        lines.AddRange(GetPlainTextForAbsoluteLineRange((int)shifted, endExclusive).Split(Environment.NewLine));
+        return true;
     }
 
     internal string GetScreenLineText(int row)

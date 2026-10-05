@@ -48,6 +48,8 @@ public partial class TerminalTabView : UserControl
     private readonly DispatcherTimer _renderThrottleTimer = new(DispatcherPriority.Background);
     private readonly DispatcherTimer _synchronizedUpdateWatchdogTimer = new(DispatcherPriority.Background);
     private readonly DispatcherTimer _toastDismissTimer = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(4) };
+    private readonly DispatcherTimer _commandOutputSettleTimer = new(DispatcherPriority.Background) { Interval = TerminalCommandOutputCoordinator.SettleDelay };
+    private readonly TerminalCommandOutputCoordinator _commandOutput = new();
     private System.Windows.Controls.Primitives.Popup? _toastPopup;
     private readonly TerminalOutputBatchCoordinator _outputBatch = new();
     private readonly TerminalRenderCoordinator _renderCoordinator = new();
@@ -89,6 +91,15 @@ public partial class TerminalTabView : UserControl
     /// (busy indicators, success/failure badges) without polling.
     /// </summary>
     public event EventHandler<ShellCommandActivityEventArgs>? ShellCommandActivity;
+
+    /// <summary>
+    /// Raised once per command run through shell integration (OSC 133 C..D), shortly <b>after</b> D:
+    /// ConPTY forwards the markers ahead of the text they belong to, so the output is cut only once the
+    /// terminal has been quiet for <see cref="TerminalCommandOutputCoordinator.SettleDelay"/> (or when
+    /// the next command starts). Not raised when the buffer was reflowed or its scrollback cleared while
+    /// the command ran. See <see cref="ShellCommandOutputEventArgs"/>.
+    /// </summary>
+    public event EventHandler<ShellCommandOutputEventArgs>? CommandOutputCaptured;
 
     /// <summary>
     /// Raised on the dispatcher thread whenever a command line is appended to
@@ -238,6 +249,7 @@ public partial class TerminalTabView : UserControl
         _synchronizedUpdateWatchdogTimer.Interval = SynchronizedUpdateRenderTimeout;
         _synchronizedUpdateWatchdogTimer.Tick += SynchronizedUpdateWatchdogTimer_Tick;
         _toastDismissTimer.Tick += ToastDismissTimer_Tick;
+        _commandOutputSettleTimer.Tick += CommandOutputSettleTimer_Tick;
 
         TerminalOutput.HyperlinkActivated += TerminalOutput_HyperlinkActivated;
         TerminalInputProxy.AddHandler(TextCompositionManager.PreviewTextInputStartEvent, new TextCompositionEventHandler(TerminalInputProxy_PreviewTextInputStart), handledEventsToo: true);
@@ -293,6 +305,7 @@ public partial class TerminalTabView : UserControl
         _renderThrottleTimer.Stop();
         StopSynchronizedUpdateWatchdog();
         _toastDismissTimer.Stop();
+        _commandOutputSettleTimer.Stop();
         _toastPopup = null;
         ReleaseTerminalMouseCapture(force: true);
         ResetInputProxyText();
@@ -1181,6 +1194,12 @@ public partial class TerminalTabView : UserControl
         {
             bool endedSynchronizedUpdate = _terminalBuffer.Process(nextBatch);
             TryCompleteAgentSentinel();
+            if (_commandOutput.HasPending)
+            {
+                // Still painting after D (ConPTY paints text after forwarding the marker): wait for quiet.
+                _commandOutputSettleTimer.Stop();
+                _commandOutputSettleTimer.Start();
+            }
             bool prioritizeRender = _outputBatch.ConsumeRenderPriority();
             if (!_terminalBuffer.SynchronizedUpdateActive)
             {
@@ -1563,6 +1582,21 @@ public partial class TerminalTabView : UserControl
         Canvas.SetLeft(TerminalInputProxy, proxyBounds.Left);
         Canvas.SetTop(TerminalInputProxy, proxyBounds.Top);
         TerminalInputProxy.UpdateLayout();
+
+        // Make room for the composition: the grid paints the rest of the cursor row shifted right
+        // by whole cells, so the proxy's text sits in the gap instead of on top of existing text.
+        if (ShouldUseProxyCaret() && charWidth > 0)
+        {
+            int compositionCells = (int)Math.Ceiling((proxyTextSize.Width / charWidth) - 0.05);
+            TerminalOutput.SetCompositionGap(
+                absoluteCursorLine,
+                _terminalBuffer.CursorColumn,
+                Math.Max(0, compositionCells) * charWidth);
+        }
+        else
+        {
+            TerminalOutput.ClearCompositionGap();
+        }
 
         Rect? proxyCaretBounds = ShouldUseProxyCaret()
             && TryGetInputProxyCaretBounds(
@@ -2051,6 +2085,8 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ShellHistoryPathReceived -= TerminalBuffer_ShellHistoryPathReceived;
         _commandNavigation.ResetSession();
         _agentCommands.ResetSession();
+        _commandOutput.Reset();
+        _commandOutputSettleTimer.Stop();
         _lastReportedCommandLine = null;
         ResetStickyCommand();
         // Command history intentionally survives a restart so the user keeps their history.
@@ -2175,6 +2211,7 @@ public partial class TerminalTabView : UserControl
             _ => _isShellCommandExecuting
         };
         OnAgentShellCommandZone(e);
+        OnCommandOutputZone(e);
         RaiseShellCommandActivity(e);
         if (e.ZoneType == ShellCommandZoneType.PromptStart)
         {
@@ -2235,6 +2272,67 @@ public partial class TerminalTabView : UserControl
             : null;
         handlers(this, new ShellCommandActivityEventArgs(phase, e.ExitCode, commandLine));
     }
+
+    private void OnCommandOutputZone(ShellCommandZoneEventArgs e)
+    {
+        if (CommandOutputCaptured is null)
+        {
+            return;
+        }
+
+        switch (e.ZoneType)
+        {
+            case ShellCommandZoneType.CommandExecuted:
+                // Pasted lines can start the next command before the previous one settled: cut it at this C.
+                if (_commandOutput.HasPending)
+                {
+                    _commandOutputSettleTimer.Stop();
+                    RaiseCommandOutput(_commandOutput.Complete(_terminalBuffer, e.AbsoluteLine, _lastReportedCommandLine));
+                }
+
+                _commandOutput.OnCommandExecuted(_terminalBuffer, e.AbsoluteLine, _lastReportedCommandLine);
+                break;
+            case ShellCommandZoneType.PromptStart:
+                _commandOutput.OnPromptStart(_terminalBuffer.MarkAbsoluteLine(e.AbsoluteLine));
+                break;
+            case ShellCommandZoneType.CommandDone:
+                if (_commandOutput.OnCommandDone(e.ExitCode))
+                {
+                    _commandOutputSettleTimer.Stop();
+                    _commandOutputSettleTimer.Start();
+                }
+
+                break;
+        }
+    }
+
+    private void CommandOutputSettleTimer_Tick(object? sender, EventArgs e)
+    {
+        _commandOutputSettleTimer.Stop();
+        SettleCommandOutput();
+    }
+
+    /// <summary>Output has gone quiet after D: the cursor now sits on the new prompt, so the range ends
+    /// where that prompt starts (a long prompt wraps onto rows above the cursor's; a multi-line prompt
+    /// has hard lines above it too).</summary>
+    private void SettleCommandOutput()
+    {
+        if (_commandOutput.HasPending)
+        {
+            RaiseCommandOutput(_commandOutput.Complete(_terminalBuffer, _commandOutput.ResolveSettledEnd(_terminalBuffer)));
+        }
+    }
+
+    private void RaiseCommandOutput(ShellCommandOutputEventArgs? args)
+    {
+        if (args is not null)
+        {
+            CommandOutputCaptured?.Invoke(this, args);
+        }
+    }
+
+    /// <summary>Test seam: runs the settle step that the timer would run once output goes quiet.</summary>
+    internal void SettleCommandOutputForTests() => SettleCommandOutput();
 
     /// <summary>Feeds raw PTY output into the terminal buffer; test seam for marker-driven events.</summary>
     internal void FeedOutputForTests(string data) => _terminalBuffer.Process(data);

@@ -108,6 +108,10 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     private static readonly TimeSpan BlinkInterval = TimeSpan.FromMilliseconds(500);
     private readonly DispatcherTimer _blinkTimer;
     private bool _blinkTextVisible = true;
+    // While an IME composition is in progress the proxy draws it at the cursor; the rest of the
+    // cursor row is painted shifted right by the composition's width so the two don't overlap.
+    // Display only - the buffer is untouched, so the shell sees nothing until the text is committed.
+    private (int Line, int Column, double Width)? _compositionGap;
 
     public event EventHandler<TerminalHyperlinkActivatedEventArgs>? HyperlinkActivated;
 
@@ -384,6 +388,20 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         InvalidateMeasure();
         InvalidateVisual();
     }
+
+    internal void SetCompositionGap(int lineIndex, int column, double width)
+    {
+        (int, int, double)? gap = width > 0 ? (lineIndex, column, width) : null;
+        if (gap == _compositionGap)
+        {
+            return;
+        }
+
+        _compositionGap = gap;
+        InvalidateVisual();
+    }
+
+    internal void ClearCompositionGap() => SetCompositionGap(0, 0, 0);
 
     public void ClearSelection()
     {
@@ -844,14 +862,20 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         {
             TerminalLineLayout line = _lines[lineIndex];
             double top = contentTop + (lineIndex * _cellSize.Height);
-            bool scaled = TryPushLineTransform(drawingContext, line, top, contentLeft);
-            try
+            int halves = GetCompositionGapHalfCount(lineIndex);
+            for (int half = 0; half < halves; half++)
             {
-                DrawLineBackgrounds(drawingContext, line, top, contentLeft);
-            }
-            finally
-            {
-                if (scaled) drawingContext.Pop();
+                int gapPushes = PushCompositionGapHalf(drawingContext, lineIndex, half, top, contentLeft);
+                bool scaled = TryPushLineTransform(drawingContext, line, top, contentLeft);
+                try
+                {
+                    DrawLineBackgrounds(drawingContext, line, top, contentLeft);
+                }
+                finally
+                {
+                    if (scaled) drawingContext.Pop();
+                    PopTimes(drawingContext, gapPushes);
+                }
             }
         }
 
@@ -884,50 +908,94 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
         {
             TerminalLineLayout line = _lines[lineIndex];
             double top = contentTop + (lineIndex * _cellSize.Height);
-            bool scaled = TryPushLineTransform(drawingContext, line, top, contentLeft);
-
-            try
+            int halves = GetCompositionGapHalfCount(lineIndex);
+            for (int half = 0; half < halves; half++)
             {
-                if (_blockSelectionMode && selection.HasValue)
-                {
-                    DrawBlockSelection(drawingContext, selection.Value, lineIndex, top, contentLeft);
-                }
-                else
-                {
-                    DrawSelection(drawingContext, selection, lineIndex, line, top, contentLeft);
-                }
+                int gapPushes = PushCompositionGapHalf(drawingContext, lineIndex, half, top, contentLeft);
+                bool scaled = TryPushLineTransform(drawingContext, line, top, contentLeft);
 
-                LineDrawable drawable = _lines.GetDrawable(lineIndex, BuildLineDrawable);
-                for (int index = drawable.ImageCommandCount; index < drawable.Commands.Length; index++)
+                try
                 {
-                    IDrawCommand command = drawable.Commands[index];
-                    if (command.Blink)
+                    if (_blockSelectionMode && selection.HasValue)
                     {
-                        sawBlinkingContent = true;
-                        if (!_blinkTextVisible)
-                        {
-                            continue;
-                        }
+                        DrawBlockSelection(drawingContext, selection.Value, lineIndex, top, contentLeft);
+                    }
+                    else
+                    {
+                        DrawSelection(drawingContext, selection, lineIndex, line, top, contentLeft);
                     }
 
-                    command.Render(drawingContext, contentLeft, top);
-                }
+                    LineDrawable drawable = _lines.GetDrawable(lineIndex, BuildLineDrawable);
+                    for (int index = drawable.ImageCommandCount; index < drawable.Commands.Length; index++)
+                    {
+                        IDrawCommand command = drawable.Commands[index];
+                        if (command.Blink)
+                        {
+                            sawBlinkingContent = true;
+                            if (!_blinkTextVisible)
+                            {
+                                continue;
+                            }
+                        }
 
-                if (_hoveredLink is { } hovered && hovered.Line == lineIndex)
-                {
-                    DrawHoverUnderline(drawingContext, hovered.StartColumn, hovered.EndColumn, top, contentLeft);
+                        command.Render(drawingContext, contentLeft, top);
+                    }
+
+                    if (_hoveredLink is { } hovered && hovered.Line == lineIndex)
+                    {
+                        DrawHoverUnderline(drawingContext, hovered.StartColumn, hovered.EndColumn, top, contentLeft);
+                    }
                 }
-            }
-            finally
-            {
-                if (scaled)
+                finally
                 {
-                    drawingContext.Pop();
+                    if (scaled)
+                    {
+                        drawingContext.Pop();
+                    }
+
+                    PopTimes(drawingContext, gapPushes);
                 }
             }
         }
 
         UpdateBlinkTimer(sawBlinkingContent);
+    }
+
+    private int GetCompositionGapHalfCount(int lineIndex) =>
+        _compositionGap is { } gap && gap.Line == lineIndex ? 2 : 1;
+
+    // The composition row is painted twice: once clipped to the cells left of the cursor, once
+    // clipped to the cells from the cursor on and translated right by the composition width.
+    // Returns how many pushes were made so the caller can pop them.
+    private int PushCompositionGapHalf(DrawingContext drawingContext, int lineIndex, int half, double top, double contentLeft)
+    {
+        if (_compositionGap is not { } gap || gap.Line != lineIndex)
+        {
+            return 0;
+        }
+
+        // Generous vertical extent: the clip only has to split the row left/right, not crop glyphs.
+        const double Far = 1_000_000;
+        double splitX = contentLeft + (gap.Column * _cellSize.Width);
+        double clipTop = top - _cellSize.Height;
+        double clipHeight = _cellSize.Height * 3;
+        if (half == 0)
+        {
+            drawingContext.PushClip(new RectangleGeometry(new Rect(splitX - Far, clipTop, Far, clipHeight)));
+            return 1;
+        }
+
+        drawingContext.PushTransform(new TranslateTransform(gap.Width, 0));
+        drawingContext.PushClip(new RectangleGeometry(new Rect(splitX, clipTop, Far, clipHeight)));
+        return 2;
+    }
+
+    private static void PopTimes(DrawingContext drawingContext, int count)
+    {
+        for (int index = 0; index < count; index++)
+        {
+            drawingContext.Pop();
+        }
     }
 
     // Double-width/double-height lines paint through a scale transform anchored at the line's
