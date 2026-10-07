@@ -16,7 +16,7 @@ using Terminal.Tabs;
 
 namespace Terminal.Rendering;
 
-public sealed class TerminalSurfaceControl : Control, IScrollInfo
+public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
 {
     public bool HighContrastMode { get; set; }
 
@@ -963,6 +963,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
             }
         }
 
+        DrawHints(drawingContext, firstVisibleLine, lastVisibleLine, contentTop, contentLeft);
         UpdateBlinkTimer(sawBlinkingContent);
     }
 

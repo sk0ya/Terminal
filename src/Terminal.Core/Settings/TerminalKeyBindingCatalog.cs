@@ -19,6 +19,7 @@ public static class TerminalKeyBindingCatalog
             ["NextCommand"] = "Ctrl+Shift+Down",
             ["SaveTranscript"] = "Ctrl+Shift+S",
             ["CopyCommandOutput"] = "Ctrl+Shift+O",
+            ["QuickSelect"] = "Ctrl+Shift+Space",
             ["Restart"] = "Ctrl+Shift+R",
             ["IncreaseFontSize"] = "Ctrl+OemPlus",
             ["DecreaseFontSize"] = "Ctrl+OemMinus",

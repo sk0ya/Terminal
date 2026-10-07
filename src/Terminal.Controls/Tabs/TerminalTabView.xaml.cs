@@ -2032,6 +2032,12 @@ public partial class TerminalTabView : UserControl
         {
             UpdateScrollMarkers();
         }
+
+        // The labels are pinned to rows; once the rows move they would point at the wrong text.
+        if (e.VerticalChange != 0 || e.ExtentHeightChange != 0 || e.ViewportHeightChange != 0)
+        {
+            ExitHintMode();
+        }
         if (_isRenderingTerminal)
         {
             return;
