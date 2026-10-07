@@ -30,7 +30,8 @@ internal enum TerminalWorkbenchShortcutAction
     Restart,
     IncreaseFontSize,
     DecreaseFontSize,
-    ResetFontSize
+    ResetFontSize,
+    CopyCommandOutput
 }
 
 internal static class TerminalWorkbenchShortcutCoordinator

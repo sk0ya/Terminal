@@ -326,6 +326,9 @@
                                 <MenuItem x:Name="PasteMenuItem"
                                           Header="Paste"
                                           Click="PasteMenuItem_Click" />
+                                <MenuItem x:Name="CopyCommandOutputMenuItem"
+                                          Header="Copy Command Output"
+                                          Click="CopyCommandOutputMenuItem_Click" />
                             </ContextMenu>
                         </rendering:TerminalSurfaceControl.ContextMenu>
                     </rendering:TerminalSurfaceControl>

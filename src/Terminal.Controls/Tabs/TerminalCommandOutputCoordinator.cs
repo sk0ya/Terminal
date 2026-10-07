@@ -161,7 +161,8 @@ internal sealed class TerminalCommandOutputCoordinator
             pending.CommandLine,
             pending.ExitCode,
             ExtractOutput(lines, pending.CommandLine, nextCommandLine),
-            headLost);
+            headLost,
+            pending.Start);
     }
 
     /// <summary>Drops the echoed command at the head, the next command's echo at the tail, and blank

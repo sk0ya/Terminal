@@ -424,6 +424,9 @@ public partial class TerminalTabView
             case TerminalWorkbenchShortcutAction.ResetFontSize:
                 ApplyTerminalFontSize(DefaultTerminalFontSize);
                 break;
+            case TerminalWorkbenchShortcutAction.CopyCommandOutput:
+                CopyLastCommandOutput();
+                break;
         }
 
         if (shortcutAction != TerminalWorkbenchShortcutAction.None)
@@ -479,6 +482,7 @@ public partial class TerminalTabView
         if (_keyBindings.Matches("IncreaseFontSize", key, modifiers)) return TerminalWorkbenchShortcutAction.IncreaseFontSize;
         if (_keyBindings.Matches("DecreaseFontSize", key, modifiers)) return TerminalWorkbenchShortcutAction.DecreaseFontSize;
         if (_keyBindings.Matches("ResetFontSize", key, modifiers)) return TerminalWorkbenchShortcutAction.ResetFontSize;
+        if (_keyBindings.Matches("CopyCommandOutput", key, modifiers)) return TerminalWorkbenchShortcutAction.CopyCommandOutput;
         return TerminalWorkbenchShortcutAction.None;
     }
 

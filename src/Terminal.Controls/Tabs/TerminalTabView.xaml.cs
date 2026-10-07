@@ -153,7 +153,8 @@ public partial class TerminalTabView : UserControl
 
     /// <summary>
     /// Raised while the right-click context menu is opening, after the built-in Copy/Paste items.
-    /// The menu only opens when there is a selection, so handlers can rely on
+    /// It is raised only when there is a selection (the menu can also open without one, over a
+    /// command's output, but then host items are not offered), so handlers can rely on
     /// <see cref="TerminalContextMenuBuildingEventArgs.SelectedText"/> being non-empty. Hosts append
     /// their own entries to <see cref="TerminalContextMenuBuildingEventArgs.Menu"/>; previously
     /// appended host items are cleared before each opening, so handlers add fresh items every time.
@@ -466,9 +467,13 @@ public partial class TerminalTabView : UserControl
     private void TerminalOutput_ContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
         bool hasSelection = TerminalOutput.HasSelection;
+        _contextMenuCommandOutput = FindCapturedOutputAtPoint(new Point(e.CursorLeft, e.CursorTop));
         CopySelectionMenuItem.IsEnabled = hasSelection;
         PasteMenuItem.IsEnabled = CanPasteFromClipboard();
-        if (!hasSelection)
+        CopyCommandOutputMenuItem.Visibility = _contextMenuCommandOutput is not null
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        if (!hasSelection && _contextMenuCommandOutput is null)
         {
             e.Handled = true;
             return;
@@ -490,6 +495,12 @@ public partial class TerminalTabView : UserControl
 
         for (int i = menu.Items.Count - 1; i >= _builtinContextMenuItemCount; i--)
             menu.Items.RemoveAt(i);
+
+        // Host items act on the selection; a menu opened only for a command's output has none.
+        if (!HasSelection)
+        {
+            return;
+        }
 
         handler(this, new TerminalContextMenuBuildingEventArgs(SelectedText, HasSelection, menu));
     }
@@ -2086,6 +2097,7 @@ public partial class TerminalTabView : UserControl
         _commandNavigation.ResetSession();
         _agentCommands.ResetSession();
         _commandOutput.Reset();
+        _capturedOutputs.Clear();
         _commandOutputSettleTimer.Stop();
         _lastReportedCommandLine = null;
         ResetStickyCommand();
@@ -2326,11 +2338,7 @@ public partial class TerminalTabView : UserControl
 
     private void OnCommandOutputZone(ShellCommandZoneEventArgs e)
     {
-        if (CommandOutputCaptured is null)
-        {
-            return;
-        }
-
+        // Captured even without a CommandOutputCaptured subscriber: it backs "Copy Command Output".
         switch (e.ZoneType)
         {
             case ShellCommandZoneType.CommandExecuted:
@@ -2378,6 +2386,7 @@ public partial class TerminalTabView : UserControl
     {
         if (args is not null)
         {
+            RememberCapturedOutput(args);
             CommandOutputCaptured?.Invoke(this, args);
         }
     }
