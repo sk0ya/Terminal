@@ -276,10 +276,10 @@ public partial class MainWindow : Window
     private static void BroadcastInput(TerminalTabItem tab, TerminalTabView source, string text)
     {
         if (!tab.BroadcastInput) return;
-        // SendTerminalInput does not raise UserInputSent, so the mirrored input is not re-broadcast.
+        // SendMirroredInput does not raise UserInputSent, so the mirrored input is not re-broadcast.
         foreach (TerminalTabView pane in tab.Panes)
         {
-            if (!ReferenceEquals(pane, source)) pane.SendTerminalInput(text);
+            if (!ReferenceEquals(pane, source)) pane.SendMirroredInput(text);
         }
     }
 

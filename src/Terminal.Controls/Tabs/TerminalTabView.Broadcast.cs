@@ -24,7 +24,7 @@ public partial class TerminalTabView
     /// Raised after input the user typed or pasted (keys, text, paste, Ctrl+C from the menu) was
     /// written to the session. Not raised for terminal replies, mouse or focus reports, or input sent
     /// through <see cref="SendTerminalInput(string)"/> — so a host can mirror it to other panes with
-    /// <see cref="SendTerminalInput(string)"/> without echoing back.
+    /// <see cref="SendMirroredInput(string)"/> without echoing back.
     /// </summary>
     public event EventHandler<TerminalUserInputEventArgs>? UserInputSent;
 
@@ -33,6 +33,21 @@ public partial class TerminalTabView
     {
         get => BroadcastIndicatorOverlay.Visibility == Visibility.Visible;
         set => BroadcastIndicatorOverlay.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Sends input mirrored from another pane: written like typed input (the view returns to the
+    /// live screen) but without raising <see cref="UserInputSent"/>, so mirroring never echoes back.
+    /// </summary>
+    public bool SendMirroredInput(string text)
+    {
+        if (!SendTerminalInput(text))
+        {
+            return false;
+        }
+
+        ScrollToLiveScreen();
+        return true;
     }
 
     private void RaiseUserInputSent(string text) =>
