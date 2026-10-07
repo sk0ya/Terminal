@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Windows.Media;
 
@@ -90,20 +89,24 @@ public sealed class TerminalHighlightRule
 internal readonly record struct TerminalHighlightSpan(int Start, int End, Color Color);
 
 /// <summary>
-/// Finds and caches the highlight spans of row texts. Keyed by the row's text instance, so a row
-/// whose content did not change is not matched again on the next frame.
+/// Finds and caches the highlight spans of row texts. Keyed by the text's content, so a row is not
+/// matched again when its layout is rebuilt with the same text, or when other rows read the same.
 /// </summary>
 internal sealed class TerminalHighlighter
 {
+    // A few screens' worth of distinct rows; past this the cache starts over rather than grow
+    // with every line that ever scrolled by.
+    private const int MaxCachedRows = 4096;
+
     private IReadOnlyList<TerminalHighlightRule> _rules = [];
-    private ConditionalWeakTable<string, TerminalHighlightSpan[]> _cache = new();
+    private readonly Dictionary<string, TerminalHighlightSpan[]> _cache = new(StringComparer.Ordinal);
 
     public bool HasRules => _rules.Count > 0;
 
     public void SetRules(IReadOnlyList<TerminalHighlightRule> rules)
     {
         _rules = rules ?? [];
-        _cache = new ConditionalWeakTable<string, TerminalHighlightSpan[]>();
+        _cache.Clear();
     }
 
     public TerminalHighlightSpan[] GetSpans(string text)
@@ -113,8 +116,23 @@ internal sealed class TerminalHighlighter
             return [];
         }
 
-        return _cache.GetValue(text, Compute);
+        if (_cache.TryGetValue(text, out TerminalHighlightSpan[]? cached))
+        {
+            return cached;
+        }
+
+        if (_cache.Count >= MaxCachedRows)
+        {
+            _cache.Clear();
+        }
+
+        TerminalHighlightSpan[] spans = Compute(text);
+        _cache[text] = spans;
+        return spans;
     }
+
+    /// <summary>How many row texts are cached; test seam.</summary>
+    internal int CachedRowCount => _cache.Count;
 
     private TerminalHighlightSpan[] Compute(string text)
     {

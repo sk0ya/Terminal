@@ -52,6 +52,9 @@ public sealed class TerminalHighlightRuleTests
             ],
             spans);
         Assert.Same(spans, highlighter.GetSpans(text));
+        // A rebuilt row with the same text (a different string instance) hits the cache too.
+        Assert.Same(spans, highlighter.GetSpans(new string(text.AsSpan())));
+        Assert.Equal(1, highlighter.CachedRowCount);
 
         highlighter.SetRules([]);
         Assert.False(highlighter.HasRules);
