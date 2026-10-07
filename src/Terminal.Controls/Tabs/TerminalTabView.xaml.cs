@@ -272,6 +272,9 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ShellHistoryPathReceived += TerminalBuffer_ShellHistoryPathReceived;
 
         Loaded += OnLoaded;
+        // Tunnels before the terminal surface and the input proxy see the key, so the tab's own
+        // shortcuts (save transcript, restart, font size, copy command output) win over the shell.
+        PreviewKeyDown += Window_PreviewKeyDown;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
