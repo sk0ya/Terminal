@@ -156,8 +156,8 @@ public partial class TerminalTabView : UserControl
 
     /// <summary>
     /// Raised while the right-click context menu is opening, after the built-in Copy/Paste items.
-    /// It is raised only when there is a selection (the menu can also open without one, over a
-    /// command's output, but then host items are not offered), so handlers can rely on
+    /// It is raised only when there is a selection (Shift+right-click also opens the menu without one,
+    /// for the command items, but then host items are not offered), so handlers can rely on
     /// <see cref="TerminalContextMenuBuildingEventArgs.SelectedText"/> being non-empty. Hosts append
     /// their own entries to <see cref="TerminalContextMenuBuildingEventArgs.Menu"/>; previously
     /// appended host items are cleared before each opening, so handlers add fresh items every time.
@@ -426,7 +426,9 @@ public partial class TerminalTabView : UserControl
         if (IsRightClick(e))
         {
             _mouseState.EndLocalSelection();
-            if (!TerminalOutput.HasSelection)
+            // Right-click pastes when nothing is selected; Shift+right-click opens the menu instead
+            // (Copy Command Output, Fold / Unfold) without needing a selection first.
+            if (!TerminalOutput.HasSelection && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)
             {
                 PasteFromClipboard();
                 QueueTerminalInputFocus();
@@ -1510,6 +1512,7 @@ public partial class TerminalTabView : UserControl
 
         try
         {
+            SyncCommandMarks();
             AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = ApplyFolds(_terminalBuffer.CreateRenderSnapshot(showCursor: false));
             TerminalOutput.UpdateSnapshot(snapshot);
             // Restore the viewport (auto-follow scroll) BEFORE positioning the input proxy so the
@@ -2132,6 +2135,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ShellCommandLineReceived -= TerminalBuffer_ShellCommandLineReceived;
         _terminalBuffer.ShellHistoryPathReceived -= TerminalBuffer_ShellHistoryPathReceived;
         _commandNavigation.ResetSession();
+        _commandMarksRemovedHead = nextBuffer.RemovedHeadLineCount;
         ResetFolds();
         UpdateScrollMarkers();
         _agentCommands.ResetSession();
@@ -2253,8 +2257,34 @@ public partial class TerminalTabView : UserControl
         System.Media.SystemSounds.Beep.Play();
     }
 
+    // The buffer's RemovedHeadLineCount when the command marks were last brought up to date.
+    private long _commandMarksRemovedHead;
+
+    /// <summary>
+    /// Keeps the OSC 133 marks pointing at their lines after lines left the head of the buffer (the
+    /// scrollback limit, or a clear such as <c>cls</c>). Without this every mark - and so sticky
+    /// scroll, the scrollbar ticks, command jumps and folds - drifts onto later text.
+    /// </summary>
+    private void SyncCommandMarks()
+    {
+        long removed = _terminalBuffer.RemovedHeadLineCount;
+        if (removed == _commandMarksRemovedHead)
+        {
+            return;
+        }
+
+        int delta = (int)Math.Min(int.MaxValue, removed - _commandMarksRemovedHead);
+        _commandMarksRemovedHead = removed;
+        if (_commandNavigation.ShiftUp(delta))
+        {
+            _stickyCommandLine = null;
+            UpdateScrollMarkers();
+        }
+    }
+
     private void TerminalBuffer_ShellCommandZoneReceived(object? sender, ShellCommandZoneEventArgs e)
     {
+        SyncCommandMarks();
         _isShellCommandExecuting = e.ZoneType switch
         {
             ShellCommandZoneType.CommandExecuted => true,

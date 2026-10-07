@@ -73,6 +73,38 @@ internal sealed class TerminalCommandNavigationCoordinator
         return true;
     }
 
+    /// <summary>
+    /// <paramref name="removedLines"/> lines left the head of the buffer (scrollback limit or clear):
+    /// every mark moves up by that much, and marks that went with them are dropped.
+    /// </summary>
+    public bool ShiftUp(int removedLines)
+    {
+        if (removedLines <= 0)
+        {
+            return false;
+        }
+
+        for (int index = _commands.Count - 1; index >= 0; index--)
+        {
+            TerminalCommandMark mark = _commands[index];
+            if (mark.PromptLine - removedLines < 0)
+            {
+                _commands.RemoveAt(index);
+                _promptLines.RemoveAt(index);
+                continue;
+            }
+
+            _commands[index] = mark with
+            {
+                PromptLine = mark.PromptLine - removedLines,
+                CommandLine = Math.Max(0, mark.CommandLine - removedLines)
+            };
+            _promptLines[index] = _commands[index].PromptLine;
+        }
+
+        return true;
+    }
+
     public void ResetSession()
     {
         _promptLines.Clear();

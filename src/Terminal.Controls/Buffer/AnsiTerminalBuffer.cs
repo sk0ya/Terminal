@@ -831,6 +831,12 @@ internal sealed class AnsiTerminalBuffer
 
     /// <summary>Remembers an absolute line so it can be resolved later even after the scrollback has
     /// dropped lines off its head (see <see cref="TryGetPlainLinesFromMark"/>).</summary>
+    /// <summary>
+    /// How many lines have left the head of the buffer so far, by the scrollback limit or by a
+    /// scrollback clear. A line number remembered earlier moves up by the change in this count.
+    /// </summary>
+    internal long RemovedHeadLineCount => _screenStore.EvictedLineCount + _screenStore.ClearedLineCount;
+
     internal TerminalLineMark MarkAbsoluteLine(int absoluteLine) =>
         new(absoluteLine, _screenStore.EvictedLineCount, _screenStore.NumberingGeneration);
 

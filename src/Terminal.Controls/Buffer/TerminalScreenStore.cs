@@ -39,8 +39,13 @@ internal sealed class TerminalScreenStore
         NumberingGeneration++;
     }
 
+    /// <summary>Lines removed by scrollback clears so far. Like <see cref="EvictedLineCount"/>, every
+    /// absolute line below them moved up by this much.</summary>
+    public long ClearedLineCount { get; private set; }
+
     public void ClearScrollback()
     {
+        ClearedLineCount += Scrollback.Count;
         Scrollback.Clear();
         NumberingGeneration++;
     }
