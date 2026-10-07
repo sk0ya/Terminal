@@ -69,4 +69,18 @@ public sealed class TerminalScrollMarkerTests
                 view.ScrollMarksForTests);
         });
     }
+
+    [Fact]
+    public void AnEmptyPromptAfterAFailureIsNotMarkedFailed()
+    {
+        StaTestRunner.Run(() =>
+        {
+            var view = new TerminalTabView("cmd.exe", Environment.CurrentDirectory);
+            view.FeedOutputForTests($"{Osc("133;A")}❯ {Osc("133;B")}bad\r\n{Osc("133;C")}{Osc("133;D;1")}");
+            // Enter on an empty prompt: no C, but pwsh still reports D;1.
+            view.FeedOutputForTests($"{Osc("133;A")}❯ {Osc("133;B")}\r\n{Osc("133;D;1")}{Osc("133;A")}❯ ");
+
+            Assert.Single(view.ScrollMarksForTests, mark => mark.Kind == TerminalScrollMarkKind.FailedCommand);
+        });
+    }
 }

@@ -59,7 +59,8 @@ public partial class TerminalTabView
         foreach (TerminalCommandMark command in _commandNavigation.Commands)
         {
             yield return new TerminalScrollMark(BufferToDisplayLine(command.PromptLine), TerminalScrollMarkKind.Prompt);
-            if (command.Done && command.ExitCode is { } code && code != 0)
+            // An empty submission after a failure still reports D;1 ($? stays false); only a command that ran failed.
+            if (command.Executed && command.Done && command.ExitCode is { } code && code != 0)
             {
                 yield return new TerminalScrollMark(BufferToDisplayLine(command.CommandLine), TerminalScrollMarkKind.FailedCommand);
             }
