@@ -272,6 +272,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ShellHistoryPathReceived += TerminalBuffer_ShellHistoryPathReceived;
 
         _terminalBuffer.PixelMetricsProvider = MeasurePixelMetrics;
+        TerminalOutput.LineTextExpander = ExpandFoldSummaryLine;
         Loaded += OnLoaded;
         // Tunnels before the terminal surface and the input proxy see the key, so the tab's own
         // shortcuts (save transcript, restart, font size, copy command output) win over the shell.
@@ -1421,7 +1422,9 @@ public partial class TerminalTabView : UserControl
         var data = new DataObject();
         data.SetData(DataFormats.UnicodeText, text);
 
-        StyledSelection? styled = TerminalOutput.GetStyledSelection();
+        // The styled copy shows cells as drawn, so over a fold it would hold the summary line rather
+        // than the hidden output the plain text carries; leave it out then.
+        StyledSelection? styled = TerminalOutput.SelectionCoversExpandedLine() ? null : TerminalOutput.GetStyledSelection();
         if (styled is not null)
         {
             data.SetData(DataFormats.Html, ColoredClipboardWriter.BuildHtml(styled));

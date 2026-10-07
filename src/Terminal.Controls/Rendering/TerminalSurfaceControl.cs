@@ -507,7 +507,43 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
             _selection,
             _blockSelectionMode,
             _blockAnchorCellColumn,
-            _blockCurrentCellColumn);
+            _blockCurrentCellColumn,
+            LineTextExpander);
+    }
+
+    /// <summary>
+    /// For a line that stands in for hidden text (a folded command's summary), the text it stands
+    /// for; null for an ordinary line. A plain-text copy of a selection over such a line copies the
+    /// hidden text instead of the summary.
+    /// </summary>
+    internal Func<int, string?>? LineTextExpander { get; set; }
+
+    /// <summary>Selects whole display lines <paramref name="startLine"/>..<paramref name="endLine"/>; test seam.</summary>
+    internal void SelectLinesForTests(int startLine, int endLine)
+    {
+        int endLength = endLine < _lines.Count ? _lines[endLine].Text.Length : 0;
+        SelectRange(new TerminalTextRange(
+            new TerminalTextPosition(startLine, 0),
+            new TerminalTextPosition(endLine, endLength)));
+    }
+
+    /// <summary>Whether the selection covers a line that <see cref="LineTextExpander"/> expands.</summary>
+    internal bool SelectionCoversExpandedLine()
+    {
+        if (LineTextExpander is not { } expand || NormalizeSelection(_selection) is not { } range)
+        {
+            return false;
+        }
+
+        for (int lineIndex = range.Start.LineIndex; lineIndex <= range.End.LineIndex; lineIndex++)
+        {
+            if (expand(lineIndex) is not null)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private (int Left, int Right) GetBlockColumnRange() =>

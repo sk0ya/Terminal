@@ -186,6 +186,68 @@ public partial class TerminalTabView
             ]);
     }
 
+    /// <summary>The hidden output behind a fold's summary line, for copying; null for other lines.</summary>
+    private string? ExpandFoldSummaryLine(int displayLine)
+    {
+        if (_foldMap.IsEmpty)
+        {
+            return null;
+        }
+
+        _foldMap.ToBuffer(displayLine, out TerminalFold? summary);
+        return summary is { } fold
+            ? _terminalBuffer.GetPlainTextForAbsoluteLineRange(fold.Start, fold.End)
+            : null;
+    }
+
+    /// <summary>
+    /// Opens every fold whose hidden output matches the find query, so a search never silently
+    /// misses text the user folded away. Returns whether anything was opened (the surface was then
+    /// re-rendered, so its matches include the opened lines).
+    /// </summary>
+    private bool UnfoldFoldsMatchingFind()
+    {
+        if (_foldMap.IsEmpty || string.IsNullOrEmpty(_findState.Query))
+        {
+            return false;
+        }
+
+        var opened = new List<int>();
+        foreach (TerminalFold fold in _foldMap.Folds)
+        {
+            string hidden = _terminalBuffer.GetPlainTextForAbsoluteLineRange(fold.Start, fold.End);
+            bool hit = _findState.Pattern is { } pattern
+                ? SafeIsMatch(pattern, hidden)
+                : hidden.Contains(_findState.Query, _findState.Comparison);
+            if (hit)
+            {
+                opened.Add(fold.Start);
+            }
+        }
+
+        if (opened.Count == 0)
+        {
+            return false;
+        }
+
+        _foldMarks.RemoveAll(mark =>
+            _terminalBuffer.TryResolveMark(mark.Start, out int start) && opened.Contains(start));
+        PerformDocumentRender();
+        return true;
+
+        static bool SafeIsMatch(System.Text.RegularExpressions.Regex pattern, string text)
+        {
+            try
+            {
+                return pattern.IsMatch(text);
+            }
+            catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
+            {
+                return false;
+            }
+        }
+    }
+
     /// <summary>Display line (what the surface shows) → buffer line.</summary>
     private int DisplayToBufferLine(int displayLine) => _foldMap.ToBuffer(displayLine);
 
@@ -265,6 +327,23 @@ public partial class TerminalTabView
 
     /// <summary>The current display/buffer mapping; test seam.</summary>
     internal TerminalFoldMap FoldMapForTests => _foldMap;
+
+    /// <summary>Runs the find step that opens folds hiding a match for <paramref name="query"/>; test seam.</summary>
+    internal bool UnfoldFoldsMatchingFindForTests(string query, bool useRegex = false)
+    {
+        _findState.UpdateCriteria(query, caseSensitive: false, useRegex);
+        return UnfoldFoldsMatchingFind();
+    }
+
+    /// <summary>The selection text over a display range, as a plain-text copy would produce it; test seam.</summary>
+    internal string CopyTextForTests(int startDisplayLine, int endDisplayLine)
+    {
+        TerminalOutput.SelectLinesForTests(startDisplayLine, endDisplayLine);
+        return TerminalOutput.GetSelectedText();
+    }
+
+    /// <summary>Renders the buffer into the surface now, folds applied; test seam.</summary>
+    internal void RenderForTests() => PerformDocumentRender();
 
     /// <summary>Rebuilds the fold map as a render would; test seam.</summary>
     internal void RefreshFoldsForTests() =>

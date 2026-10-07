@@ -92,6 +92,47 @@ public sealed class TerminalFoldTests
     }
 
     [Fact]
+    public void FindOpensAFoldThatHidesAMatchAndCopyExpandsSummaries()
+    {
+        StaTestRunner.Run(() =>
+        {
+            var view = new TerminalTabView("cmd.exe", Environment.CurrentDirectory);
+            var output = new StringBuilder($"{Osc("133;A")}> {Osc("133;B")}big\r\n{Osc("133;C")}");
+            for (int i = 0; i < 50; i++)
+            {
+                output.Append(i == 20 ? "needle here\r\n" : $"row {i}\r\n");
+            }
+
+            output.Append($"{Osc("133;D;0")}{Osc("133;A")}> {Osc("133;B")}next\r\n{Osc("133;C")}");
+            for (int i = 0; i < 40; i++)
+            {
+                output.Append($"tail {i}\r\n");
+            }
+
+            view.FeedOutputForTests(output.ToString());
+            view.RenderForTests();
+            int unfoldedLines = view.TerminalOutput.LineCount;
+            Assert.True(view.FoldCommandOutputAt(10));
+            view.RenderForTests();
+            Assert.Equal(unfoldedLines - view.FoldMapForTests.HiddenLineCount, view.TerminalOutput.LineCount);
+            Assert.True(view.FoldMapForTests.HiddenLineCount > 0);
+
+            // Copy over the summary line (display line 1) copies the hidden rows.
+            string copied = view.CopyTextForTests(0, 2);
+            Assert.Contains("row 0", copied);
+            Assert.Contains("needle here", copied);
+            Assert.DoesNotContain("lines folded", copied);
+
+            Assert.False(view.UnfoldFoldsMatchingFindForTests("not-there"));
+            Assert.Equal(1, view.FoldCount);
+            Assert.True(view.UnfoldFoldsMatchingFindForTests("NEEDLE"));
+            Assert.Equal(0, view.FoldMapForTests.HiddenLineCount);
+            Assert.Equal(unfoldedLines, view.TerminalOutput.LineCount);
+            Assert.Equal(0, view.FoldCount);
+        });
+    }
+
+    [Fact]
     public void SummaryTextIsAscii()
     {
         string text = TerminalTabView.FormatFoldSummary(1234);

@@ -266,7 +266,8 @@ internal sealed class TerminalSelectionSearchModel
         TerminalTextRange? selection,
         bool blockSelection,
         double blockAnchorColumn = 0,
-        double blockCurrentColumn = 0)
+        double blockCurrentColumn = 0,
+        Func<int, string?>? expandLine = null)
     {
         TerminalTextRange? clamped = ClampRange(lines, Normalize(selection));
         if (!clamped.HasValue)
@@ -280,6 +281,18 @@ internal sealed class TerminalSelectionSearchModel
         for (int lineIndex = range.Start.LineIndex; lineIndex <= range.End.LineIndex; lineIndex++)
         {
             TerminalSelectionLine line = lines[lineIndex];
+            // A line standing in for others (a fold's summary) copies what it stands for, whole.
+            if (!blockSelection && expandLine?.Invoke(lineIndex) is { } expanded)
+            {
+                builder.Append(expanded);
+                if (lineIndex < range.End.LineIndex)
+                {
+                    builder.AppendLine();
+                }
+
+                continue;
+            }
+
             int start = blockSelection
                 ? line.TextCellMap.GetTextIndex(left)
                 : lineIndex == range.Start.LineIndex ? range.Start.TextIndex : 0;

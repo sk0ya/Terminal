@@ -762,6 +762,7 @@ public partial class TerminalTabView
             return;
         }
 
+        UnfoldFoldsMatchingFind();
         _findState.Refresh(FindSurfaceMatches(), reseek);
         if (_findState.Status == TerminalFindStatus.NoMatch)
         {
@@ -789,6 +790,7 @@ public partial class TerminalTabView
             return;
         }
 
+        UnfoldFoldsMatchingFind();
         _findState.Move(FindSurfaceMatches(), forward);
         if (_findState.Status == TerminalFindStatus.NoMatch)
         {
