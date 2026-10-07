@@ -25,10 +25,10 @@ public sealed class TerminalCopyCommandOutputTests
             view.SettleCommandOutputForTests();
 
             Assert.Equal(2, view.CapturedOutputsForTests.Count);
-            Assert.Equal("one", view.FindCapturedOutputForLine(0)?.Output);
-            Assert.Equal("one", view.FindCapturedOutputForLine(1)?.Output);
-            Assert.Equal("two" + Environment.NewLine + "2b", view.FindCapturedOutputForLine(2)?.Output);
-            Assert.Equal("two" + Environment.NewLine + "2b", view.FindCapturedOutputForLine(4)?.Output);
+            Assert.Equal("one", view.ReadCapturedOutputForTests(view.FindCapturedOutputForLine(0)));
+            Assert.Equal("one", view.ReadCapturedOutputForTests(view.FindCapturedOutputForLine(1)));
+            Assert.Equal("two" + Environment.NewLine + "2b", view.ReadCapturedOutputForTests(view.FindCapturedOutputForLine(2)));
+            Assert.Equal("two" + Environment.NewLine + "2b", view.ReadCapturedOutputForTests(view.FindCapturedOutputForLine(4)));
             Assert.Null(view.FindCapturedOutputForLine(5));
         });
     }

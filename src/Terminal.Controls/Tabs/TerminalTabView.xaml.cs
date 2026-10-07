@@ -2417,7 +2417,7 @@ public partial class TerminalTabView : UserControl
                 if (_commandOutput.HasPending)
                 {
                     _commandOutputSettleTimer.Stop();
-                    RaiseCommandOutput(_commandOutput.Complete(_terminalBuffer, e.AbsoluteLine, _lastReportedCommandLine));
+                    RaiseCommandOutput(_commandOutput.CompleteRange(_terminalBuffer, e.AbsoluteLine, _lastReportedCommandLine));
                 }
 
                 _commandOutput.OnCommandExecuted(_terminalBuffer, e.AbsoluteLine, _lastReportedCommandLine);
@@ -2449,16 +2449,23 @@ public partial class TerminalTabView : UserControl
     {
         if (_commandOutput.HasPending)
         {
-            RaiseCommandOutput(_commandOutput.Complete(_terminalBuffer, _commandOutput.ResolveSettledEnd(_terminalBuffer)));
+            RaiseCommandOutput(_commandOutput.CompleteRange(_terminalBuffer, _commandOutput.ResolveSettledEnd(_terminalBuffer)));
         }
     }
 
-    private void RaiseCommandOutput(ShellCommandOutputEventArgs? args)
+    private void RaiseCommandOutput(CommandOutputRange? range)
     {
-        if (args is not null)
+        if (range is null)
         {
-            RememberCapturedOutput(args);
-            CommandOutputCaptured?.Invoke(this, args);
+            return;
+        }
+
+        RememberCapturedOutput(range);
+        // The text is only read out for a subscriber; "Copy Command Output" reads it on demand.
+        if (CommandOutputCaptured is { } handlers &&
+            TerminalCommandOutputCoordinator.Extract(_terminalBuffer, range) is { } args)
+        {
+            handlers(this, args);
         }
     }
 

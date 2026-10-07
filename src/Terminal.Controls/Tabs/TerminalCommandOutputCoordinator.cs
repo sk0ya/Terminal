@@ -21,6 +21,17 @@ namespace Terminal.Tabs;
 /// <item>starts at C and drops a leading echo of the command line (the prompt row it was typed on).</item>
 /// </list>
 /// </summary>
+/// <summary>
+/// Where one command's output lies in the buffer, cut but not yet read out as text. Cheap to keep:
+/// the text is extracted only when someone needs it (an event subscriber, or a copy).
+/// </summary>
+internal sealed record CommandOutputRange(
+    TerminalLineMark Start,
+    TerminalLineMark End,
+    string? CommandLine,
+    int? ExitCode,
+    string? NextCommandLine);
+
 internal sealed class TerminalCommandOutputCoordinator
 {
     /// <summary>How long output must stay quiet after D before the range is cut.</summary>
@@ -144,6 +155,11 @@ internal sealed class TerminalCommandOutputCoordinator
     /// buffer was renumbered (resize reflow, scrollback clear) since the start was marked.
     /// </summary>
     public ShellCommandOutputEventArgs? Complete(
+        AnsiTerminalBuffer buffer, int endExclusive, string? nextCommandLine = null) =>
+        CompleteRange(buffer, endExclusive, nextCommandLine) is { } range ? Extract(buffer, range) : null;
+
+    /// <summary>Cuts the pending output as a range only; see <see cref="Complete"/>.</summary>
+    public CommandOutputRange? CompleteRange(
         AnsiTerminalBuffer buffer, int endExclusive, string? nextCommandLine = null)
     {
         if (_pending is not { } pending)
@@ -152,17 +168,31 @@ internal sealed class TerminalCommandOutputCoordinator
         }
 
         _pending = null;
-        if (!buffer.TryGetPlainLinesFromMark(pending.Start, endExclusive, out List<string> lines, out bool headLost))
+        return new CommandOutputRange(
+            pending.Start,
+            buffer.MarkAbsoluteLine(endExclusive),
+            pending.CommandLine,
+            pending.ExitCode,
+            nextCommandLine);
+    }
+
+    /// <summary>
+    /// Reads a cut range out as text. Null when its lines were renumbered (resize reflow, scrollback
+    /// clear) or its end left the buffer since the cut.
+    /// </summary>
+    public static ShellCommandOutputEventArgs? Extract(AnsiTerminalBuffer buffer, CommandOutputRange range)
+    {
+        if (!buffer.TryResolveMark(range.End, out int endExclusive) ||
+            !buffer.TryGetPlainLinesFromMark(range.Start, endExclusive, out List<string> lines, out bool headLost))
         {
             return null;
         }
 
         return new ShellCommandOutputEventArgs(
-            pending.CommandLine,
-            pending.ExitCode,
-            ExtractOutput(lines, pending.CommandLine, nextCommandLine),
-            headLost,
-            pending.Start);
+            range.CommandLine,
+            range.ExitCode,
+            ExtractOutput(lines, range.CommandLine, range.NextCommandLine),
+            headLost);
     }
 
     /// <summary>Drops the echoed command at the head, the next command's echo at the tail, and blank

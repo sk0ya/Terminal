@@ -1,14 +1,10 @@
-using Terminal.Buffer;
-
 namespace Terminal.Tabs;
 
 /// <summary>Event data for <see cref="TerminalTabView.CommandOutputCaptured"/>.</summary>
 public sealed class ShellCommandOutputEventArgs : EventArgs
 {
-    internal ShellCommandOutputEventArgs(
-        string? commandLine, int? exitCode, string output, bool headLost, TerminalLineMark? start = null)
+    internal ShellCommandOutputEventArgs(string? commandLine, int? exitCode, string output, bool headLost)
     {
-        Start = start;
         CommandLine = commandLine;
         ExitCode = exitCode;
         Output = output;
@@ -33,7 +29,4 @@ public sealed class ShellCommandOutputEventArgs : EventArgs
     /// <summary>True when the head of the output had already scrolled out of the scrollback limit,
     /// so <see cref="Output"/> starts at the oldest line still kept.</summary>
     public bool HeadLost { get; }
-
-    /// <summary>Where the range began (the C row), so the tab can map a buffer line back to its output.</summary>
-    internal TerminalLineMark? Start { get; }
 }
