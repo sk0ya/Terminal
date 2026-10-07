@@ -29,6 +29,30 @@ public sealed class TerminalCommandMarkShiftTests
     }
 
     [Fact]
+    public void VersionChangesOnlyWhenTheMarksDo()
+    {
+        var coordinator = new TerminalCommandNavigationCoordinator();
+        int start = coordinator.Version;
+
+        coordinator.Observe(ShellCommandZoneType.PromptStart, 3);
+        int afterPrompt = coordinator.Version;
+        Assert.NotEqual(start, afterPrompt);
+
+        // A prompt redraw on the same line changes nothing.
+        coordinator.Observe(ShellCommandZoneType.PromptStart, 3);
+        Assert.Equal(afterPrompt, coordinator.Version);
+
+        coordinator.Observe(ShellCommandZoneType.CommandDone, 4, 1, DateTime.UtcNow);
+        Assert.NotEqual(afterPrompt, coordinator.Version);
+
+        int beforeShift = coordinator.Version;
+        coordinator.ShiftUp(0);
+        Assert.Equal(beforeShift, coordinator.Version);
+        coordinator.ShiftUp(1);
+        Assert.NotEqual(beforeShift, coordinator.Version);
+    }
+
+    [Fact]
     public void ClearingTheScrollbackKeepsLaterMarksOnTheirLines()
     {
         StaTestRunner.Run(() =>

@@ -36,8 +36,27 @@ public partial class TerminalTabView
     /// <summary>The marks currently shown; test seam.</summary>
     internal IReadOnlyList<TerminalScrollMark> ScrollMarksForTests => CollectScrollMarks().ToList();
 
+    private bool _scrollMarkersUpdateQueued;
+    private object? _scrollMarkersInputs;
+
+    /// <summary>
+    /// Asks for the ticks to be redrawn. Requests are coalesced into one pass at background priority:
+    /// streaming output changes the extent on every render, and each pass walks every mark and match.
+    /// </summary>
     private void UpdateScrollMarkers()
     {
+        if (_scrollMarkersUpdateQueued)
+        {
+            return;
+        }
+
+        _scrollMarkersUpdateQueued = true;
+        _ = Dispatcher.BeginInvoke(UpdateScrollMarkersNow, System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    private void UpdateScrollMarkersNow()
+    {
+        _scrollMarkersUpdateQueued = false;
         if (!_isScrollMarkersEnabled ||
             _terminalBuffer.IsAlternateScreenActive ||
             TerminalScrollHost.ComputedVerticalScrollBarVisibility != Visibility.Visible ||
@@ -49,6 +68,15 @@ public partial class TerminalTabView
 
         var (_, charHeight) = MeasureCharacterCell();
         int totalLines = (int)Math.Round(TerminalScrollHost.ExtentHeight / Math.Max(charHeight, 1.0));
+        // Nothing that places a tick changed: keep the ticks already drawn.
+        var inputs = (_commandNavigation.Version, FindPopup.IsOpen, _findState.Matches, _findState.CurrentIndex,
+            _foldMap, totalLines, trackTop, trackHeight, barWidth);
+        if (ScrollMarkerBar.Visibility == Visibility.Visible && Equals(inputs, _scrollMarkersInputs))
+        {
+            return;
+        }
+
+        _scrollMarkersInputs = inputs;
         ScrollMarkerBar.Width = barWidth;
         ScrollMarkerBar.SetMarks(CollectScrollMarks(), totalLines, trackTop, trackHeight);
         ScrollMarkerBar.Visibility = Visibility.Visible;

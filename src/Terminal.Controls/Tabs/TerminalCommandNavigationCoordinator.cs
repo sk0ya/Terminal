@@ -23,6 +23,9 @@ internal sealed class TerminalCommandNavigationCoordinator
     private readonly List<TerminalCommandMark> _commands = [];
 
     public bool HasPrompts => _promptLines.Count > 0;
+
+    /// <summary>Bumped on every change to the marks, so a consumer can tell whether to redraw.</summary>
+    public int Version { get; private set; }
     public IReadOnlyList<int> PromptLines => _promptLines;
     public IReadOnlyList<TerminalCommandMark> Commands => _commands;
 
@@ -70,6 +73,7 @@ internal sealed class TerminalCommandNavigationCoordinator
 
         _promptLines.Add(absoluteLine);
         _commands.Add(new TerminalCommandMark(absoluteLine, absoluteLine, Executed: false));
+        Version++;
         return true;
     }
 
@@ -83,6 +87,8 @@ internal sealed class TerminalCommandNavigationCoordinator
         {
             return false;
         }
+
+        Version++;
 
         for (int index = _commands.Count - 1; index >= 0; index--)
         {
@@ -107,6 +113,7 @@ internal sealed class TerminalCommandNavigationCoordinator
 
     public void ResetSession()
     {
+        Version++;
         _promptLines.Clear();
         _commands.Clear();
     }
@@ -204,6 +211,7 @@ internal sealed class TerminalCommandNavigationCoordinator
         if (_commands.Count > 0)
         {
             _commands[^1] = update(_commands[^1]);
+            Version++;
         }
     }
 }
