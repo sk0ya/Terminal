@@ -54,10 +54,15 @@ public partial class TerminalTabView
                 .TrimEnd();
         }
 
+        // Re-read every time: the command can finish while it is pinned.
+        StickyCommandMetaText.Text = FormatCommandMeta(_commandNavigation.FindOwner(absoluteLine));
+
         // Match the surface's font so the pinned line reads as the line it stands in for.
         StickyCommandText.FontFamily = TerminalOutput.FontFamily;
         StickyCommandText.FontSize = TerminalOutput.FontSize;
         StickyCommandText.Height = Math.Max(charHeight, 1.0);
+        StickyCommandMetaText.FontFamily = TerminalOutput.FontFamily;
+        StickyCommandMetaText.FontSize = TerminalOutput.FontSize;
         StickyCommandOverlay.Margin = new Thickness(
             0,
             0,
@@ -66,6 +71,28 @@ public partial class TerminalTabView
                 : 0,
             0);
         StickyCommandOverlay.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// <c>✓ 1.2s</c> / <c>✗ 2 · 1.2s</c> for a finished command, <c>…</c> while it still runs,
+    /// empty when nothing is known (no D seen and no timing).
+    /// </summary>
+    internal static string FormatCommandMeta(TerminalCommandMark? mark)
+    {
+        if (mark is not { } command)
+        {
+            return string.Empty;
+        }
+
+        if (!command.Done)
+        {
+            return command.Executed ? "…" : string.Empty;
+        }
+
+        string status = command.ExitCode is { } code && code != 0 ? $"✗ {code}" : "✓";
+        return command.Duration is { } duration
+            ? $"{status} · {FormatCommandDuration(duration)}"
+            : status;
     }
 
     private int? ResolveStickyCommandLine()
@@ -92,6 +119,7 @@ public partial class TerminalTabView
     {
         HideStickyCommand();
         StickyCommandText.Text = string.Empty;
+        StickyCommandMetaText.Text = string.Empty;
     }
 
     private void StickyCommandOverlay_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)

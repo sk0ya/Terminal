@@ -344,12 +344,22 @@
                         BorderThickness="0,0,0,1"
                         ToolTip="Scroll to this command"
                         MouseLeftButtonUp="StickyCommandOverlay_MouseLeftButtonUp">
-                    <TextBlock x:Name="StickyCommandText"
-                               Foreground="{DynamicResource HistoryPopupForegroundBrush}"
-                               FontFamily="Cascadia Mono"
-                               FontSize="14"
-                               TextTrimming="CharacterEllipsis"
-                               TextWrapping="NoWrap" />
+                    <DockPanel LastChildFill="True">
+                        <!-- How the pinned command finished: exit status and C→D duration. -->
+                        <TextBlock x:Name="StickyCommandMetaText"
+                                   DockPanel.Dock="Right"
+                                   Margin="12,0,8,0"
+                                   Foreground="{DynamicResource HistoryPopupCountBrush}"
+                                   FontFamily="Cascadia Mono"
+                                   FontSize="14"
+                                   TextWrapping="NoWrap" />
+                        <TextBlock x:Name="StickyCommandText"
+                                   Foreground="{DynamicResource HistoryPopupForegroundBrush}"
+                                   FontFamily="Cascadia Mono"
+                                   FontSize="14"
+                                   TextTrimming="CharacterEllipsis"
+                                   TextWrapping="NoWrap" />
+                    </DockPanel>
                 </Border>
 
                 <Canvas IsHitTestVisible="False"

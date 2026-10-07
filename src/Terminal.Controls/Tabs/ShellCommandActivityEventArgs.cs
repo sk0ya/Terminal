@@ -22,11 +22,16 @@ public enum ShellCommandPhase
 /// <summary>Event data for <see cref="TerminalTabView.ShellCommandActivity"/>.</summary>
 public sealed class ShellCommandActivityEventArgs : EventArgs
 {
-    internal ShellCommandActivityEventArgs(ShellCommandPhase phase, int? exitCode, string? commandLine = null)
+    internal ShellCommandActivityEventArgs(
+        ShellCommandPhase phase,
+        int? exitCode,
+        string? commandLine = null,
+        TimeSpan? duration = null)
     {
         Phase = phase;
         ExitCode = exitCode;
         CommandLine = commandLine;
+        Duration = duration;
     }
 
     public ShellCommandPhase Phase { get; }
@@ -45,4 +50,10 @@ public sealed class ShellCommandActivityEventArgs : EventArgs
     /// null for the other phases, for an empty submission, or when the shell does not report it.
     /// </summary>
     public string? CommandLine { get; }
+
+    /// <summary>
+    /// How long the command ran, from OSC 133;C to OSC 133;D as observed by the terminal. Set for
+    /// <see cref="ShellCommandPhase.CommandDone"/> when the command was seen to start; null otherwise.
+    /// </summary>
+    public TimeSpan? Duration { get; }
 }

@@ -2210,6 +2210,9 @@ public partial class TerminalTabView : UserControl
             ShellCommandZoneType.CommandDone or ShellCommandZoneType.PromptStart => false,
             _ => _isShellCommandExecuting
         };
+        // Record first so the activity event and the status line can report the duration.
+        _commandNavigation.Observe(e.ZoneType, e.AbsoluteLine, e.ExitCode, DateTime.UtcNow);
+
         OnAgentShellCommandZone(e);
         OnCommandOutputZone(e);
         RaiseShellCommandActivity(e);
@@ -2221,13 +2224,60 @@ public partial class TerminalTabView : UserControl
             _stickyCommandLine = null;
         }
 
-        _commandNavigation.Observe(e.ZoneType, e.AbsoluteLine);
         UpdateStickyCommand();
 
-        if (e.ZoneType == ShellCommandZoneType.CommandDone && e.ExitCode.HasValue && e.ExitCode.Value != 0)
+        if (e.ZoneType == ShellCommandZoneType.CommandDone &&
+            FormatCommandFinishedStatus(e.ExitCode, _commandNavigation.LastCommand?.Duration) is { } status)
         {
-            SetStatus($"Command exited with code {e.ExitCode.Value}.");
+            SetStatus(status);
         }
+    }
+
+    /// <summary>
+    /// The status line for a finished command: a failure always, a success only when it ran long
+    /// enough for the time to be worth reading (a quick <c>ls</c> should not churn the status bar).
+    /// </summary>
+    internal static string? FormatCommandFinishedStatus(int? exitCode, TimeSpan? duration)
+    {
+        string? took = duration is { } d ? FormatCommandDuration(d) : null;
+        if (exitCode is { } code && code != 0)
+        {
+            return took is null
+                ? $"Command exited with code {code}."
+                : $"Command exited with code {code} after {took}.";
+        }
+
+        return duration is { } elapsed && elapsed >= CommandDurationStatusThreshold
+            ? $"Command finished in {took}."
+            : null;
+    }
+
+    private static readonly TimeSpan CommandDurationStatusThreshold = TimeSpan.FromSeconds(1);
+
+    /// <summary>Compact human duration: <c>850ms</c>, <c>12.3s</c>, <c>4m 05s</c>, <c>1h 02m</c>.</summary>
+    internal static string FormatCommandDuration(TimeSpan duration)
+    {
+        if (duration < TimeSpan.Zero)
+        {
+            duration = TimeSpan.Zero;
+        }
+
+        if (duration.TotalSeconds < 1)
+        {
+            return $"{(int)duration.TotalMilliseconds}ms";
+        }
+
+        if (duration.TotalMinutes < 1)
+        {
+            return $"{duration.TotalSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}s";
+        }
+
+        if (duration.TotalHours < 1)
+        {
+            return $"{(int)duration.TotalMinutes}m {duration.Seconds:00}s";
+        }
+
+        return $"{(int)duration.TotalHours}h {duration.Minutes:00}m";
     }
 
     private void TerminalBuffer_ShellCommandLineReceived(object? sender, string command)
@@ -2270,7 +2320,8 @@ public partial class TerminalTabView : UserControl
         string? commandLine = phase is ShellCommandPhase.CommandExecuted or ShellCommandPhase.CommandDone
             ? _lastReportedCommandLine
             : null;
-        handlers(this, new ShellCommandActivityEventArgs(phase, e.ExitCode, commandLine));
+        TimeSpan? duration = phase == ShellCommandPhase.CommandDone ? _commandNavigation.LastCommand?.Duration : null;
+        handlers(this, new ShellCommandActivityEventArgs(phase, e.ExitCode, commandLine, duration));
     }
 
     private void OnCommandOutputZone(ShellCommandZoneEventArgs e)
