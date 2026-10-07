@@ -16,6 +16,9 @@ internal sealed class TerminalScreenStore
 
     public List<TerminalLine> Screen { get; private set; }
     public List<TerminalLine> Scrollback { get; } = [];
+
+    /// <summary>The primary screen as it was when the alternate screen was entered; null outside it.</summary>
+    public IReadOnlyList<TerminalLine>? PrimaryScreenBackup => _primaryScreenBackup;
     public int ScrollbackLimit => _scrollbackLimit;
 
     /// <summary>Lines dropped off the head of the scrollback so far. Absolute line numbers shift down

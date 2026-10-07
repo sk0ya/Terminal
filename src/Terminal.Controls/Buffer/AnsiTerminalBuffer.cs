@@ -101,7 +101,7 @@ internal enum UnderlineStyle
     Dashed
 }
 
-internal sealed class AnsiTerminalBuffer
+internal sealed partial class AnsiTerminalBuffer
 {
     private const int MinColumns = 20;
     private const int MinRows = 10;
@@ -1626,6 +1626,12 @@ internal sealed class AnsiTerminalBuffer
                 _iconTitle = value;
             }
 
+            return;
+        }
+
+        if (command == ReplayOscCommand)
+        {
+            DispatchReplayOsc(value);
             return;
         }
 

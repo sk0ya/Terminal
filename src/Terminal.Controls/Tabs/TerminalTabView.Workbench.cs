@@ -63,6 +63,15 @@ public partial class TerminalTabView
     /// </summary>
     public bool ShellIntegrationInjectionEnabled { get; set; } = true;
 
+    /// <summary>
+    /// Creates the session for each start instead of a local <see cref="ConPtySession"/>. Called on a
+    /// background thread. Lets a host keep the pty in another process that outlives this view (and
+    /// re-attach to it later); such a session typically begins its output with a replayed snapshot.
+    /// Disposing the session is how the view ends it (tab closed, restarted), so a host that keeps
+    /// sessions alive across its own exit simply never disposes them on exit.
+    /// </summary>
+    public Func<TerminalSessionRequest, ITerminalSession>? SessionFactory { get; set; }
+
     public void SetColorTheme(TerminalColorTheme theme)
     {
         ApplyColorTheme(theme);

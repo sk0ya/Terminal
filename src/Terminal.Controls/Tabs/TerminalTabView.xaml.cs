@@ -1045,18 +1045,19 @@ public partial class TerminalTabView : UserControl
     private async Task<ITerminalSession> CreateSessionAsync(string commandLine, short columns, short rows, string workingDirectory)
     {
         bool injectShellIntegration = ShellIntegrationInjectionEnabled;
+        Func<TerminalSessionRequest, ITerminalSession>? sessionFactory = SessionFactory;
+        int scrollbackLimit = _scrollbackLimit;
         return await Task.Run(() =>
         {
             TerminalAppSettings settings = TerminalAppSettings.Load();
             string launchCommandLine = injectShellIntegration
                 ? ShellIntegration.PrepareLaunch(commandLine)
                 : commandLine;
-            ITerminalSession inner = new ConPtySession(
-                columns,
-                rows,
-                launchCommandLine,
-                workingDirectory,
-                CreateTerminalEnvironmentVariables());
+            IReadOnlyDictionary<string, string?> environment = CreateTerminalEnvironmentVariables();
+            ITerminalSession inner = sessionFactory is null
+                ? new ConPtySession(columns, rows, launchCommandLine, workingDirectory, environment)
+                : sessionFactory(new TerminalSessionRequest(
+                    commandLine, launchCommandLine, workingDirectory, columns, rows, environment, scrollbackLimit));
             // Innermost, so a capture records exactly what the pty produced and consumed.
             inner = RawSessionCapture.WrapIfEnabled(inner, launchCommandLine);
             if (!settings.EnableSessionLogging)
@@ -2288,6 +2289,12 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalBuffer_ShellCommandZoneReceived(object? sender, ShellCommandZoneEventArgs e)
     {
+        if (_terminalBuffer.IsReplaying)
+        {
+            OnReplayedShellCommandZone(e);
+            return;
+        }
+
         SyncCommandMarks();
         _isShellCommandExecuting = e.ZoneType switch
         {
@@ -2371,7 +2378,52 @@ public partial class TerminalTabView : UserControl
         // Kept verbatim (even when the history dedupes it) so ShellCommandActivity can report
         // every run, including one repeated back-to-back.
         _lastReportedCommandLine = string.IsNullOrWhiteSpace(command) ? null : command.Trim();
+        if (_terminalBuffer.IsReplaying)
+        {
+            // A redrawn command line belongs to a command that is still running (see
+            // OnReplayedShellCommandZone); it was recorded when it was typed.
+            return;
+        }
+
         RecordCommandHistory(command);
+    }
+
+    /// <summary>
+    /// A mark inside a replayed snapshot (a session re-attached from a host that kept it alive).
+    /// It is history being redrawn: it still places prompts and commands for navigation, folding and
+    /// sticky scroll, but reports nothing as happening now — otherwise every re-attach would announce
+    /// old commands as freshly run. The one thing carried forward is a command still running: its C
+    /// opens an output range so the D that arrives live later completes it.
+    /// </summary>
+    private void OnReplayedShellCommandZone(ShellCommandZoneEventArgs e)
+    {
+        SyncCommandMarks();
+        _isShellCommandExecuting = e.ZoneType switch
+        {
+            ShellCommandZoneType.CommandExecuted => true,
+            ShellCommandZoneType.CommandDone or ShellCommandZoneType.PromptStart => false,
+            _ => _isShellCommandExecuting
+        };
+        _commandNavigation.Observe(e.ZoneType, e.AbsoluteLine, e.ExitCode, DateTime.UtcNow);
+        _agentCommands.OnShellZone(e, static (_, _) => string.Empty);
+        switch (e.ZoneType)
+        {
+            case ShellCommandZoneType.CommandExecuted:
+                _commandOutput.Reset();
+                _commandOutput.OnCommandExecuted(_terminalBuffer, e.AbsoluteLine, _lastReportedCommandLine);
+                break;
+            case ShellCommandZoneType.CommandDone:
+                _commandOutput.Reset();
+                break;
+            case ShellCommandZoneType.PromptStart:
+                _commandOutput.OnPromptStart(_terminalBuffer.MarkAbsoluteLine(e.AbsoluteLine));
+                _lastReportedCommandLine = null;
+                _stickyCommandLine = null;
+                break;
+        }
+
+        UpdateScrollMarkers();
+        UpdateStickyCommand();
     }
 
     private void RecordCommandHistory(string command)
