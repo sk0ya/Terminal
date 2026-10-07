@@ -2680,6 +2680,24 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void CommandStartAfterEraseAllLandsOnTheLastRowOfAMultiLinePrompt()
+    {
+        // A two-line prompt redrawn by Ctrl+L: B belongs to the row the command is typed on.
+        var buffer = new AnsiTerminalBuffer(20, 5);
+        buffer.Process("~/work\r\n> echo hi\r\nhi\r\n~/work\r\n> ");
+        var events = new List<ShellCommandZoneEventArgs>();
+        buffer.ShellCommandZoneReceived += (_, e) => events.Add(e);
+
+        buffer.Process("\u001b[2J\u001b]133;D;0\u0007\u001b]133;A\u0007\u001b]133;B\u0007\u001b[H~/work\r\n> ");
+
+        int newTop = buffer.ScrollbackLineCount;
+        Assert.Equal(
+            [ShellCommandZoneType.CommandDone, ShellCommandZoneType.PromptStart, ShellCommandZoneType.CommandStart],
+            events.Select(e => e.ZoneType));
+        Assert.Equal([newTop, newTop, newTop + 1], events.Select(e => e.AbsoluteLine));
+    }
+
+    [Fact]
     public void Osc133MarkAfterEraseAllFollowsAnExplicitCursorPlacement()
     {
         var buffer = new AnsiTerminalBuffer(20, 5);

@@ -611,6 +611,7 @@ internal sealed class AnsiTerminalBuffer
         }
 
         FlushPendingCluster();
+        FlushDeferredCommandStart();
         InvalidateScreenRenderCache();
         return _synchronizedUpdateEndedDuringProcess;
     }
@@ -2104,10 +2105,20 @@ internal sealed class AnsiTerminalBuffer
 
                 break;
             case OscShellPayloadKind.Zone:
-                int absoluteLine = ShellZoneAbsoluteLine();
+                ShellCommandZoneType zoneType = payload.ZoneType!.Value;
+                if (zoneType == ShellCommandZoneType.CommandStart && IsScreenUnplacedSinceEraseAll())
+                {
+                    // B names the row the command is typed on, which is the prompt's last row. On a
+                    // screen nothing has been drawn on yet, that row is not known: a two-line prompt
+                    // puts it one row below A. Hold B until the prompt is drawn (end of this chunk).
+                    _deferredCommandStart = true;
+                    break;
+                }
+
+                FlushDeferredCommandStart();
                 ShellCommandZoneReceived?.Invoke(
                     this,
-                    new ShellCommandZoneEventArgs(payload.ZoneType!.Value, absoluteLine, payload.ExitCode));
+                    new ShellCommandZoneEventArgs(zoneType, ShellZoneAbsoluteLine(), payload.ExitCode));
                 break;
         }
     }
@@ -2124,12 +2135,36 @@ internal sealed class AnsiTerminalBuffer
     /// </summary>
     private int ShellZoneAbsoluteLine()
     {
-        if (_cursorUnplacedSinceEraseAll && _primaryScreenBackup is null && FindLastContentRow(_screen) < 0)
+        if (IsScreenUnplacedSinceEraseAll())
         {
             return _scrollback.Count;
         }
 
         return _scrollback.Count + _cursorRow;
+    }
+
+    private bool IsScreenUnplacedSinceEraseAll() =>
+        _cursorUnplacedSinceEraseAll && _primaryScreenBackup is null && FindLastContentRow(_screen) < 0;
+
+    // A B (command start) held back because it arrived on a freshly erased screen; see DispatchOscShellIntegration.
+    private bool _deferredCommandStart;
+
+    /// <summary>
+    /// Emits a held B once the prompt has been drawn: the cursor then sits on the row the command
+    /// is typed on. Called at the end of each chunk and before any later mark, so the order of
+    /// A, B, C, D is kept.
+    /// </summary>
+    private void FlushDeferredCommandStart()
+    {
+        if (!_deferredCommandStart || IsScreenUnplacedSinceEraseAll())
+        {
+            return;
+        }
+
+        _deferredCommandStart = false;
+        ShellCommandZoneReceived?.Invoke(
+            this,
+            new ShellCommandZoneEventArgs(ShellCommandZoneType.CommandStart, _scrollback.Count + _cursorRow, null));
     }
 
     private void DispatchOscHyperlink(string value)
