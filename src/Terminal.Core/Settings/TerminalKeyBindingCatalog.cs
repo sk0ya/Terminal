@@ -27,7 +27,8 @@ public static class TerminalKeyBindingCatalog
             ["SplitVertical"] = "Ctrl+Shift+E",
             ["ClosePane"] = "Ctrl+Shift+Q",
             ["NextPane"] = "Ctrl+Alt+Right",
-            ["PreviousPane"] = "Ctrl+Alt+Left"
+            ["PreviousPane"] = "Ctrl+Alt+Left",
+            ["ToggleBroadcastInput"] = "Ctrl+Shift+B"
         };
 
     public static Dictionary<string, string> CreateDefaults() =>

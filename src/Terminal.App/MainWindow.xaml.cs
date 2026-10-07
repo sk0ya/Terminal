@@ -259,6 +259,29 @@ public partial class MainWindow : Window
     private void SplitHorizontalButton_Click(object sender, RoutedEventArgs e) { AppMenuPopup.IsOpen = false; SplitActivePane(true); }
     private void SplitVerticalButton_Click(object sender, RoutedEventArgs e) { AppMenuPopup.IsOpen = false; SplitActivePane(false); }
     private void ClosePaneButton_Click(object sender, RoutedEventArgs e) { AppMenuPopup.IsOpen = false; _ = CloseActivePaneAsync(); }
+    private void BroadcastInputButton_Click(object sender, RoutedEventArgs e) { AppMenuPopup.IsOpen = false; ToggleBroadcastInput(); }
+
+    /// <summary>
+    /// Mirrors what is typed into any pane of the active tab to its other panes (or stops). Each
+    /// pane shows a frame while it is on.
+    /// </summary>
+    private void ToggleBroadcastInput()
+    {
+        TerminalTabItem? tab = GetActiveTab();
+        if (tab is null) return;
+        tab.BroadcastInput = !tab.BroadcastInput;
+        foreach (TerminalTabView pane in tab.Panes) pane.IsInputBroadcastIndicatorVisible = tab.BroadcastInput;
+    }
+
+    private static void BroadcastInput(TerminalTabItem tab, TerminalTabView source, string text)
+    {
+        if (!tab.BroadcastInput) return;
+        // SendTerminalInput does not raise UserInputSent, so the mirrored input is not re-broadcast.
+        foreach (TerminalTabView pane in tab.Panes)
+        {
+            if (!ReferenceEquals(pane, source)) pane.SendTerminalInput(text);
+        }
+    }
 
     private void SplitActivePane(bool horizontal)
     {
@@ -407,6 +430,8 @@ public partial class MainWindow : Window
     private void WirePane(TerminalTabItem tab, TerminalTabView view)
     {
         view.GotKeyboardFocus += (_, _) => tab.ActivePane = view;
+        view.UserInputSent += (_, e) => BroadcastInput(tab, view, e.Text);
+        view.IsInputBroadcastIndicatorVisible = tab.BroadcastInput;
         view.HeaderTitleChanged += (_, title) => { if (ReferenceEquals(tab.ActivePane, view)) UpdateTabHeader(tab, title); };
         view.TaskbarProgressChanged += (_, e) =>
         {
@@ -657,6 +682,7 @@ public partial class MainWindow : Window
         if (_keyBindings.Matches("ClosePane", key, modifiers)) { _ = CloseActivePaneAsync(); e.Handled = true; return; }
         if (_keyBindings.Matches("NextPane", key, modifiers)) { MovePaneFocus(1); e.Handled = true; return; }
         if (_keyBindings.Matches("PreviousPane", key, modifiers)) { MovePaneFocus(-1); e.Handled = true; return; }
+        if (_keyBindings.Matches("ToggleBroadcastInput", key, modifiers)) { ToggleBroadcastInput(); e.Handled = true; return; }
 
         if (_keyBindings.Matches("NewTab", key, modifiers))
         {
@@ -1294,6 +1320,7 @@ public partial class MainWindow : Window
         internal TerminalTabView ActivePane { get; set; }
         internal UIElement Content { get; set; }
         internal List<TerminalTabView> Panes { get; } = [];
+        internal bool BroadcastInput { get; set; }
         internal ListBoxItem ListBoxItem { get; }
         internal Border HeaderBorder { get; }
         internal TextBlock IconText { get; }

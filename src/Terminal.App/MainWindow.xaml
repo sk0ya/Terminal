@@ -396,6 +396,8 @@
                             Content="Split vertically" Click="SplitVerticalButton_Click" />
                     <Button DockPanel.Dock="Top" Style="{StaticResource ProfilePickerButtonStyle}" Margin="0" Padding="10,8"
                             Content="Close active pane" Click="ClosePaneButton_Click" />
+                    <Button DockPanel.Dock="Top" Style="{StaticResource ProfilePickerButtonStyle}" Margin="0" Padding="10,8"
+                            Content="Broadcast input to all panes" Click="BroadcastInputButton_Click" />
                 </DockPanel>
             </Border>
         </Popup>

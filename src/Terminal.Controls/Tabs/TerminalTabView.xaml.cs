@@ -1326,6 +1326,7 @@ public partial class TerminalTabView : UserControl
             return false;
         }
 
+        RaiseUserInputSent(text);
         ScrollToLiveScreen();
         return true;
     }
@@ -1816,9 +1817,6 @@ public partial class TerminalTabView : UserControl
     /// <summary>An unfocused cursor is always drawn over the whole cell, whatever shape the app asked for.</summary>
     internal static TerminalCursorShape ResolveOverlayCursorShape(TerminalCursorShape shape, bool focused) =>
         focused ? shape : TerminalCursorShape.Block;
-
-    /// <summary>Whether the cursor overlay is currently drawn hollow (terminal not focused); test seam.</summary>
-    internal bool IsCursorOverlayHollowForTests => TerminalCursorOverlay.BorderThickness.Left > 0;
 
     private bool ShouldShowCursorOverlay()
     {

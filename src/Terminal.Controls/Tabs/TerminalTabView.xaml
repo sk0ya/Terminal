@@ -334,6 +334,15 @@
                     </rendering:TerminalSurfaceControl>
                 </ScrollViewer>
 
+                <!-- Frame shown while this pane's input is broadcast to the other panes. -->
+                <Border x:Name="BroadcastIndicatorOverlay"
+                        Panel.ZIndex="4"
+                        Visibility="Collapsed"
+                        IsHitTestVisible="False"
+                        Focusable="False"
+                        BorderThickness="2"
+                        BorderBrush="{DynamicResource HistoryPopupAccentBrush}" />
+
                 <!-- Visual bell: flashed over the terminal area when BellStyle includes Visual. -->
                 <Border x:Name="BellFlashOverlay"
                         Panel.ZIndex="4"
