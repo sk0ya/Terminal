@@ -2664,6 +2664,35 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void Osc133MarkAfterEraseAllBelongsToTheTopOfTheClearedScreen()
+    {
+        // pwsh's Ctrl+L through ConPTY: ESC[2J, the prompt's marks, and only then ESC[H + prompt.
+        var buffer = new AnsiTerminalBuffer(20, 5);
+        buffer.Process("PS> echo hi\r\nhi\r\nPS> ");
+        var lines = new List<int>();
+        buffer.ShellCommandZoneReceived += (_, e) => lines.Add(e.AbsoluteLine);
+
+        buffer.Process("\u001b[2J\u001b]133;D;0\u0007\u001b]133;A\u0007\u001b]133;B\u0007\u001b[HPS> ");
+
+        int newTop = buffer.ScrollbackLineCount;
+        Assert.Equal(3, newTop);
+        Assert.Equal([newTop, newTop, newTop], lines);
+    }
+
+    [Fact]
+    public void Osc133MarkAfterEraseAllFollowsAnExplicitCursorPlacement()
+    {
+        var buffer = new AnsiTerminalBuffer(20, 5);
+        buffer.Process("one\r\ntwo\r\n");
+        int line = -1;
+        buffer.ShellCommandZoneReceived += (_, e) => line = e.AbsoluteLine;
+
+        buffer.Process("\u001b[2J\u001b[3;1H\u001b]133;A\u0007");
+
+        Assert.Equal(buffer.ScrollbackLineCount + 2, line);
+    }
+
+    [Fact]
     public void Osc133AbsoluteLineIncludesScrollback()
     {
         var buffer = new AnsiTerminalBuffer(10, 5);

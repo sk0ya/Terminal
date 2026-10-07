@@ -188,6 +188,10 @@ internal sealed class AnsiTerminalBuffer
     // entering a synthetic alternate screen. See ScrollClearedScreenIntoScrollback.
     private int _clearedScreenScrollbackAppended;
     private int _clearedScreenScrollbackCount;
+    // Set by an erase-all on the primary screen, cleared by the next explicit cursor placement.
+    // ED2 leaves the cursor where it was, and the shell places it (ESC[H) only after the OSC 133
+    // marks of the prompt it is about to draw — see ShellZoneAbsoluteLine.
+    private bool _cursorUnplacedSinceEraseAll;
     private string _lastPrintedClusterText = string.Empty;
     private int _lastPrintedClusterWidth;
     private bool _pendingClusterJoinNext;
@@ -2073,12 +2077,32 @@ internal sealed class AnsiTerminalBuffer
 
                 break;
             case OscShellPayloadKind.Zone:
-                int absoluteLine = _scrollback.Count + _cursorRow;
+                int absoluteLine = ShellZoneAbsoluteLine();
                 ShellCommandZoneReceived?.Invoke(
                     this,
                     new ShellCommandZoneEventArgs(payload.ZoneType!.Value, absoluteLine, payload.ExitCode));
                 break;
         }
+    }
+
+    /// <summary>
+    /// The line an OSC 133 mark belongs to: normally the cursor's. The exception is a mark that
+    /// arrives on a screen an erase-all has just emptied, before anything has placed the cursor.
+    /// pwsh's Ctrl+L arrives through ConPTY as ESC[2J, then the D/A/B marks, and only then ESC[H
+    /// and the prompt — and ED2 does not move the cursor, so the cursor still sits on the row the
+    /// old prompt was on. Taken at face value the new prompt's A lands that many rows down the
+    /// fresh screen, the command before it keeps owning the top line, and sticky scroll pins it
+    /// over the very prompt the clear just put there. Nothing can be drawn on an empty screen
+    /// except from where the shell next puts the cursor, which for a redrawn prompt is home.
+    /// </summary>
+    private int ShellZoneAbsoluteLine()
+    {
+        if (_cursorUnplacedSinceEraseAll && _primaryScreenBackup is null && FindLastContentRow(_screen) < 0)
+        {
+            return _scrollback.Count;
+        }
+
+        return _scrollback.Count + _cursorRow;
     }
 
     private void DispatchOscHyperlink(string value)
@@ -3602,6 +3626,7 @@ internal sealed class AnsiTerminalBuffer
                 if (!selective)
                 {
                     ScrollClearedScreenIntoScrollback();
+                    _cursorUnplacedSinceEraseAll = true;
                 }
 
                 for (int row = 0; row < _rows; row++)
@@ -4046,6 +4071,7 @@ internal sealed class AnsiTerminalBuffer
 
     private void MoveCursorHome()
     {
+        _cursorUnplacedSinceEraseAll = false;
         ClearWrapPending();
         _cursorRow = GetTopRowLimit();
         _cursorColumn = _originMode && _leftRightMarginEnabled ? _leftMargin : 0;
@@ -4053,6 +4079,7 @@ internal sealed class AnsiTerminalBuffer
 
     private void SetCursorPosition(int rowParameter, int columnParameter)
     {
+        _cursorUnplacedSinceEraseAll = false;
         int rowOffset = Math.Max(rowParameter, 1) - 1;
         int baseRow = _originMode ? _scrollTop : 0;
         int maxRow = _originMode ? _scrollBottom : _rows - 1;
@@ -4064,6 +4091,7 @@ internal sealed class AnsiTerminalBuffer
 
     private void SetCursorRow(int rowParameter)
     {
+        _cursorUnplacedSinceEraseAll = false;
         int rowOffset = Math.Max(rowParameter, 1) - 1;
         int baseRow = _originMode ? _scrollTop : 0;
         int maxRow = _originMode ? _scrollBottom : _rows - 1;

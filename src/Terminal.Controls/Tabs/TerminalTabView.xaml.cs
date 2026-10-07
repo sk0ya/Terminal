@@ -2337,6 +2337,12 @@ public partial class TerminalTabView : UserControl
     /// <summary>Feeds raw PTY output into the terminal buffer; test seam for marker-driven events.</summary>
     internal void FeedOutputForTests(string data) => _terminalBuffer.Process(data);
 
+    /// <summary>The OSC 133 command marks as observed; test seam for line-position checks.</summary>
+    internal TerminalCommandNavigationCoordinator CommandNavigationForTests => _commandNavigation;
+
+    /// <summary>The scrollback length, i.e. the absolute line of the screen's top row.</summary>
+    internal int ScreenTopLineForTests => _terminalBuffer.ScrollbackLineCount;
+
     private bool TryScrollToAdjacentCommandLine(bool upward)
     {
         if (!_commandNavigation.HasPrompts)
