@@ -273,13 +273,14 @@ public partial class MainWindow : Window
         foreach (TerminalTabView pane in tab.Panes) pane.IsInputBroadcastIndicatorVisible = tab.BroadcastInput;
     }
 
-    private static void BroadcastInput(TerminalTabItem tab, TerminalTabView source, string text)
+    private static void BroadcastInput(TerminalTabItem tab, TerminalTabView source, TerminalUserInputEventArgs input)
     {
         if (!tab.BroadcastInput) return;
-        // SendMirroredInput does not raise UserInputSent, so the mirrored input is not re-broadcast.
+        // Each pane re-encodes keys and pastes for its own modes (one pane may be in vim). It does not
+        // raise UserInputSent, so the mirrored input is not re-broadcast.
         foreach (TerminalTabView pane in tab.Panes)
         {
-            if (!ReferenceEquals(pane, source)) pane.SendMirroredInput(text);
+            if (!ReferenceEquals(pane, source)) pane.SendMirroredInput(input);
         }
     }
 
@@ -430,7 +431,7 @@ public partial class MainWindow : Window
     private void WirePane(TerminalTabItem tab, TerminalTabView view)
     {
         view.GotKeyboardFocus += (_, _) => tab.ActivePane = view;
-        view.UserInputSent += (_, e) => BroadcastInput(tab, view, e.Text);
+        view.UserInputSent += (_, e) => BroadcastInput(tab, view, e);
         view.IsInputBroadcastIndicatorVisible = tab.BroadcastInput;
         view.HeaderTitleChanged += (_, title) => { if (ReferenceEquals(tab.ActivePane, view)) UpdateTabHeader(tab, title); };
         view.TaskbarProgressChanged += (_, e) =>

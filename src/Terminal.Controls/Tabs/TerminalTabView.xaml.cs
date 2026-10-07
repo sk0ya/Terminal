@@ -739,19 +739,19 @@ public partial class TerminalTabView : UserControl
         {
             TerminalKeyboardActionKind.Copy => Execute(CopySelectionToClipboard),
             TerminalKeyboardActionKind.Paste => Execute(PasteFromClipboard),
-            TerminalKeyboardActionKind.ScrollPreviousCommand => ExecuteScrollAction(action, upward: true),
-            TerminalKeyboardActionKind.ScrollNextCommand => ExecuteScrollAction(action, upward: false),
+            TerminalKeyboardActionKind.ScrollPreviousCommand => ExecuteScrollAction(action, upward: true, KeyOrigin(e)),
+            TerminalKeyboardActionKind.ScrollNextCommand => ExecuteScrollAction(action, upward: false, KeyOrigin(e)),
             TerminalKeyboardActionKind.OpenHistory => Execute(OpenHistoryPanel),
             TerminalKeyboardActionKind.OpenFind => Execute(OpenFindPanel),
             TerminalKeyboardActionKind.LocalSelection => TerminalOutput.MoveKeyboardCursor(GetEffectiveKey(e), extend: true),
             TerminalKeyboardActionKind.QueueProxyFlush => Execute(QueuePendingProxyTextFlushAfterImeConfirm, handled: false),
             TerminalKeyboardActionKind.Interrupt => Execute(SendInterrupt),
-            TerminalKeyboardActionKind.SendText => action.Text is not null && SendUserInput(action.Text),
+            TerminalKeyboardActionKind.SendText => action.Text is not null && SendUserInput(action.Text, KeyOrigin(e)),
             _ => false
         };
     }
 
-    private bool ExecuteScrollAction(TerminalKeyboardAction action, bool upward)
+    private bool ExecuteScrollAction(TerminalKeyboardAction action, bool upward, TerminalInputOrigin origin)
     {
         if (TryScrollToAdjacentCommandLine(upward))
         {
@@ -763,7 +763,7 @@ public partial class TerminalTabView : UserControl
             _ = FlushInputProxyText();
         }
 
-        return action.Text is not null && SendUserInput(action.Text);
+        return action.Text is not null && SendUserInput(action.Text, origin);
     }
 
     private static bool Execute(Action action, bool handled = true)
@@ -1332,14 +1332,14 @@ public partial class TerminalTabView : UserControl
     /// Ctrl+L makes it obvious — it clears the screen and redraws the prompt at the top, and
     /// without this the old output just stays put as though the key did nothing. Mouse reporting
     /// and focus events deliberately do not come through here; they are not the human typing.</summary>
-    private bool SendUserInput(string text)
+    private bool SendUserInput(string text, TerminalInputOrigin? origin = null)
     {
         if (!SendTerminalInput(text))
         {
             return false;
         }
 
-        RaiseUserInputSent(text);
+        RaiseUserInputSent(text, origin);
         ScrollToLiveScreen();
         return true;
     }
@@ -1398,7 +1398,7 @@ public partial class TerminalTabView : UserControl
 
         if (action is { Kind: TerminalPasteActionKind.Send, Text: not null })
         {
-            _ = SendUserInput(action.Text);
+            _ = SendUserInput(action.Text, TerminalInputOrigin.FromPaste(text));
         }
     }
 

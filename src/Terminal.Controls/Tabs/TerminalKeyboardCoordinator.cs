@@ -162,7 +162,7 @@ internal sealed class TerminalKeyboardCoordinator
         ? Pass()
         : new(TerminalKeyboardActionKind.SendText, text);
 
-    private static string? ResolveKeypad(TerminalKeyboardKey key) => key switch
+    internal static string? ResolveKeypad(TerminalKeyboardKey key) => key switch
     {
         TerminalKeyboardKey.NumPad0 => "\u001bOp", TerminalKeyboardKey.NumPad1 => "\u001bOq",
         TerminalKeyboardKey.NumPad2 => "\u001bOr", TerminalKeyboardKey.NumPad3 => "\u001bOs",

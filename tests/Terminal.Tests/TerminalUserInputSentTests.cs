@@ -41,7 +41,7 @@ public sealed class TerminalUserInputSentTests
     private static bool SendUserInput(TerminalTabView view, string text) =>
         (bool)typeof(TerminalTabView)
             .GetMethod("SendUserInput", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(view, [text])!;
+            .Invoke(view, [text, null])!;
 
     private static void Attach(TerminalTabView view, ITerminalSession session)
     {

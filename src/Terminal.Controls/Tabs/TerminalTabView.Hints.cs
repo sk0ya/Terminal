@@ -113,7 +113,7 @@ public partial class TerminalTabView
                 multilinePasteApproved: true);
             if (action is { Kind: TerminalPasteActionKind.Send, Text: not null })
             {
-                _ = SendUserInput(action.Text);
+                _ = SendUserInput(action.Text, TerminalInputOrigin.FromPaste(text));
             }
         }
     }
