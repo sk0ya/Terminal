@@ -34,6 +34,7 @@ public partial class TerminalTabView : UserControl
     private const int ExitOutputDrainPasses = 3;
     private static readonly Brush BlockCursorBrush = CreateFrozenBrush(Color.FromArgb(0xA0, 0xE3, 0xE3, 0xE3));
     private static readonly Brush AccentCursorBrush = CreateFrozenBrush(Color.FromRgb(0x5F, 0xAF, 0xFF));
+    private static readonly Brush UnfocusedCursorBorderBrush = CreateFrozenBrush(Color.FromArgb(0xC0, 0xE3, 0xE3, 0xE3));
 
     private readonly TerminalSessionOrchestrator _sessionOrchestrator = new();
     private readonly TerminalKeyboardCoordinator _keyboardState = new();
@@ -68,6 +69,8 @@ public partial class TerminalTabView : UserControl
     private readonly TerminalCommandNavigationCoordinator _commandNavigation = new();
     private readonly TerminalTaskbarProgressCoordinator _taskbarProgress = new();
     private bool _isShellCommandExecuting;
+    // Whether the terminal (surface or its input proxy) has keyboard focus; an unfocused cursor is drawn hollow.
+    private bool _isTerminalFocused;
     // The command line from the latest OSC 633;E, reported with C/D activity; cleared at the next prompt.
     private string? _lastReportedCommandLine;
 
@@ -1527,6 +1530,7 @@ public partial class TerminalTabView : UserControl
 
     private void UpdateTerminalFocusState(bool focused)
     {
+        _isTerminalFocused = focused;
         _cursorBlinkVisible = focused || !_terminalBuffer.CursorBlinkEnabled;
         // Focus always ends up on the hidden input proxy, which no longer appears in the automation
         // tree; hand the focus report to the surface so screen readers still announce the terminal.
@@ -1624,7 +1628,7 @@ public partial class TerminalTabView : UserControl
             charWidth,
             charHeight,
             viewportBounds,
-            _terminalBuffer.CursorShape,
+            ResolveOverlayCursorShape(_terminalBuffer.CursorShape, _isTerminalFocused),
             proxyCaretBounds);
         UpdateCursorOverlay(cursorBounds);
     }
@@ -1720,9 +1724,14 @@ public partial class TerminalTabView : UserControl
                 break;
         }
 
+        // Unfocused: an outlined cell, so a split or a background window shows where input would
+        // go without looking like the pane that has the keyboard.
+        bool hollow = !_isTerminalFocused;
         TerminalCursorOverlay.Width = bounds.Width;
         TerminalCursorOverlay.Height = bounds.Height;
-        TerminalCursorOverlay.Background = background;
+        TerminalCursorOverlay.Background = hollow ? Brushes.Transparent : background;
+        TerminalCursorOverlay.BorderBrush = hollow ? UnfocusedCursorBorderBrush : null;
+        TerminalCursorOverlay.BorderThickness = hollow ? new Thickness(1) : new Thickness(0);
         Canvas.SetLeft(TerminalCursorOverlay, bounds.Left);
         Canvas.SetTop(TerminalCursorOverlay, bounds.Top);
         TerminalCursorOverlay.Visibility = Visibility.Visible;
@@ -1803,6 +1812,13 @@ public partial class TerminalTabView : UserControl
             Math.Clamp(left, viewportBounds.Left, maxLeft),
             Math.Clamp(top, viewportBounds.Top, maxTop));
     }
+
+    /// <summary>An unfocused cursor is always drawn over the whole cell, whatever shape the app asked for.</summary>
+    internal static TerminalCursorShape ResolveOverlayCursorShape(TerminalCursorShape shape, bool focused) =>
+        focused ? shape : TerminalCursorShape.Block;
+
+    /// <summary>Whether the cursor overlay is currently drawn hollow (terminal not focused); test seam.</summary>
+    internal bool IsCursorOverlayHollowForTests => TerminalCursorOverlay.BorderThickness.Left > 0;
 
     private bool ShouldShowCursorOverlay()
     {
