@@ -13,8 +13,6 @@
 - **DECUDK** — `DCS ... |` によるユーザー定義キー
 - **VT52互換モード** — `CSI ? 2 h/l`、VT52形式のカーソル・座標・入力シーケンス
 - **Kitty Keyboard Protocolの残り** — alternate key/base layout、KeyUp/KeyRepeat、associated text、Caps/NumLock、IME・キーボードレイアウト連携
-- **XTWINOPSの表示系拡張** — `CSI 13/14/16 t` のウィンドウ位置・ピクセル寸法・文字セル寸法報告（WPF実測値との接続が必要）
-- **OSC 8のメタデータ** — hyperlink parameters の id/URI属性保持。現在はURIと開閉だけをセルへ反映
 - **OSC 52の選択対象分離** — clipboard / primary / secondary を個別に保持・応答。現在は対象文字列を通知するがOSクリップボードは単一
 
 ### 低優先度
@@ -45,7 +43,7 @@ function Show-Image { param([Parameter(Mandatory)][string]$Path,[int]$Width=40,[
 
 末尾の `"`n"*$Height` は必須。画像はカーソルを動かさないので、画像が占める行はスクリプト側で送る。この改行は ConPTY も認識するため、両者のカーソルがそろって進む。
 
-`wezterm imgcat` は `CSI 14 t`（ピクセル寸法）の応答を待つため現状ハングする。中優先度の XTWINOPS 表示系拡張を実装すれば使えるようになる見込み。
+`wezterm imgcat` は `CSI 14 t`（ピクセル寸法）の応答を待つ。XTWINOPS 13/14/15/16 には WPF の実測値で答える。ConPTY は `CSI 14 t` / `CSI 16 t` をこちらまで**通す**（実測: 同ビルド）。`wezterm imgcat` を通しで動かしての確認はまだ。
 
 Sixel と Kitty はこちらのパーサに到達しないため、実装があっても実機では表示されない。`CreatePseudoConsole` に `PSEUDOCONSOLE_PASSTHROUGH_MODE`(8) を渡しても当該ビルドでは挙動が変わらなかった。実機で画像を出すには `chafa -f iterm` や `wezterm imgcat` など **iTerm2 形式で出力するツールを使う**。Sixel/Kitty を通すには、Sixel を実装した新しい conhost/conpty（Windows Terminal 同梱の OpenConsole 等）へ差し替える必要がある — 未検証。
 
