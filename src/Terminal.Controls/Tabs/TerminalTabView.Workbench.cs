@@ -466,10 +466,12 @@ public partial class TerminalTabView
             return;
         }
 
+        // Only while the find panel has the keyboard: with the panel left open and focus back in
+        // the terminal, Esc and F3 belong to the shell or the app (vim, PSReadLine).
         TerminalFindKeyAction findAction = TerminalFindCoordinator.ResolveWindowKey(
             MapFindKey(key),
             MapFindKeyModifiers(modifiers),
-            FindPopup.IsOpen);
+            IsFindPanelFocused());
         switch (findAction.Kind)
         {
             case TerminalFindKeyActionKind.Move:
@@ -682,6 +684,10 @@ public partial class TerminalTabView
             OpenFindPanel();
         }
     }
+
+    /// <summary>Whether the find panel is open and has keyboard focus (its content lives in the popup's own tree).</summary>
+    internal bool IsFindPanelFocused() =>
+        FindPopup.IsOpen && FindPopup.Child is UIElement child && child.IsKeyboardFocusWithin;
 
     private void OpenFindPanel()
     {
