@@ -1217,6 +1217,7 @@ public partial class MainWindow : Window
             CjkAmbiguousWidthIsWide = tabSettings.CjkAmbiguousWidthIsWide,
             BackdropType = _settings.BackdropType,
             EnableFontLigatures = tabSettings.EnableFontLigatures,
+            BellStyle = _settings.BellStyle,
             VerticalTabWidth = _settings.VerticalTabWidth,
             VerticalTabsCollapsed = _settings.VerticalTabsCollapsed,
             ScrollbackLimit = tabSettings.ScrollbackLimit,

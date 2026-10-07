@@ -32,6 +32,9 @@ public sealed class TerminalAppSettings
     public bool CjkAmbiguousWidthIsWide { get; set; } = false;
     public string BackdropType { get; set; } = "none";
     public bool EnableFontLigatures { get; set; } = false;
+
+    /// <summary>How BEL is signalled: "audible" (default), "visual", "both" or "none".</summary>
+    public string BellStyle { get; set; } = "audible";
     public double VerticalTabWidth { get; set; } = DefaultVerticalTabWidth;
     public bool VerticalTabsCollapsed { get; set; } = false;
     public Dictionary<string, string> KeyBindings { get; set; } = TerminalKeyBindingCatalog.CreateDefaults();

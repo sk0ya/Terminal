@@ -111,6 +111,8 @@ public partial class SettingsWindow : Window
             CjkWidthCheckBox.IsChecked = settings.CjkAmbiguousWidthIsWide;
             string backdrop = TerminalSettingsEditor.NormalizeBackdropType(settings.BackdropType);
             BackdropComboBox.SelectedItem = BackdropComboBox.Items.OfType<ComboBoxItem>().First(item => Equals(item.Tag, backdrop));
+            string bell = TerminalSettingsEditor.NormalizeBellStyle(settings.BellStyle);
+            BellStyleComboBox.SelectedItem = BellStyleComboBox.Items.OfType<ComboBoxItem>().First(item => Equals(item.Tag, bell));
             ScrollbackLimitTextBox.Text = TerminalAppSettings.ClampScrollbackLimit(settings.ScrollbackLimit).ToString();
             SetInputValidationState(WorkingDirectoryTextBox, isValid: true);
             SetInputValidationState(FontSizeTextBox, isValid: true);
@@ -540,6 +542,12 @@ public partial class SettingsWindow : Window
     {
         if (!_suppressAutoApply)
             _currentSettings.BackdropType = TerminalSettingsEditor.NormalizeBackdropType((BackdropComboBox.SelectedItem as ComboBoxItem)?.Tag as string);
+    }
+
+    private void BellStyleComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_suppressAutoApply)
+            _currentSettings.BellStyle = TerminalSettingsEditor.NormalizeBellStyle((BellStyleComboBox.SelectedItem as ComboBoxItem)?.Tag as string);
     }
 
 }

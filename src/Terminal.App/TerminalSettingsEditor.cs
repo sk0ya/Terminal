@@ -71,6 +71,12 @@ internal static class TerminalSettingsEditor
         return normalized is "mica" or "acrylic" or "mica-alt" ? normalized : "none";
     }
 
+    internal static string NormalizeBellStyle(string? value)
+    {
+        string normalized = value?.Trim().ToLowerInvariant() ?? string.Empty;
+        return normalized is "visual" or "both" or "none" ? normalized : "audible";
+    }
+
     internal static TerminalAppSettings Clone(TerminalAppSettings settings) => new()
     {
         SelectedProfileId = settings.SelectedProfileId,
@@ -88,6 +94,7 @@ internal static class TerminalSettingsEditor
         CjkAmbiguousWidthIsWide = settings.CjkAmbiguousWidthIsWide,
         BackdropType = settings.BackdropType,
         EnableFontLigatures = settings.EnableFontLigatures,
+        BellStyle = settings.BellStyle,
         VerticalTabWidth = TerminalAppSettings.ClampVerticalTabWidth(settings.VerticalTabWidth),
         VerticalTabsCollapsed = settings.VerticalTabsCollapsed,
         ScrollbackLimit = settings.ScrollbackLimit,

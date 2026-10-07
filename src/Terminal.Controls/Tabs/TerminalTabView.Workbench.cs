@@ -149,6 +149,7 @@ public partial class TerminalTabView
         _scrollbackLimit = TerminalAppSettings.ClampScrollbackLimit(settings.ScrollbackLimit);
         IsStatusBarVisible = settings.ShowStatusBar;
         ShellIntegrationInjectionEnabled = settings.EnableShellIntegrationInjection;
+        BellStyle = ParseBellStyle(settings.BellStyle);
     }
 
     public TerminalAppSettings CreateSettingsSnapshot()
@@ -624,6 +625,7 @@ public partial class TerminalTabView
         _scrollbackLimit = TerminalAppSettings.ClampScrollbackLimit(settings.ScrollbackLimit);
         IsStatusBarVisible = settings.ShowStatusBar;
         ShellIntegrationInjectionEnabled = settings.EnableShellIntegrationInjection;
+        BellStyle = ParseBellStyle(settings.BellStyle);
         UpdateWindowTitle();
     }
 

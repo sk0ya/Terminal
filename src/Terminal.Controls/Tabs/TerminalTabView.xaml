@@ -334,6 +334,13 @@
                     </rendering:TerminalSurfaceControl>
                 </ScrollViewer>
 
+                <!-- Visual bell: flashed over the terminal area when BellStyle includes Visual. -->
+                <Border x:Name="BellFlashOverlay"
+                        Panel.ZIndex="4"
+                        Opacity="0"
+                        IsHitTestVisible="False"
+                        Focusable="False" />
+
                 <!-- Ticks over the vertical scrollbar: prompts, failed commands, find matches. -->
                 <rendering:TerminalScrollMarkerBar x:Name="ScrollMarkerBar"
                                                    Panel.ZIndex="2"

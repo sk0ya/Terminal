@@ -2209,7 +2209,7 @@ public partial class TerminalTabView : UserControl
     {
         // Process はディスパッチャスレッドで実行されるため、そのまま UI 処理してよい。
         HasPendingBell = true;
-        PlayBell();
+        SignalBell();
         BellRang?.Invoke(this, EventArgs.Empty);
     }
 

@@ -351,7 +351,8 @@
                     <RowDefinition Height="Auto" /><RowDefinition Height="8" /><RowDefinition Height="Auto" />
                     <RowDefinition Height="8" /><RowDefinition Height="Auto" /><RowDefinition Height="8" />
                     <RowDefinition Height="Auto" /><RowDefinition Height="8" /><RowDefinition Height="Auto" />
-                    <RowDefinition Height="8" /><RowDefinition Height="Auto" />
+                    <RowDefinition Height="8" /><RowDefinition Height="Auto" /><RowDefinition Height="8" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <TextBlock Grid.Row="0" Foreground="{StaticResource MutedBrush}" Text="Close warning" />
                 <CheckBox x:Name="CloseConfirmationCheckBox" Grid.Row="0" Grid.Column="1" Foreground="#F0F0F0"
@@ -382,7 +383,13 @@
                     <ComboBoxItem Content="None" Tag="none" /><ComboBoxItem Content="Mica" Tag="mica" />
                     <ComboBoxItem Content="Acrylic" Tag="acrylic" /><ComboBoxItem Content="Mica Alt" Tag="mica-alt" />
                 </ComboBox>
-                <TextBlock Grid.Row="10" Grid.ColumnSpan="2" Foreground="{StaticResource MutedBrush}" FontSize="11"
+                <TextBlock Grid.Row="10" Foreground="{StaticResource MutedBrush}" Text="Bell" />
+                <ComboBox x:Name="BellStyleComboBox" Grid.Row="10" Grid.Column="1" Style="{StaticResource InputComboBoxStyle}"
+                          SelectionChanged="BellStyleComboBox_SelectionChanged">
+                    <ComboBoxItem Content="Sound" Tag="audible" /><ComboBoxItem Content="Flash" Tag="visual" />
+                    <ComboBoxItem Content="Sound and flash" Tag="both" /><ComboBoxItem Content="Off" Tag="none" />
+                </ComboBox>
+                <TextBlock Grid.Row="12" Grid.ColumnSpan="2" Foreground="{StaticResource MutedBrush}" FontSize="11"
                            Text="Apply updates the current window; session logging and shell options affect newly started sessions." TextWrapping="Wrap" />
             </Grid>
 
