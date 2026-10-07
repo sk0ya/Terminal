@@ -271,6 +271,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ShellCommandLineReceived += TerminalBuffer_ShellCommandLineReceived;
         _terminalBuffer.ShellHistoryPathReceived += TerminalBuffer_ShellHistoryPathReceived;
 
+        _terminalBuffer.PixelMetricsProvider = MeasurePixelMetrics;
         Loaded += OnLoaded;
         // Tunnels before the terminal surface and the input proxy see the key, so the tab's own
         // shortcuts (save transcript, restart, font size, copy command output) win over the shell.
@@ -2109,6 +2110,7 @@ public partial class TerminalTabView : UserControl
 
     private void ReplaceTerminalBuffer(AnsiTerminalBuffer nextBuffer)
     {
+        nextBuffer.PixelMetricsProvider = MeasurePixelMetrics;
         nextBuffer.AmbiguousWidthIsWide = _terminalBuffer.AmbiguousWidthIsWide;
         nextBuffer.ApplyColorTheme(_colorTheme);
         _terminalBuffer.InputSequenceGenerated -= TerminalBuffer_InputSequenceGenerated;
@@ -2762,6 +2764,31 @@ public partial class TerminalTabView : UserControl
         double y = Math.Max(0, position.Y - TerminalOutput.Padding.Top);
         px = Math.Max(1, (int)Math.Round(x) + 1);
         py = Math.Max(1, (int)Math.Round(y) + 1);
+    }
+
+    /// <summary>The surface's geometry in device pixels, for XTWINOPS; null before it is on screen.</summary>
+    private TerminalPixelMetrics? MeasurePixelMetrics()
+    {
+        if (PresentationSource.FromVisual(TerminalOutput) is null || Window.GetWindow(this) is not { } window)
+        {
+            return null;
+        }
+
+        DpiScale dpi = VisualTreeHelper.GetDpi(TerminalOutput);
+        var (charWidth, charHeight) = MeasureCharacterCell();
+        Point textOrigin = TerminalOutput.PointToScreen(new Point(0, 0));
+        Point windowOrigin = window.PointToScreen(new Point(0, 0));
+        return new TerminalPixelMetrics(
+            charWidth * dpi.DpiScaleX,
+            charHeight * dpi.DpiScaleY,
+            (int)textOrigin.X,
+            (int)textOrigin.Y,
+            (int)windowOrigin.X,
+            (int)windowOrigin.Y,
+            (int)Math.Round(window.ActualWidth * dpi.DpiScaleX),
+            (int)Math.Round(window.ActualHeight * dpi.DpiScaleY),
+            (int)Math.Round(SystemParameters.PrimaryScreenWidth * dpi.DpiScaleX),
+            (int)Math.Round(SystemParameters.PrimaryScreenHeight * dpi.DpiScaleY));
     }
 
     private (double Width, double Height) MeasureCharacterCell()

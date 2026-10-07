@@ -67,6 +67,23 @@ internal enum TerminalCharacterSet
     DecSpecialGraphics
 }
 
+/// <summary>
+/// Pixel geometry for XTWINOPS reports, in device pixels: the cell size (fractional, so the text
+/// area is computed from the grid without accumulating rounding), the text area's and the window's
+/// position on screen, the window size and the screen size.
+/// </summary>
+internal readonly record struct TerminalPixelMetrics(
+    double CellWidth,
+    double CellHeight,
+    int TextAreaLeft,
+    int TextAreaTop,
+    int WindowLeft,
+    int WindowTop,
+    int WindowWidth,
+    int WindowHeight,
+    int ScreenWidth,
+    int ScreenHeight);
+
 internal enum TerminalCursorShape
 {
     Block,
@@ -2383,7 +2400,7 @@ internal sealed class AnsiTerminalBuffer
 
                 break;
             case 't':
-                DispatchWindowOperation(GetParameter(parameters, 0, 0));
+                DispatchWindowOperation(GetParameter(parameters, 0, 0), GetParameter(parameters, 1, 0));
                 break;
             case 'u':
                 if (isSecondary)
@@ -2808,8 +2825,20 @@ internal sealed class AnsiTerminalBuffer
         EmitInputSequence($"[?{mode};{state}$y");
     }
 
-    private void DispatchWindowOperation(int operation)
+    /// <summary>
+    /// The view's pixel geometry for the XTWINOPS reports that need it (CSI 13/14/15/16 t). Without
+    /// a provider, or when it returns null, those queries go unanswered as before.
+    /// </summary>
+    internal Func<TerminalPixelMetrics?>? PixelMetricsProvider { get; set; }
+
+    private void DispatchWindowOperation(int operation, int selector = 0)
     {
+        if (operation is >= 13 and <= 16)
+        {
+            ReportPixelGeometry(operation, selector);
+            return;
+        }
+
         switch (operation)
         {
             case 19:
@@ -2831,6 +2860,31 @@ internal sealed class AnsiTerminalBuffer
                 PopWindowTitle();
                 break;
         }
+    }
+
+    // XTWINOPS 13/14/15/16: window position, text-area (or window) size, screen size and cell size,
+    // all in device pixels. Image tools (wezterm imgcat, chafa) ask for 14 or 16 to size their output.
+    private void ReportPixelGeometry(int operation, int selector)
+    {
+        if (PixelMetricsProvider?.Invoke() is not { } metrics)
+        {
+            return;
+        }
+
+        string report = operation switch
+        {
+            13 => selector == 2
+                ? $"3;{metrics.TextAreaLeft};{metrics.TextAreaTop}"
+                : $"3;{metrics.WindowLeft};{metrics.WindowTop}",
+            14 => selector == 2
+                ? $"4;{metrics.WindowHeight};{metrics.WindowWidth}"
+                : $"4;{Round(metrics.CellHeight * _rows)};{Round(metrics.CellWidth * _columns)}",
+            15 => $"5;{metrics.ScreenHeight};{metrics.ScreenWidth}",
+            _ => $"6;{Round(metrics.CellHeight)};{Round(metrics.CellWidth)}"
+        };
+        EmitInputSequence($"\u001b[{report}t");
+
+        static int Round(double value) => (int)Math.Round(value, MidpointRounding.AwayFromZero);
     }
 
     private const int MaxWindowTitleStackDepth = 128;
