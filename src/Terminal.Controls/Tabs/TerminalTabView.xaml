@@ -329,6 +329,15 @@
                                 <MenuItem x:Name="CopyCommandOutputMenuItem"
                                           Header="Copy Command Output"
                                           Click="CopyCommandOutputMenuItem_Click" />
+                                <MenuItem x:Name="FoldCommandOutputMenuItem"
+                                          Header="Fold Command Output"
+                                          Click="FoldCommandOutputMenuItem_Click" />
+                                <MenuItem x:Name="UnfoldMenuItem"
+                                          Header="Unfold"
+                                          Click="UnfoldMenuItem_Click" />
+                                <MenuItem x:Name="UnfoldAllMenuItem"
+                                          Header="Unfold All"
+                                          Click="UnfoldAllMenuItem_Click" />
                             </ContextMenu>
                         </rendering:TerminalSurfaceControl.ContextMenu>
                     </rendering:TerminalSurfaceControl>

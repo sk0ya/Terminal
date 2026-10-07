@@ -60,10 +60,10 @@ public partial class TerminalTabView
     {
         foreach (TerminalCommandMark command in _commandNavigation.Commands)
         {
-            yield return new TerminalScrollMark(command.PromptLine, TerminalScrollMarkKind.Prompt);
+            yield return new TerminalScrollMark(BufferToDisplayLine(command.PromptLine), TerminalScrollMarkKind.Prompt);
             if (command.Done && command.ExitCode is { } code && code != 0)
             {
-                yield return new TerminalScrollMark(command.CommandLine, TerminalScrollMarkKind.FailedCommand);
+                yield return new TerminalScrollMark(BufferToDisplayLine(command.CommandLine), TerminalScrollMarkKind.FailedCommand);
             }
         }
 

@@ -105,7 +105,7 @@ public partial class TerminalTabView
         }
 
         var (_, charHeight) = MeasureCharacterCell();
-        int topLine = (int)(TerminalScrollHost.VerticalOffset / Math.Max(charHeight, 1.0));
+        int topLine = DisplayToBufferLine((int)(TerminalScrollHost.VerticalOffset / Math.Max(charHeight, 1.0)));
         return _commandNavigation.FindStickyCommandLine(topLine);
     }
 

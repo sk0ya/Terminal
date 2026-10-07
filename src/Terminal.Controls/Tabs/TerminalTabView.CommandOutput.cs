@@ -64,7 +64,7 @@ public partial class TerminalTabView
 
     private ShellCommandOutputEventArgs? FindCapturedOutputAtPoint(Point point) =>
         TerminalOutput.TryGetTextPositionFromPoint(point, out int line, out _)
-            ? FindCapturedOutputForLine(line)
+            ? FindCapturedOutputForLine(DisplayToBufferLine(line))
             : null;
 
     /// <summary>

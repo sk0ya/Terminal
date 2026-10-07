@@ -395,6 +395,11 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalOutput_PreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
+        if (TryUnfoldAtPoint(e))
+        {
+            return;
+        }
+
         if (IsRightClick(e))
         {
             QueueTerminalInputFocus();
@@ -474,13 +479,15 @@ public partial class TerminalTabView : UserControl
     private void TerminalOutput_ContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
         bool hasSelection = TerminalOutput.HasSelection;
-        _contextMenuCommandOutput = FindCapturedOutputAtPoint(new Point(e.CursorLeft, e.CursorTop));
+        var point = new Point(e.CursorLeft, e.CursorTop);
+        _contextMenuCommandOutput = FindCapturedOutputAtPoint(point);
+        bool hasFoldItems = PrepareFoldMenuItems(point);
         CopySelectionMenuItem.IsEnabled = hasSelection;
         PasteMenuItem.IsEnabled = CanPasteFromClipboard();
         CopyCommandOutputMenuItem.Visibility = _contextMenuCommandOutput is not null
             ? Visibility.Visible
             : Visibility.Collapsed;
-        if (!hasSelection && _contextMenuCommandOutput is null)
+        if (!hasSelection && _contextMenuCommandOutput is null && !hasFoldItems)
         {
             e.Handled = true;
             return;
@@ -1503,7 +1510,7 @@ public partial class TerminalTabView : UserControl
 
         try
         {
-            AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = _terminalBuffer.CreateRenderSnapshot(showCursor: false);
+            AnsiTerminalBuffer.TerminalRenderSnapshot snapshot = ApplyFolds(_terminalBuffer.CreateRenderSnapshot(showCursor: false));
             TerminalOutput.UpdateSnapshot(snapshot);
             // Restore the viewport (auto-follow scroll) BEFORE positioning the input proxy so the
             // IME composition window is anchored to the post-scroll content position. The
@@ -1590,9 +1597,10 @@ public partial class TerminalTabView : UserControl
         TerminalInputProxy.FlowDirection = FlowDirection.LeftToRight;
         TerminalInputProxy.CaretBrush = Brushes.Transparent;
 
+        // Folds only ever cover scrollback, so the screen just moves up by what they hide.
         int absoluteCursorLine = ResolveRenderedCursorLine(
             _terminalBuffer.CursorRow,
-            _terminalBuffer.ScrollbackLineCount,
+            _terminalBuffer.ScrollbackLineCount - _foldMap.HiddenLineCount,
             _terminalBuffer.IsAlternateScreenActive,
             TerminalOutput.LineCount);
         double left = viewport.ContentLeft + (_terminalBuffer.CursorColumn * charWidth);
@@ -2124,6 +2132,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ShellCommandLineReceived -= TerminalBuffer_ShellCommandLineReceived;
         _terminalBuffer.ShellHistoryPathReceived -= TerminalBuffer_ShellHistoryPathReceived;
         _commandNavigation.ResetSession();
+        ResetFolds();
         UpdateScrollMarkers();
         _agentCommands.ResetSession();
         _commandOutput.Reset();
@@ -2442,7 +2451,7 @@ public partial class TerminalTabView : UserControl
         }
 
         var (_, charHeight) = MeasureCharacterCell();
-        int currentTopLine = (int)(TerminalScrollHost.VerticalOffset / Math.Max(charHeight, 1.0));
+        int currentTopLine = DisplayToBufferLine((int)(TerminalScrollHost.VerticalOffset / Math.Max(charHeight, 1.0)));
         int? targetLine = _commandNavigation.FindAdjacent(currentTopLine, upward);
         if (!targetLine.HasValue)
         {
@@ -2456,7 +2465,7 @@ public partial class TerminalTabView : UserControl
     private void ScrollToAbsoluteLine(int absoluteLine)
     {
         var (_, charHeight) = MeasureCharacterCell();
-        double offset = absoluteLine * charHeight;
+        double offset = BufferToDisplayLine(absoluteLine) * charHeight;
         TerminalScrollHost.ScrollToVerticalOffset(offset);
         _viewportState.StopFollowing();
         UpdateFollowOutputState();
