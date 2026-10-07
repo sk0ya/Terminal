@@ -2826,19 +2826,26 @@ public partial class TerminalTabView : UserControl
 
         DpiScale dpi = VisualTreeHelper.GetDpi(TerminalOutput);
         var (charWidth, charHeight) = MeasureCharacterCell();
-        Point textOrigin = TerminalOutput.PointToScreen(new Point(0, 0));
-        Point windowOrigin = window.PointToScreen(new Point(0, 0));
+        // The first cell, not the control's corner: the surface pads its content.
+        Thickness padding = TerminalOutput.Padding;
+        Point textOrigin = TerminalOutput.PointToScreen(new Point(padding.Left, padding.Top));
+        Int32Rect windowRect = TerminalWindowGeometry.TryGetWindowRect(window, out Int32Rect outer)
+            ? outer
+            : new Int32Rect(0, 0, (int)Math.Round(window.ActualWidth * dpi.DpiScaleX), (int)Math.Round(window.ActualHeight * dpi.DpiScaleY));
+        Int32Rect screenRect = TerminalWindowGeometry.TryGetMonitorRect(window, out Int32Rect monitor)
+            ? monitor
+            : new Int32Rect(0, 0, (int)Math.Round(SystemParameters.PrimaryScreenWidth * dpi.DpiScaleX), (int)Math.Round(SystemParameters.PrimaryScreenHeight * dpi.DpiScaleY));
         return new TerminalPixelMetrics(
             charWidth * dpi.DpiScaleX,
             charHeight * dpi.DpiScaleY,
-            (int)textOrigin.X,
-            (int)textOrigin.Y,
-            (int)windowOrigin.X,
-            (int)windowOrigin.Y,
-            (int)Math.Round(window.ActualWidth * dpi.DpiScaleX),
-            (int)Math.Round(window.ActualHeight * dpi.DpiScaleY),
-            (int)Math.Round(SystemParameters.PrimaryScreenWidth * dpi.DpiScaleX),
-            (int)Math.Round(SystemParameters.PrimaryScreenHeight * dpi.DpiScaleY));
+            (int)Math.Round(textOrigin.X),
+            (int)Math.Round(textOrigin.Y),
+            windowRect.X,
+            windowRect.Y,
+            windowRect.Width,
+            windowRect.Height,
+            screenRect.Width,
+            screenRect.Height);
     }
 
     private (double Width, double Height) MeasureCharacterCell()
