@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 
 using Terminal.Tabs;
 
@@ -137,6 +138,63 @@ internal sealed class TerminalSelectionSearchModel
 
         return matches;
     }
+
+    /// <summary>
+    /// Every match of <paramref name="pattern"/>, row by row (a match never spans rows). Empty matches
+    /// are skipped. A pattern that runs past its match timeout ends the search with what was found.
+    /// </summary>
+    public static IReadOnlyList<TerminalMatch> FindMatches(
+        IReadOnlyList<TerminalSelectionLine> lines,
+        Regex pattern)
+    {
+        var matches = new List<TerminalMatch>();
+        try
+        {
+            for (int lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+            {
+                string text = lines[lineIndex].Text;
+                for (Match match = pattern.Match(text); match.Success; match = match.NextMatch())
+                {
+                    if (match.Length > 0)
+                    {
+                        matches.Add(new TerminalMatch(lineIndex, match.Index, match.Length, text));
+                    }
+                }
+            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // A catastrophic pattern on a long scrollback: keep what was found rather than hang the UI.
+        }
+
+        return matches;
+    }
+
+    /// <summary>
+    /// Compiles a find pattern, or returns null with the parser's message when it is not a valid
+    /// .NET regular expression.
+    /// </summary>
+    public static Regex? TryCreatePattern(string query, bool caseSensitive, out string? error)
+    {
+        error = null;
+        RegexOptions options = RegexOptions.CultureInvariant;
+        if (!caseSensitive)
+        {
+            options |= RegexOptions.IgnoreCase;
+        }
+
+        try
+        {
+            return new Regex(query, options, PatternTimeout);
+        }
+        catch (ArgumentException ex)
+        {
+            error = ex.Message;
+            return null;
+        }
+    }
+
+    private static readonly TimeSpan PatternTimeout = TimeSpan.FromMilliseconds(250);
 
     public static int CountMatches(
         IReadOnlyList<TerminalSelectionLine> lines,

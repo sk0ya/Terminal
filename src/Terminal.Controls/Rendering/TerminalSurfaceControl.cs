@@ -602,6 +602,10 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
     public IReadOnlyList<TerminalMatch> FindMatches(string query, StringComparison comparison)
         => TerminalSelectionSearchModel.FindMatches(SelectionLines, query, comparison);
 
+    /// <summary>Every row-local match of <paramref name="pattern"/> in the buffer.</summary>
+    public IReadOnlyList<TerminalMatch> FindMatches(System.Text.RegularExpressions.Regex pattern)
+        => TerminalSelectionSearchModel.FindMatches(SelectionLines, pattern);
+
     /// <summary>
     /// 指定位置の範囲を選択ハイライトし、その箇所までスクロールして可視化する
     /// （<see cref="FindMatches"/> で得た一致へジャンプする用途）。範囲は行内にクランプする。

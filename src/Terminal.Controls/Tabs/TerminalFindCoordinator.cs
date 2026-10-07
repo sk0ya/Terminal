@@ -6,7 +6,8 @@ internal enum TerminalFindKey
     Escape,
     Enter,
     F3,
-    C
+    C,
+    R
 }
 
 [Flags]
@@ -24,7 +25,8 @@ internal enum TerminalFindKeyActionKind
     None,
     Close,
     Move,
-    ToggleCaseSensitivity
+    ToggleCaseSensitivity,
+    ToggleRegex
 }
 
 internal readonly record struct TerminalFindKeyAction(
@@ -37,6 +39,7 @@ internal readonly record struct TerminalFindKeyAction(
 internal enum TerminalFindStatus
 {
     EmptyQuery,
+    InvalidPattern,
     NoMatch,
     Match
 }
@@ -45,6 +48,12 @@ internal sealed class TerminalFindCoordinator
 {
     public string Query { get; private set; } = string.Empty;
     public StringComparison Comparison { get; private set; } = StringComparison.OrdinalIgnoreCase;
+
+    /// <summary>The compiled query when searching by regular expression; null for a plain-text search.</summary>
+    public System.Text.RegularExpressions.Regex? Pattern { get; private set; }
+
+    /// <summary>Why the regular expression did not compile; null when it did (or regex is off).</summary>
+    public string? PatternError { get; private set; }
     public IReadOnlyList<TerminalMatch> Matches { get; private set; } = [];
     public int CurrentIndex { get; private set; } = -1;
     public int AnchorLine { get; private set; }
@@ -52,6 +61,7 @@ internal sealed class TerminalFindCoordinator
 
     public TerminalFindStatus Status => string.IsNullOrEmpty(Query)
         ? TerminalFindStatus.EmptyQuery
+        : PatternError is not null ? TerminalFindStatus.InvalidPattern
         : Matches.Count == 0 ? TerminalFindStatus.NoMatch : TerminalFindStatus.Match;
 
     public TerminalMatch? CurrentMatch =>
@@ -60,6 +70,7 @@ internal sealed class TerminalFindCoordinator
     public string PositionText => Status switch
     {
         TerminalFindStatus.EmptyQuery => "Type to search",
+        TerminalFindStatus.InvalidPattern => "Invalid pattern",
         TerminalFindStatus.NoMatch => "No match",
         _ => TerminalFindNavigator.FormatPosition(CurrentIndex, Matches.Count)
     };
@@ -76,6 +87,7 @@ internal sealed class TerminalFindCoordinator
             TerminalFindKey.Enter or TerminalFindKey.F3 =>
                 new(TerminalFindKeyActionKind.Move, Forward: !shift),
             TerminalFindKey.C when alt => new(TerminalFindKeyActionKind.ToggleCaseSensitivity),
+            TerminalFindKey.R when alt => new(TerminalFindKeyActionKind.ToggleRegex),
             _ => default
         };
     }
@@ -111,11 +123,27 @@ internal sealed class TerminalFindCoordinator
         CurrentIndex = -1;
     }
 
-    public bool UpdateCriteria(string query, bool caseSensitive)
+    public bool UpdateCriteria(string query, bool caseSensitive) =>
+        UpdateCriteria(query, caseSensitive, useRegex: false);
+
+    /// <summary>
+    /// Takes the panel's query and options. Returns true when there is something to search for; an
+    /// empty query or (with <paramref name="useRegex"/>) a pattern that does not compile clears the
+    /// matches and returns false.
+    /// </summary>
+    public bool UpdateCriteria(string query, bool caseSensitive, bool useRegex)
     {
         Query = query ?? string.Empty;
         Comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-        if (Query.Length > 0)
+        Pattern = null;
+        PatternError = null;
+        if (Query.Length > 0 && useRegex)
+        {
+            Pattern = Terminal.Rendering.TerminalSelectionSearchModel.TryCreatePattern(Query, caseSensitive, out string? error);
+            PatternError = error;
+        }
+
+        if (Query.Length > 0 && PatternError is null)
         {
             return true;
         }

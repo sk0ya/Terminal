@@ -327,6 +327,10 @@ public partial class TerminalTabView
                 FindCaseSensitiveCheckBox.IsChecked = FindCaseSensitiveCheckBox.IsChecked != true;
                 RefreshFind(reseek: true);
                 break;
+            case TerminalFindKeyActionKind.ToggleRegex:
+                FindRegexCheckBox.IsChecked = FindRegexCheckBox.IsChecked != true;
+                RefreshFind(reseek: true);
+                break;
         }
 
         if (action.Handled)
@@ -341,6 +345,7 @@ public partial class TerminalTabView
         Key.Enter => TerminalFindKey.Enter,
         Key.F3 => TerminalFindKey.F3,
         Key.C => TerminalFindKey.C,
+        Key.R => TerminalFindKey.R,
         _ => TerminalFindKey.Other
     };
 
@@ -693,7 +698,15 @@ public partial class TerminalTabView
     }
 
     private IReadOnlyList<TerminalMatch> FindSurfaceMatches()
-        => TerminalOutput.FindMatches(_findState.Query, _findState.Comparison);
+        => _findState.Pattern is { } pattern
+            ? TerminalOutput.FindMatches(pattern)
+            : TerminalOutput.FindMatches(_findState.Query, _findState.Comparison);
+
+    private bool UpdateFindCriteria() =>
+        _findState.UpdateCriteria(
+            FindTextBox.Text,
+            FindCaseSensitiveCheckBox.IsChecked == true,
+            FindRegexCheckBox.IsChecked == true);
 
     // 検索語・オプション変更時に呼ぶ。一致を作り直し、reseek=true なら起点に近い一致を、そうでな
     // ければ現在インデックスを維持して現在一致を選び直す。空検索語・不一致はカウント表示のみ更新。
@@ -710,9 +723,7 @@ public partial class TerminalTabView
             return;
         }
 
-        if (!_findState.UpdateCriteria(
-                FindTextBox.Text,
-                FindCaseSensitiveCheckBox.IsChecked == true))
+        if (!UpdateFindCriteria())
         {
             TerminalOutput.ClearSelection();
             FindCountText.Text = _findState.PositionText;
@@ -739,9 +750,7 @@ public partial class TerminalTabView
 
     private void MoveFindCore(bool forward)
     {
-        if (!_findState.UpdateCriteria(
-                FindTextBox.Text,
-                FindCaseSensitiveCheckBox.IsChecked == true))
+        if (!UpdateFindCriteria())
         {
             TerminalOutput.ClearSelection();
             FindCountText.Text = _findState.PositionText;
@@ -817,7 +826,28 @@ public partial class TerminalTabView
     }
 
     /// <summary>
-    /// <see cref="FindMatches"/> で得た一致を選択ハイライトし、その箇所までスクロールして可視化する。
+    /// <see cref="FindMatches(string, bool)"/> の正規表現対応版。<paramref name="useRegex"/> が true なら
+    /// <paramref name="query"/> を .NET 正規表現として行ごとに照合する（行をまたぐ一致はしない）。
+    /// 不正なパターンなら空配列を返す。
+    /// </summary>
+    public IReadOnlyList<TerminalMatch> FindMatches(string query, bool caseSensitive, bool useRegex)
+    {
+        if (!useRegex)
+        {
+            return FindMatches(query, caseSensitive);
+        }
+
+        if (string.IsNullOrEmpty(query) ||
+            Terminal.Rendering.TerminalSelectionSearchModel.TryCreatePattern(query, caseSensitive, out _) is not { } pattern)
+        {
+            return Array.Empty<TerminalMatch>();
+        }
+
+        return TerminalOutput.FindMatches(pattern);
+    }
+
+    /// <summary>
+    /// <see cref="FindMatches(string, bool)"/> で得た一致を選択ハイライトし、その箇所までスクロールして可視化する。
     /// </summary>
     /// <returns>選択できれば <c>true</c>。</returns>
     public bool SelectMatch(TerminalMatch match)
@@ -833,9 +863,7 @@ public partial class TerminalTabView
             return;
         }
 
-        if (!_findState.UpdateCriteria(
-                FindTextBox.Text,
-                FindCaseSensitiveCheckBox.IsChecked == true))
+        if (!UpdateFindCriteria())
         {
             FindCountText.Text = _findState.PositionText;
             return;

@@ -556,6 +556,7 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBlock x:Name="FindCountText"
                                    Grid.Column="0"
@@ -573,6 +574,16 @@
                                   Click="FindOptions_Changed"
                                   ToolTip="大文字小文字を区別（Alt+C）"
                                   Content="Aa" />
+                        <CheckBox x:Name="FindRegexCheckBox"
+                                  Grid.Column="2"
+                                  Margin="10,0,0,0"
+                                  VerticalAlignment="Center"
+                                  FontFamily="Consolas"
+                                  FontSize="12"
+                                  Foreground="{DynamicResource HistoryPopupCountBrush}"
+                                  Click="FindOptions_Changed"
+                                  ToolTip="正規表現で検索（Alt+R）"
+                                  Content=".*" />
                     </Grid>
 
                     <Grid Grid.Row="1" Margin="2,0,2,0">
