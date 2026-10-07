@@ -920,6 +920,7 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
 
                 try
                 {
+                    DrawHighlights(drawingContext, line, top, contentLeft);
                     if (_blockSelectionMode && selection.HasValue)
                     {
                         DrawBlockSelection(drawingContext, selection.Value, lineIndex, top, contentLeft);
@@ -1334,6 +1335,55 @@ public sealed class TerminalSurfaceControl : Control, IScrollInfo
                 Math.Max(0, segment.Snapshot.CellLength * _cellSize.Width),
                 _cellSize.Height);
             drawingContext.DrawRectangle(GetBrush(ResolveBackgroundColor(segment.Snapshot.Background)), null, rect);
+        }
+    }
+
+    private readonly TerminalHighlighter _highlighter = new();
+    private readonly Dictionary<Color, Brush> _highlightBrushes = [];
+
+    /// <summary>Text matching these rules gets a tinted background; an empty list turns highlighting off.</summary>
+    public void SetHighlightRules(IReadOnlyList<TerminalHighlightRule> rules)
+    {
+        _highlighter.SetRules(rules);
+        InvalidateVisual();
+    }
+
+    /// <summary>The highlight spans for a row's text; test seam.</summary>
+    internal TerminalHighlightSpan[] GetHighlightSpansForTests(string text) => _highlighter.GetSpans(text);
+
+    private void DrawHighlights(DrawingContext drawingContext, TerminalLineLayout line, double top, double contentLeft)
+    {
+        if (!_highlighter.HasRules)
+        {
+            return;
+        }
+
+        foreach (TerminalHighlightSpan span in _highlighter.GetSpans(line.Text))
+        {
+            int startColumn = line.TextCellMap.GetCellColumn(span.Start, preferTrailingEdge: false);
+            int endColumn = line.TextCellMap.GetCellColumn(span.End, preferTrailingEdge: true);
+            if (endColumn <= startColumn)
+            {
+                continue;
+            }
+
+            if (!_highlightBrushes.TryGetValue(span.Color, out Brush? brush))
+            {
+                // Tint rather than paint: the cell's own background and the text stay readable.
+                Color tint = span.Color.A == 0xFF ? Color.FromArgb(0x60, span.Color.R, span.Color.G, span.Color.B) : span.Color;
+                brush = new SolidColorBrush(tint);
+                brush.Freeze();
+                _highlightBrushes[span.Color] = brush;
+            }
+
+            drawingContext.DrawRectangle(
+                brush,
+                null,
+                new Rect(
+                    contentLeft + (startColumn * _cellSize.Width),
+                    top,
+                    (endColumn - startColumn) * _cellSize.Width,
+                    _cellSize.Height));
         }
     }
 

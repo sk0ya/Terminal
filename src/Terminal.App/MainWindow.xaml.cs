@@ -1244,6 +1244,7 @@ public partial class MainWindow : Window
             BackdropType = _settings.BackdropType,
             EnableFontLigatures = tabSettings.EnableFontLigatures,
             BellStyle = _settings.BellStyle,
+            HighlightRules = _settings.HighlightRules.ToList(),
             VerticalTabWidth = _settings.VerticalTabWidth,
             VerticalTabsCollapsed = _settings.VerticalTabsCollapsed,
             ScrollbackLimit = tabSettings.ScrollbackLimit,

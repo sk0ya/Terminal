@@ -113,6 +113,7 @@ public partial class SettingsWindow : Window
             BackdropComboBox.SelectedItem = BackdropComboBox.Items.OfType<ComboBoxItem>().First(item => Equals(item.Tag, backdrop));
             string bell = TerminalSettingsEditor.NormalizeBellStyle(settings.BellStyle);
             BellStyleComboBox.SelectedItem = BellStyleComboBox.Items.OfType<ComboBoxItem>().First(item => Equals(item.Tag, bell));
+            HighlightRulesTextBox.Text = string.Join(Environment.NewLine, settings.HighlightRules ?? []);
             ScrollbackLimitTextBox.Text = TerminalAppSettings.ClampScrollbackLimit(settings.ScrollbackLimit).ToString();
             SetInputValidationState(WorkingDirectoryTextBox, isValid: true);
             SetInputValidationState(FontSizeTextBox, isValid: true);
@@ -542,6 +543,12 @@ public partial class SettingsWindow : Window
     {
         if (!_suppressAutoApply)
             _currentSettings.BackdropType = TerminalSettingsEditor.NormalizeBackdropType((BackdropComboBox.SelectedItem as ComboBoxItem)?.Tag as string);
+    }
+
+    private void HighlightRulesTextBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (!_suppressAutoApply)
+            _currentSettings.HighlightRules = TerminalSettingsEditor.SplitHighlightRules(HighlightRulesTextBox.Text);
     }
 
     private void BellStyleComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)

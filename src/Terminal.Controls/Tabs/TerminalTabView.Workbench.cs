@@ -8,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 
+using Terminal.Rendering;
 using Terminal.Settings;
 using Terminal.Sessions;
 
@@ -150,6 +151,22 @@ public partial class TerminalTabView
         IsStatusBarVisible = settings.ShowStatusBar;
         ShellIntegrationInjectionEnabled = settings.EnableShellIntegrationInjection;
         BellStyle = ParseBellStyle(settings.BellStyle);
+        SetHighlightRules(settings.HighlightRules);
+    }
+
+    /// <summary>
+    /// Sets the output highlighting rules from settings lines (<c>#RRGGBB regex</c>); see
+    /// <see cref="TerminalHighlightRule.Parse"/>. Lines that do not parse are skipped and reported in
+    /// the status bar.
+    /// </summary>
+    public void SetHighlightRules(IEnumerable<string>? rules)
+    {
+        IReadOnlyList<TerminalHighlightRule> parsed = TerminalHighlightRule.Parse(rules, out IReadOnlyList<string> errors);
+        TerminalOutput.SetHighlightRules(parsed);
+        if (errors.Count > 0)
+        {
+            SetStatus($"Highlight rule skipped: {errors[0]}");
+        }
     }
 
     public TerminalAppSettings CreateSettingsSnapshot()
@@ -631,6 +648,7 @@ public partial class TerminalTabView
         IsStatusBarVisible = settings.ShowStatusBar;
         ShellIntegrationInjectionEnabled = settings.EnableShellIntegrationInjection;
         BellStyle = ParseBellStyle(settings.BellStyle);
+        SetHighlightRules(settings.HighlightRules);
         UpdateWindowTitle();
     }
 

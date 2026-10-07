@@ -352,7 +352,7 @@
                     <RowDefinition Height="8" /><RowDefinition Height="Auto" /><RowDefinition Height="8" />
                     <RowDefinition Height="Auto" /><RowDefinition Height="8" /><RowDefinition Height="Auto" />
                     <RowDefinition Height="8" /><RowDefinition Height="Auto" /><RowDefinition Height="8" />
-                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" /><RowDefinition Height="8" /><RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <TextBlock Grid.Row="0" Foreground="{StaticResource MutedBrush}" Text="Close warning" />
                 <CheckBox x:Name="CloseConfirmationCheckBox" Grid.Row="0" Grid.Column="1" Foreground="#F0F0F0"
@@ -389,7 +389,17 @@
                     <ComboBoxItem Content="Sound" Tag="audible" /><ComboBoxItem Content="Flash" Tag="visual" />
                     <ComboBoxItem Content="Sound and flash" Tag="both" /><ComboBoxItem Content="Off" Tag="none" />
                 </ComboBox>
-                <TextBlock Grid.Row="12" Grid.ColumnSpan="2" Foreground="{StaticResource MutedBrush}" FontSize="11"
+                <TextBlock Grid.Row="12" Foreground="{StaticResource MutedBrush}" Text="Highlights" />
+                <StackPanel Grid.Row="12" Grid.Column="1">
+                    <TextBox x:Name="HighlightRulesTextBox" Style="{StaticResource InputTextBoxStyle}"
+                             AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="64" MaxHeight="140"
+                             VerticalContentAlignment="Top" FontFamily="Consolas"
+                             VerticalScrollBarVisibility="Auto"
+                             LostKeyboardFocus="HighlightRulesTextBox_LostKeyboardFocus" />
+                    <TextBlock Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap"
+                               Text="One rule per line: #RRGGBB regex (case-insensitive), e.g. #FF5555 \b(error|failed)\b" />
+                </StackPanel>
+                <TextBlock Grid.Row="14" Grid.ColumnSpan="2" Foreground="{StaticResource MutedBrush}" FontSize="11"
                            Text="Apply updates the current window; session logging and shell options affect newly started sessions." TextWrapping="Wrap" />
             </Grid>
 

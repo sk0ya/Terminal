@@ -35,6 +35,12 @@ public sealed class TerminalAppSettings
 
     /// <summary>How BEL is signalled: "audible" (default), "visual", "both" or "none".</summary>
     public string BellStyle { get; set; } = "audible";
+
+    /// <summary>
+    /// Output highlighting rules, one per entry as <c>#RRGGBB regex</c>: text matching the regular
+    /// expression (case-insensitive) gets a tinted background of that colour.
+    /// </summary>
+    public List<string> HighlightRules { get; set; } = [];
     public double VerticalTabWidth { get; set; } = DefaultVerticalTabWidth;
     public bool VerticalTabsCollapsed { get; set; } = false;
     public Dictionary<string, string> KeyBindings { get; set; } = TerminalKeyBindingCatalog.CreateDefaults();
@@ -85,6 +91,7 @@ public sealed class TerminalAppSettings
             settings.VerticalTabWidth = ClampVerticalTabWidth(settings.VerticalTabWidth);
             settings.KeyBindings = TerminalKeyBindingCatalog.Normalize(settings.KeyBindings);
             settings.SavedTabs ??= [];
+            settings.HighlightRules ??= [];
 
             return settings;
         }

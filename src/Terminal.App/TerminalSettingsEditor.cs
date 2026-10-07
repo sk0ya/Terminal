@@ -71,6 +71,11 @@ internal static class TerminalSettingsEditor
         return normalized is "mica" or "acrylic" or "mica-alt" ? normalized : "none";
     }
 
+    internal static List<string> SplitHighlightRules(string? text) =>
+        (text ?? string.Empty)
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+
     internal static string NormalizeBellStyle(string? value)
     {
         string normalized = value?.Trim().ToLowerInvariant() ?? string.Empty;
@@ -95,6 +100,7 @@ internal static class TerminalSettingsEditor
         BackdropType = settings.BackdropType,
         EnableFontLigatures = settings.EnableFontLigatures,
         BellStyle = settings.BellStyle,
+        HighlightRules = settings.HighlightRules?.ToList() ?? [],
         VerticalTabWidth = TerminalAppSettings.ClampVerticalTabWidth(settings.VerticalTabWidth),
         VerticalTabsCollapsed = settings.VerticalTabsCollapsed,
         ScrollbackLimit = settings.ScrollbackLimit,
