@@ -559,6 +559,7 @@ public partial class TerminalTabView
         TerminalInputProxy.Foreground = foreground;
 
         ApplyHistoryPopupTheme(theme);
+        ApplyScrollMarkerTheme(theme);
 
         RequestDocumentRender(immediate: true);
     }
@@ -680,6 +681,7 @@ public partial class TerminalTabView
     {
         // 閉じたら検索ハイライト（選択）を消し、ターミナルへフォーカスを戻す。
         _findState.Close();
+        UpdateScrollMarkers();
         TerminalOutput.ClearSelection();
         FindCountText.Text = "Type to search";
         if (_session is not null)
@@ -694,6 +696,12 @@ public partial class TerminalTabView
     // 検索語・オプション変更時に呼ぶ。一致を作り直し、reseek=true なら起点に近い一致を、そうでな
     // ければ現在インデックスを維持して現在一致を選び直す。空検索語・不一致はカウント表示のみ更新。
     private void RefreshFind(bool reseek)
+    {
+        RefreshFindCore(reseek);
+        UpdateScrollMarkers();
+    }
+
+    private void RefreshFindCore(bool reseek)
     {
         if (!FindPopup.IsOpen)
         {
@@ -722,6 +730,12 @@ public partial class TerminalTabView
 
     // Enter / F3（＋Shift）やナビゲーションボタンからの「次/前」移動。
     private void MoveFind(bool forward)
+    {
+        MoveFindCore(forward);
+        UpdateScrollMarkers();
+    }
+
+    private void MoveFindCore(bool forward)
     {
         if (!_findState.UpdateCriteria(
                 FindTextBox.Text,
@@ -827,6 +841,7 @@ public partial class TerminalTabView
 
         _findState.RefreshAfterOutputChange(FindSurfaceMatches());
         FindCountText.Text = _findState.PositionText;
+        UpdateScrollMarkers();
     }
 
     private void OpenHistoryPanel()

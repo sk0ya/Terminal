@@ -334,6 +334,13 @@
                     </rendering:TerminalSurfaceControl>
                 </ScrollViewer>
 
+                <!-- Ticks over the vertical scrollbar: prompts, failed commands, find matches. -->
+                <rendering:TerminalScrollMarkerBar x:Name="ScrollMarkerBar"
+                                                   Panel.ZIndex="2"
+                                                   HorizontalAlignment="Right"
+                                                   VerticalAlignment="Stretch"
+                                                   Visibility="Collapsed" />
+
                 <!-- Sticky scroll: the command whose output is at the top of the viewport,
                      pinned once its own line has scrolled away. Click to jump back to it. -->
                 <Border x:Name="StickyCommandOverlay"

@@ -2011,6 +2011,10 @@ public partial class TerminalTabView : UserControl
         // Before the render guard: while following live output the top line moves on every
         // render, and the running command should pin as soon as its own line scrolls away.
         UpdateStickyCommand();
+        if (e.ExtentHeightChange != 0 || e.ViewportHeightChange != 0 || e.ViewportWidthChange != 0)
+        {
+            UpdateScrollMarkers();
+        }
         if (_isRenderingTerminal)
         {
             return;
@@ -2095,6 +2099,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ShellCommandLineReceived -= TerminalBuffer_ShellCommandLineReceived;
         _terminalBuffer.ShellHistoryPathReceived -= TerminalBuffer_ShellHistoryPathReceived;
         _commandNavigation.ResetSession();
+        UpdateScrollMarkers();
         _agentCommands.ResetSession();
         _commandOutput.Reset();
         _capturedOutputs.Clear();
@@ -2224,6 +2229,7 @@ public partial class TerminalTabView : UserControl
         };
         // Record first so the activity event and the status line can report the duration.
         _commandNavigation.Observe(e.ZoneType, e.AbsoluteLine, e.ExitCode, DateTime.UtcNow);
+        UpdateScrollMarkers();
 
         OnAgentShellCommandZone(e);
         OnCommandOutputZone(e);
