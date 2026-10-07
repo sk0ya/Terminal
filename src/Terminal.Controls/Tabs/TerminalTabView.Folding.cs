@@ -88,7 +88,21 @@ public partial class TerminalTabView
 
     private void OnFoldsChanged()
     {
+        // The viewport normally keeps its distance from the bottom, so folding above it would slide
+        // the text the user is looking at. Keep the top line where it is instead (unless following
+        // live output, where the bottom is what matters).
+        int? topBufferLine = null;
+        if (!_viewportState.FollowOutput)
+        {
+            var (_, charHeight) = MeasureCharacterCell();
+            topBufferLine = DisplayToBufferLine((int)(TerminalScrollHost.VerticalOffset / Math.Max(charHeight, 1.0)));
+        }
+
         RequestDocumentRender(immediate: true);
+        if (topBufferLine is { } line)
+        {
+            _ = Dispatcher.BeginInvoke(() => ScrollToAbsoluteLine(line), System.Windows.Threading.DispatcherPriority.Loaded);
+        }
     }
 
     private void ResetFolds()
