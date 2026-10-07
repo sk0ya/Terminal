@@ -591,7 +591,6 @@ public partial class TerminalTabView
         TerminalInputProxy.Foreground = foreground;
 
         ApplyHistoryPopupTheme(theme);
-        ApplyScrollMarkerTheme(theme);
 
         RequestDocumentRender(immediate: true);
     }

@@ -1,10 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Media;
 
 using Terminal.Rendering;
-using Terminal.Settings;
 
 namespace Terminal.Tabs;
 
@@ -113,16 +111,5 @@ public partial class TerminalTabView
         trackHeight = track.ActualHeight;
         barWidth = bar.ActualWidth > 0 ? bar.ActualWidth : barWidth;
         return true;
-    }
-
-    private void ApplyScrollMarkerTheme(TerminalColorTheme theme)
-    {
-        Color prompt = theme.Foreground;
-        prompt.A = 0x80;
-        Color failed = theme.AnsiPalette.Count > 9 ? theme.AnsiPalette[9] : Colors.IndianRed;
-        Color find = theme.AnsiPalette.Count > 11 ? theme.AnsiPalette[11] : Colors.Gold;
-        find.A = 0xB0;
-        Color currentFind = theme.AnsiPalette.Count > 11 ? theme.AnsiPalette[11] : Colors.Gold;
-        ScrollMarkerBar.SetBrushes(prompt, find, failed, currentFind);
     }
 }

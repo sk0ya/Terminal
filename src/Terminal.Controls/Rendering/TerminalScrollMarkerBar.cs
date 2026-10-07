@@ -32,11 +32,14 @@ internal sealed class TerminalScrollMarkerBar : FrameworkElement
 {
     private const double TickHeight = 2;
 
+    // Fixed mid-luminance colours: the bar sits on the system scrollbar, which may be light or
+    // dark whatever the terminal theme is, so theme colours (light text on a light track) vanish.
+    private static readonly Brush PromptBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x3D, 0x8B, 0xFD)));
+    private static readonly Brush FindBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xE5, 0xA5, 0x0A)));
+    private static readonly Brush FailedBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xE5, 0x53, 0x4B)));
+    private static readonly Brush CurrentFindBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xFF, 0x6A, 0x00)));
+
     private IReadOnlyList<TerminalScrollMarkTick> _ticks = [];
-    private Brush _promptBrush = Brushes.Gray;
-    private Brush _findBrush = Brushes.Orange;
-    private Brush _failedBrush = Brushes.IndianRed;
-    private Brush _currentFindBrush = Brushes.Yellow;
 
     public TerminalScrollMarkerBar()
     {
@@ -46,15 +49,6 @@ internal sealed class TerminalScrollMarkerBar : FrameworkElement
     }
 
     internal IReadOnlyList<TerminalScrollMarkTick> Ticks => _ticks;
-
-    public void SetBrushes(Color prompt, Color find, Color failed, Color currentFind)
-    {
-        _promptBrush = Freeze(new SolidColorBrush(prompt));
-        _findBrush = Freeze(new SolidColorBrush(find));
-        _failedBrush = Freeze(new SolidColorBrush(failed));
-        _currentFindBrush = Freeze(new SolidColorBrush(currentFind));
-        InvalidateVisual();
-    }
 
     /// <summary>
     /// Places <paramref name="marks"/> on a track that starts <paramref name="trackTop"/> pixels down
@@ -113,10 +107,10 @@ internal sealed class TerminalScrollMarkerBar : FrameworkElement
             // rest span the bar.
             (Brush brush, double left, double right) = tick.Kind switch
             {
-                TerminalScrollMarkKind.Prompt => (_promptBrush, 0.0, width * 0.35),
-                TerminalScrollMarkKind.FindMatch => (_findBrush, width * 0.35, width),
-                TerminalScrollMarkKind.FailedCommand => (_failedBrush, 0.0, width),
-                _ => (_currentFindBrush, 0.0, width)
+                TerminalScrollMarkKind.Prompt => (PromptBrush, 0.0, width * 0.5),
+                TerminalScrollMarkKind.FindMatch => (FindBrush, width * 0.5, width),
+                TerminalScrollMarkKind.FailedCommand => (FailedBrush, 0.0, width),
+                _ => (CurrentFindBrush, 0.0, width)
             };
             drawingContext.DrawRectangle(brush, null, new Rect(left, tick.Y - (TickHeight / 2), right - left, TickHeight));
         }
