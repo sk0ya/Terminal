@@ -1531,11 +1531,12 @@ public partial class TerminalTabView : UserControl
         }
     }
 
+    // Unfocused, the cursor stays up as a steady hollow cell (see UpdateCursorOverlay) so a split
+    // still shows where its input would go; only the focused cursor blinks.
     private bool ShouldShowCursor()
     {
         return _session is not null &&
-            HasTerminalInputFocus() &&
-            (!_terminalBuffer.CursorBlinkEnabled || _cursorBlinkVisible);
+            (!HasTerminalInputFocus() || !_terminalBuffer.CursorBlinkEnabled || _cursorBlinkVisible);
     }
 
     private bool HasTerminalInputFocus()
