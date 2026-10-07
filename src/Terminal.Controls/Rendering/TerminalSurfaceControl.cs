@@ -87,6 +87,9 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
     // The link (URL/file path) currently under the mouse pointer, drawn with an underline so it
     // reads as clickable. Cell-column span on a single line; null when not hovering a link.
     private (int Line, int StartColumn, int EndColumn)? _hoveredLink;
+    // The OSC 8 link under the pointer: every visible piece of it is underlined, not just the run
+    // under the pointer (a link that wraps, or one written in parts with the same id=).
+    private TerminalHyperlink? _hoveredOscLink;
     private double _blockAnchorCellColumn
     {
         get => _selectionModel.BlockAnchorColumn;
@@ -946,7 +949,17 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
                         command.Render(drawingContext, contentLeft, top);
                     }
 
-                    if (_hoveredLink is { } hovered && hovered.Line == lineIndex)
+                    if (_hoveredOscLink is { } hoveredLink)
+                    {
+                        foreach (TerminalHyperlinkSegment segment in line.HyperlinkSegments)
+                        {
+                            if (ReferenceEquals(segment.Link, hoveredLink))
+                            {
+                                DrawHoverUnderline(drawingContext, segment.StartCell, segment.StartCell + segment.CellLength, top, contentLeft);
+                            }
+                        }
+                    }
+                    else if (_hoveredLink is { } hovered && hovered.Line == lineIndex)
                     {
                         DrawHoverUnderline(drawingContext, hovered.StartColumn, hovered.EndColumn, top, contentLeft);
                     }
@@ -1280,9 +1293,9 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
     private void UpdateHoveredLink(Point point)
     {
         if (TryCreateTextPosition(point, out TerminalTextPosition position) &&
-            TryGetHyperlinkRegion(position.LineIndex, position.TextIndex, out _, out int startColumn, out int endColumn))
+            TryGetHyperlinkMatch(position.LineIndex, position.TextIndex, out TerminalHyperlinkMatch match))
         {
-            SetHoveredLink((position.LineIndex, startColumn, endColumn));
+            SetHoveredLink((position.LineIndex, match.StartColumn, match.EndColumn), match.Link);
             Cursor = Cursors.Hand;
         }
         else
@@ -1292,15 +1305,32 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
         }
     }
 
-    private void SetHoveredLink((int Line, int StartColumn, int EndColumn)? value)
+    private void SetHoveredLink((int Line, int StartColumn, int EndColumn)? value, TerminalHyperlink? oscLink = null)
     {
-        if (_hoveredLink == value)
+        if (_hoveredLink == value && ReferenceEquals(_hoveredOscLink, oscLink))
         {
             return;
         }
 
         _hoveredLink = value;
+        _hoveredOscLink = value is null ? null : oscLink;
         InvalidateVisual();
+    }
+
+    /// <summary>The OSC 8 link currently hovered; test seam.</summary>
+    internal TerminalHyperlink? HoveredOscLinkForTests => _hoveredOscLink;
+
+    /// <summary>Hovers the given text position as the pointer would; test seam.</summary>
+    internal void HoverTextPositionForTests(int lineIndex, int textIndex)
+    {
+        if (TryGetHyperlinkMatch(lineIndex, textIndex, out TerminalHyperlinkMatch match))
+        {
+            SetHoveredLink((lineIndex, match.StartColumn, match.EndColumn), match.Link);
+        }
+        else
+        {
+            SetHoveredLink(null);
+        }
     }
 
     protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
@@ -2360,18 +2390,7 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
         target = null;
         startColumn = 0;
         endColumn = 0;
-        if (lineIndex < 0 || lineIndex >= _lines.Count)
-        {
-            return false;
-        }
-
-        TerminalLineLayout line = _lines[lineIndex];
-        if (!TerminalHyperlinkDetector.TryResolve(
-                line.Text,
-                line.TextCellMap,
-                line.HyperlinkSegments,
-                textIndex,
-                out TerminalHyperlinkMatch match))
+        if (!TryGetHyperlinkMatch(lineIndex, textIndex, out TerminalHyperlinkMatch match))
         {
             return false;
         }
@@ -2380,6 +2399,23 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
         startColumn = match.StartColumn;
         endColumn = match.EndColumn;
         return true;
+    }
+
+    private bool TryGetHyperlinkMatch(int lineIndex, int textIndex, out TerminalHyperlinkMatch match)
+    {
+        match = default;
+        if (lineIndex < 0 || lineIndex >= _lines.Count)
+        {
+            return false;
+        }
+
+        TerminalLineLayout line = _lines[lineIndex];
+        return TerminalHyperlinkDetector.TryResolve(
+            line.Text,
+            line.TextCellMap,
+            line.HyperlinkSegments,
+            textIndex,
+            out match);
     }
 
     private static TerminalTextRange? NormalizeSelection(TerminalTextRange? selection)

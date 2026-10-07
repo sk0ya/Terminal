@@ -193,8 +193,9 @@ internal sealed class AnsiTerminalBuffer
     private TerminalCharacterSet _g3CharacterSet = TerminalCharacterSet.Ascii;
     private TerminalCharacterSet _savedG2CharacterSet = TerminalCharacterSet.Ascii;
     private TerminalCharacterSet _savedG3CharacterSet = TerminalCharacterSet.Ascii;
-    private string? _currentHyperlink;
-    private string? _savedHyperlink;
+    private TerminalHyperlink? _currentHyperlink;
+    private TerminalHyperlink? _savedHyperlink;
+    private readonly TerminalHyperlinkRegistry _hyperlinks = new();
     private string _windowTitle = string.Empty;
     private string _iconTitle = string.Empty;
     // XTWINOPS 22/23 window-title stack (vim / tmux save & restore the title around their session).
@@ -951,7 +952,9 @@ internal sealed class AnsiTerminalBuffer
         return ExtractLineText(_screen[row]);
     }
 
-    internal string? GetCellHyperlink(int row, int column)
+    internal string? GetCellHyperlink(int row, int column) => GetCellHyperlinkLink(row, column)?.Uri;
+
+    internal TerminalHyperlink? GetCellHyperlinkLink(int row, int column)
     {
         if (row < 0 || row >= _screen.Count)
         {
@@ -1107,6 +1110,7 @@ internal sealed class AnsiTerminalBuffer
         _savedG3CharacterSet = TerminalCharacterSet.Ascii;
         _currentHyperlink = null;
         _savedHyperlink = null;
+        _hyperlinks.Clear();
         _pendingSyntheticAlternateScreenBackup = null;
         _screenStore.ClearPendingPrimaryScreen();
         _windowTitle = string.Empty;
@@ -2124,14 +2128,12 @@ internal sealed class AnsiTerminalBuffer
 
     private void DispatchOscHyperlink(string value)
     {
-        int separatorIndex = value.IndexOf(';');
-        if (separatorIndex < 0)
+        if (!TerminalHyperlink.TryParse(value, out string uri, out string? id))
         {
             return;
         }
 
-        string uri = value[(separatorIndex + 1)..];
-        _currentHyperlink = string.IsNullOrEmpty(uri) ? null : uri;
+        _currentHyperlink = string.IsNullOrEmpty(uri) ? null : _hyperlinks.Open(uri, id);
     }
 
     private void DispatchOscClipboard(string value)
@@ -4452,8 +4454,8 @@ internal sealed class AnsiTerminalBuffer
         int ScrollBottom,
         TerminalStyle Style,
         TerminalStyle SavedStyle,
-        string? CurrentHyperlink,
-        string? SavedHyperlink,
+        TerminalHyperlink? CurrentHyperlink,
+        TerminalHyperlink? SavedHyperlink,
         int ModifyOtherKeys,
         int KittyKeyboardFlags,
         List<int> KittyStack);
@@ -4502,7 +4504,7 @@ internal sealed class AnsiTerminalBuffer
         Color? UnderlineColor,
         bool Strikethrough,
         bool Overline,
-        string? Hyperlink,
+        TerminalHyperlink? Hyperlink,
         bool Blink = false);
 
 }

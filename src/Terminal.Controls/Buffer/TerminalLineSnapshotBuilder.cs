@@ -125,7 +125,7 @@ internal static class TerminalLineSnapshotBuilder
 
     private static ResolvedStyle ResolveStyle(
         TerminalStyle style,
-        string? hyperlink,
+        TerminalHyperlink? hyperlink,
         bool isCursor,
         bool screenReverse,
         Color defaultForeground,
@@ -193,6 +193,6 @@ internal static class TerminalLineSnapshotBuilder
         Color? UnderlineColor,
         bool Strikethrough,
         bool Overline,
-        string? Hyperlink,
+        TerminalHyperlink? Hyperlink,
         bool Blink);
 }

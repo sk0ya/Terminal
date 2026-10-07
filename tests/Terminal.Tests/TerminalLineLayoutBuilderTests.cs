@@ -43,9 +43,9 @@ public sealed class TerminalLineLayoutBuilderTests
         Assert.Equal(0, layout.Segments[0].StartCell);
         Assert.Equal(
             [
-                new TerminalHyperlinkSegment(0, 1, "https://example.test"),
+                new TerminalHyperlinkSegment(0, 1, "https://example.test", first.Hyperlink),
                 new TerminalHyperlinkSegment(1, 0, null),
-                new TerminalHyperlinkSegment(1, 3, "file:///tmp/x")
+                new TerminalHyperlinkSegment(1, 3, "file:///tmp/x", last.Hyperlink)
             ],
             layout.HyperlinkSegments.ToArray());
         Assert.Equal(1, layout.TextCellMap.GetCellColumn(1, preferTrailingEdge: false));
@@ -56,7 +56,7 @@ public sealed class TerminalLineLayoutBuilderTests
             layout.HyperlinkSegments,
             textIndex: 1,
             out TerminalHyperlinkMatch match));
-        Assert.Equal(new TerminalHyperlinkMatch("file:///tmp/x", 1, 4), match);
+        Assert.Equal(new TerminalHyperlinkMatch("file:///tmp/x", 1, 4, last.Hyperlink), match);
     }
 
     [Fact]
@@ -142,6 +142,6 @@ public sealed class TerminalLineLayoutBuilderTests
             underlineColor,
             strikethrough,
             overline,
-            hyperlink,
+            hyperlink is null ? null : new TerminalHyperlink(hyperlink, id: null),
             blink);
 }

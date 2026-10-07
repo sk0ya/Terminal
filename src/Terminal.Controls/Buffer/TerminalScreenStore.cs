@@ -413,7 +413,7 @@ internal sealed class TerminalScreenStore
         int width,
         int columns,
         TerminalStyle style,
-        string? hyperlink)
+        TerminalHyperlink? hyperlink)
     {
         TerminalLine line = Screen[row];
         BreakWideCellsStraddling(line, column, column + width, style);

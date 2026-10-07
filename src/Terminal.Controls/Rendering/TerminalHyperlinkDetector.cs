@@ -1,5 +1,7 @@
 using System.Text.RegularExpressions;
 
+using Terminal.Buffer;
+
 namespace Terminal.Rendering;
 
 /// <summary>Resolves explicit and inferred hyperlinks without depending on WPF.</summary>
@@ -43,7 +45,8 @@ internal static class TerminalHyperlinkDetector
             match = new TerminalHyperlinkMatch(
                 segment.Target,
                 segment.StartCell,
-                segment.StartCell + segment.CellLength);
+                segment.StartCell + segment.CellLength,
+                segment.Link);
             return true;
         }
 
@@ -121,6 +124,7 @@ internal static class TerminalHyperlinkDetector
     }
 }
 
-internal readonly record struct TerminalHyperlinkSegment(int StartCell, int CellLength, string? Target);
+/// <summary>An OSC 8 link's run of cells on one row; <paramref name="Link"/> identifies the whole link.</summary>
+internal readonly record struct TerminalHyperlinkSegment(int StartCell, int CellLength, string? Target, TerminalHyperlink? Link = null);
 
-internal readonly record struct TerminalHyperlinkMatch(string Target, int StartColumn, int EndColumn);
+internal readonly record struct TerminalHyperlinkMatch(string Target, int StartColumn, int EndColumn, TerminalHyperlink? Link = null);

@@ -30,7 +30,7 @@ internal sealed class TerminalLine
 internal readonly record struct TerminalCell(
     string Text,
     TerminalStyle Style,
-    string? Hyperlink,
+    TerminalHyperlink? Hyperlink,
     bool IsContinuation,
     int Width)
 {

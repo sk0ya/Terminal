@@ -35,7 +35,7 @@ internal static class TerminalLineLayoutBuilder
             AnsiTerminalBuffer.TerminalRenderSegmentSnapshot segment = line.Segments[index];
             segments.Add(new TerminalLineSegmentLayout(cellOffset, segment));
             hyperlinkSegments.Add(new TerminalHyperlinkSegment(
-                cellOffset, segment.CellLength, segment.Hyperlink));
+                cellOffset, segment.CellLength, segment.Hyperlink?.Uri, segment.Hyperlink));
             cellOffset += segment.CellLength;
         }
 
