@@ -32,7 +32,9 @@ internal sealed class TerminalCommandNavigationCoordinator
     public bool Observe(ShellCommandZoneType zoneType, int absoluteLine) =>
         Observe(zoneType, absoluteLine, exitCode: null, DateTime.UtcNow);
 
-    public bool Observe(ShellCommandZoneType zoneType, int absoluteLine, int? exitCode, DateTime nowUtc)
+    /// <param name="nowUtc">When the mark arrived; null for a mark redrawn from a snapshot, whose time
+    /// is unknown (the command gets no start time, and a D without one gets no duration).</param>
+    public bool Observe(ShellCommandZoneType zoneType, int absoluteLine, int? exitCode, DateTime? nowUtc)
     {
         switch (zoneType)
         {
@@ -55,8 +57,8 @@ internal sealed class TerminalCommandNavigationCoordinator
                     {
                         Done = true,
                         ExitCode = exitCode,
-                        Duration = mark.ExecutedAtUtc is { } started && nowUtc >= started
-                            ? nowUtc - started
+                        Duration = mark.ExecutedAtUtc is { } started && nowUtc is { } now && now >= started
+                            ? now - started
                             : null
                     });
                 return false;

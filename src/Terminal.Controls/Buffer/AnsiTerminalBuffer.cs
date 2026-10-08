@@ -613,6 +613,7 @@ internal sealed partial class AnsiTerminalBuffer
         FlushPendingCluster();
         FlushDeferredCommandStart();
         InvalidateScreenRenderCache();
+        CloseReplayWindow(text);
         return _synchronizedUpdateEndedDuringProcess;
     }
 
@@ -1055,6 +1056,7 @@ internal sealed partial class AnsiTerminalBuffer
 
     private void ResetTerminal()
     {
+        IsReplaying = false;
         ClearScrollback();
         _screenStore.ReplaceScreen(CreateScreen(_rows, _columns, TerminalStyle.Default));
         _primaryScreenBackup = null;
@@ -3175,6 +3177,7 @@ internal sealed partial class AnsiTerminalBuffer
 
         InvalidateScreenRenderCache();
         _syntheticAlternateScreenActive = false;
+        RaiseAlternateScreenExited();
     }
 
     private void CaptureSyntheticAlternateScreenCandidate()

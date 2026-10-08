@@ -17,6 +17,9 @@ public sealed class HeadlessTerminal
     private long _marksRemovedHead;
     private string? _pendingCommandLine;
     private string? _runningCommandLine;
+    // Set while the primary screen's rewrap is put off until the alternate screen is left.
+    private List<(TerminalShellMark Mark, int Logical)>? _deferredReflowMarks;
+    private long _deferredReflowRemovedBefore;
 
     public HeadlessTerminal(short columns, short rows, int scrollbackLimit = 10000)
     {
@@ -27,6 +30,7 @@ public sealed class HeadlessTerminal
         _buffer.ShellHistoryPathReceived += (_, path) => HistoryPath = path;
         _buffer.ShellCommandLineReceived += (_, command) => _pendingCommandLine = command;
         _buffer.ShellCommandZoneReceived += OnShellCommandZone;
+        _buffer.AlternateScreenExited += OnAlternateScreenExited;
     }
 
     /// <summary>
@@ -54,42 +58,33 @@ public sealed class HeadlessTerminal
         }
 
         SyncMarks();
-        if (_buffer.IsAlternateScreenActive || _marks.Count == 0)
+        if (_marks.Count == 0 && _deferredReflowMarks is null)
         {
             _buffer.Resize(columns, rows);
             _marksRemovedHead = _buffer.RemovedHeadLineCount;
             return;
         }
 
-        // A width change rewraps the lines, so a mark's row number no longer names its line. Logical
-        // lines (rows joined by soft wraps) survive a rewrap, so carry each mark across as one.
-        int[] logicalBefore = LogicalLineIndices();
-        var logicalMarks = new List<(TerminalShellMark Mark, int Logical)>(_marks.Count);
-        foreach (TerminalShellMark mark in _marks)
+        if (_buffer.IsAlternateScreenActive)
         {
-            if (mark.AbsoluteLine < logicalBefore.Length)
+            // The primary screen is not rewrapped now but when the alternate screen is left (to the
+            // size of that moment), so the marks are carried across then — from the logical lines
+            // as they were before the first resize, since nothing moves the primary in between.
+            if (_deferredReflowMarks is null)
             {
-                logicalMarks.Add((mark, logicalBefore[mark.AbsoluteLine]));
+                _deferredReflowMarks = ToLogicalMarks();
+                _deferredReflowRemovedBefore = _buffer.RemovedHeadLineCount;
             }
+
+            _buffer.Resize(columns, rows);
+            _marksRemovedHead = _buffer.RemovedHeadLineCount;
+            return;
         }
 
+        List<(TerminalShellMark Mark, int Logical)> logicalMarks = ToLogicalMarks();
         long removedBefore = _buffer.RemovedHeadLineCount;
         _buffer.Resize(columns, rows);
-        // Rows evicted from the head while rewrapping: counted as logical lines, which is exact for
-        // the usual unwrapped scrollback and close enough otherwise.
-        int evicted = (int)(_buffer.RemovedHeadLineCount - removedBefore);
-        _marksRemovedHead = _buffer.RemovedHeadLineCount;
-
-        List<int> firstRowOfLogical = FirstRowsOfLogicalLines();
-        _marks.Clear();
-        foreach ((TerminalShellMark mark, int logical) in logicalMarks)
-        {
-            int shifted = logical - evicted;
-            if (shifted >= 0 && shifted < firstRowOfLogical.Count)
-            {
-                _marks.Add(mark with { AbsoluteLine = firstRowOfLogical[shifted] });
-            }
-        }
+        ApplyLogicalMarks(logicalMarks, removedBefore);
     }
 
     /// <summary>The whole state as a VT stream, bracketed so the reader knows it is a redraw.</summary>
@@ -149,38 +144,76 @@ public sealed class HeadlessTerminal
         }
     }
 
-    private int[] LogicalLineIndices()
+    private void OnAlternateScreenExited()
     {
-        int total = _buffer.ScrollbackLineCount + _buffer.Rows;
-        var indices = new int[total];
-        int logical = 0;
-        for (int line = 0; line < total; line++)
+        if (_deferredReflowMarks is not { } logicalMarks)
         {
-            indices[line] = logical;
-            if (_buffer.CountHardLineBreaks(line, line + 1) > 0)
+            return;
+        }
+
+        // Marks a program left on the alternate screen pointed into it and are gone with it.
+        _deferredReflowMarks = null;
+        ApplyLogicalMarks(logicalMarks, _deferredReflowRemovedBefore);
+    }
+
+    /// <summary>
+    /// A width change rewraps the lines, so a mark's row number no longer names its line. Logical
+    /// lines (rows joined by soft wraps) survive a rewrap, so each mark is carried across as one.
+    /// </summary>
+    private List<(TerminalShellMark Mark, int Logical)> ToLogicalMarks()
+    {
+        IReadOnlyList<TerminalLine> lines = _buffer.PrimaryLines;
+        var logicalOfRow = new int[lines.Count];
+        int logical = 0;
+        for (int row = 0; row < lines.Count; row++)
+        {
+            logicalOfRow[row] = logical;
+            if (!lines[row].IsWrapped)
             {
                 logical++;
             }
         }
 
-        return indices;
+        var logicalMarks = new List<(TerminalShellMark Mark, int Logical)>(_marks.Count);
+        foreach (TerminalShellMark mark in _marks)
+        {
+            if (mark.AbsoluteLine < logicalOfRow.Length)
+            {
+                logicalMarks.Add((mark, logicalOfRow[mark.AbsoluteLine]));
+            }
+        }
+
+        return logicalMarks;
     }
 
-    private List<int> FirstRowsOfLogicalLines()
+    private void ApplyLogicalMarks(List<(TerminalShellMark Mark, int Logical)> logicalMarks, long removedBefore)
     {
-        int total = _buffer.ScrollbackLineCount + _buffer.Rows;
-        var rows = new List<int>();
+        // Rows evicted from the head while rewrapping: counted as logical lines, which is exact for
+        // the usual unwrapped scrollback and close enough otherwise.
+        int evicted = (int)(_buffer.RemovedHeadLineCount - removedBefore);
+        _marksRemovedHead = _buffer.RemovedHeadLineCount;
+
+        IReadOnlyList<TerminalLine> lines = _buffer.PrimaryLines;
+        var firstRowOfLogical = new List<int>();
         bool startsLogical = true;
-        for (int line = 0; line < total; line++)
+        for (int row = 0; row < lines.Count; row++)
         {
             if (startsLogical)
             {
-                rows.Add(line);
+                firstRowOfLogical.Add(row);
             }
 
-            startsLogical = _buffer.CountHardLineBreaks(line, line + 1) > 0;
+            startsLogical = !lines[row].IsWrapped;
         }
 
-        return rows;
+        _marks.Clear();
+        foreach ((TerminalShellMark mark, int logical) in logicalMarks)
+        {
+            int shifted = logical - evicted;
+            if (shifted >= 0 && shifted < firstRowOfLogical.Count)
+            {
+                _marks.Add(mark with { AbsoluteLine = firstRowOfLogical[shifted] });
+            }
+        }
     }
 }

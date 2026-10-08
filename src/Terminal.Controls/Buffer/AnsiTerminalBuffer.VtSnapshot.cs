@@ -30,6 +30,20 @@ internal sealed partial class AnsiTerminalBuffer
     /// <summary>True while a snapshot written by <see cref="CreateVtSnapshot"/> is being read back.</summary>
     public bool IsReplaying { get; private set; }
 
+    // A snapshot is the first thing a re-attached session sends, so the bracket is honored only there.
+    // Anywhere later it is just bytes a program printed (a file being cat'ed), and obeying it would
+    // silence the tab's command reporting until an end that never comes.
+    private bool _replayBracketAllowed = true;
+
+    /// <summary>Raised after the alternate screen is left, once the primary screen is back (and
+    /// rewrapped, if the size changed while it was away).</summary>
+    internal event Action? AlternateScreenExited;
+
+    /// <summary>The primary screen's lines, scrollback first — also while the alternate screen is up,
+    /// when the primary screen is the one put aside. Absolute line numbers count over these.</summary>
+    internal IReadOnlyList<TerminalLine> PrimaryLines =>
+        _scrollback.Concat(_screenStore.PrimaryScreenBackup ?? _screen).ToList();
+
     internal int Columns => _columns;
     internal int Rows => _rows;
 
@@ -38,8 +52,29 @@ internal sealed partial class AnsiTerminalBuffer
 
     private void DispatchReplayOsc(string value)
     {
-        IsReplaying = value == "begin";
+        if (value == "begin")
+        {
+            IsReplaying = _replayBracketAllowed;
+        }
+        else if (value == "end")
+        {
+            IsReplaying = false;
+        }
+
+        _replayBracketAllowed = false;
     }
+
+    /// <summary>Called at the end of each <see cref="Process"/>: past the first output, a bracket is no
+    /// longer a snapshot's.</summary>
+    private void CloseReplayWindow(string text)
+    {
+        if (text.Length > 0)
+        {
+            _replayBracketAllowed = false;
+        }
+    }
+
+    private void RaiseAlternateScreenExited() => AlternateScreenExited?.Invoke();
 
     internal string CreateVtSnapshot(
         IReadOnlyList<TerminalShellMark> marks,
@@ -147,9 +182,12 @@ internal sealed partial class AnsiTerminalBuffer
             output.Append(CultureInfo.InvariantCulture, $"\u001b[{_leftMargin + 1};{_rightMargin + 1}s");
         }
 
-        if (_savedCursorRow != 0 || _savedCursorColumn != 0)
+        if (_savedCursorRow != 0 || _savedCursorColumn != 0 ||
+            _savedStyle != TerminalStyle.Default || _savedHyperlink is not null)
         {
+            // DECSC saves the pen with the position, so a program's DECRC gets its colors back too.
             writer.MoveCursor(_savedCursorRow, _savedCursorColumn);
+            writer.SetStyle(_savedStyle, _savedHyperlink);
             output.Append("\u001b7");
         }
 

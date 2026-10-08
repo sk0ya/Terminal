@@ -1221,6 +1221,7 @@ public partial class TerminalTabView : UserControl
 
         if (!string.IsNullOrEmpty(nextBatch))
         {
+            bool wasReplaying = _terminalBuffer.IsReplaying;
             bool endedSynchronizedUpdate = _terminalBuffer.Process(nextBatch);
             TryCompleteAgentSentinel();
             if (_commandOutput.HasPending)
@@ -1230,10 +1231,16 @@ public partial class TerminalTabView : UserControl
                 _commandOutputSettleTimer.Start();
             }
             bool prioritizeRender = _outputBatch.ConsumeRenderPriority();
-            if (!_terminalBuffer.SynchronizedUpdateActive)
+            if (_terminalBuffer.IsReplaying)
+            {
+                // A re-attached session's snapshot (a whole scrollback, up to a second to parse) is
+                // drawn once, finished, rather than scrolling past batch by batch. Its end is part of
+                // the same output frame, so this does not need the synchronized-update watchdog.
+            }
+            else if (!_terminalBuffer.SynchronizedUpdateActive)
             {
                 StopSynchronizedUpdateWatchdog();
-                RequestDocumentRender(immediate: prioritizeRender || endedSynchronizedUpdate);
+                RequestDocumentRender(immediate: prioritizeRender || endedSynchronizedUpdate || wasReplaying);
             }
             else
             {
@@ -2404,7 +2411,8 @@ public partial class TerminalTabView : UserControl
             ShellCommandZoneType.CommandDone or ShellCommandZoneType.PromptStart => false,
             _ => _isShellCommandExecuting
         };
-        _commandNavigation.Observe(e.ZoneType, e.AbsoluteLine, e.ExitCode, DateTime.UtcNow);
+        // When a redrawn command ran is not known here: no start time, so no made-up durations.
+        _commandNavigation.Observe(e.ZoneType, e.AbsoluteLine, e.ExitCode, nowUtc: null);
         _agentCommands.OnShellZone(e, static (_, _) => string.Empty);
         switch (e.ZoneType)
         {

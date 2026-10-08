@@ -237,6 +237,81 @@ public sealed class TerminalVtSnapshotTests
     }
 
     [Fact]
+    public void SavedCursorKeepsItsPen()
+    {
+        var buffer = new AnsiTerminalBuffer(Columns, Rows);
+        buffer.Process("\u001b[3;4H\u001b[1;31m\u001b7\u001b[0m\u001b[5;10H");
+
+        AnsiTerminalBuffer restored = Restore(Snapshot(buffer));
+        buffer.Process("\u001b8X");
+        restored.Process("\u001b8X");
+
+        AssertSameLines(buffer, restored);
+        Assert.True(buffer.AllLinesForTests.Skip(2).First().Cells[3].Style.Bold);
+    }
+
+    [Fact]
+    public void TheReplayBracketCountsOnlyAsTheFirstOutput()
+    {
+        var buffer = new AnsiTerminalBuffer(Columns, Rows);
+        buffer.Process("PS> ");
+
+        // A program printing the bytes later (a file being cat'ed) must not silence the tab.
+        buffer.Process("\u001b]7770;begin\u0007");
+
+        Assert.False(buffer.IsReplaying);
+    }
+
+    [Fact]
+    public void ResetEndsAReplay()
+    {
+        var buffer = new AnsiTerminalBuffer(Columns, Rows);
+        buffer.Process("\u001b]7770;begin\u0007");
+        Assert.True(buffer.IsReplaying);
+
+        buffer.Process("\u001bc");
+
+        Assert.False(buffer.IsReplaying);
+    }
+
+    [Fact]
+    public void HeadlessTerminalKeepsMarksAcrossAResizeInsideTheAlternateScreen()
+    {
+        var terminal = new HeadlessTerminal(Columns, Rows);
+        terminal.Process("\u001b]133;A\u0007PS> " + new string('y', 60) + "\r\n");
+        terminal.Process("\u001b]133;A\u0007PS> \u001b]133;B\u0007");
+
+        // vim: the primary screen is rewrapped only when it is left, at the size of that moment.
+        terminal.Process("\u001b[?1049hVIM");
+        terminal.Resize(Columns + 20, Rows);
+        terminal.Resize(Columns + 40, Rows);
+        terminal.Process("\u001b[?1049l");
+
+        var restored = new AnsiTerminalBuffer(Columns + 40, Rows);
+        var lines = new List<int>();
+        restored.ShellCommandZoneReceived += (_, e) => lines.Add(e.AbsoluteLine);
+        restored.Process(terminal.CreateVtSnapshot());
+
+        Assert.Equal([0, 1, 1], lines);
+    }
+
+    [Fact]
+    public void ARedrawnCommandGetsNoMadeUpDuration()
+    {
+        var navigation = new Terminal.Tabs.TerminalCommandNavigationCoordinator();
+        navigation.Observe(ShellCommandZoneType.PromptStart, 0, null, nowUtc: null);
+        navigation.Observe(ShellCommandZoneType.CommandExecuted, 0, null, nowUtc: null);
+
+        // The command was still running at the re-attach and finishes live.
+        navigation.Observe(ShellCommandZoneType.CommandDone, 3, 0, DateTime.UtcNow);
+
+        var command = Assert.Single(navigation.Commands);
+        Assert.True(command.Done);
+        Assert.Null(command.ExecutedAtUtc);
+        Assert.Null(command.Duration);
+    }
+
+    [Fact]
     public void HeadlessTerminalAnswersQueries()
     {
         var terminal = new HeadlessTerminal(Columns, Rows);
