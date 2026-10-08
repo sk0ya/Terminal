@@ -16,11 +16,35 @@ There is only one package to bump and push.
 
 ## Version bump
 
-Bump the single `<Version>` in the root `Directory.Build.props` (the PropertyGroup
-conditioned on `Terminal.Core`/`Terminal.Controls`) — a patch bump, e.g. `1.0.22 → 1.0.23`,
-unless told otherwise — regardless of whether the change was in `Terminal.Core/**` or
-`Terminal.Controls/**`. Core ships inside the Controls package, so both assemblies share
-that one version. The csproj files do not carry a `<Version>`.
+The version lives in the single `<Version>` in the root `Directory.Build.props` (the
+PropertyGroup conditioned on `Terminal.Core`/`Terminal.Controls`), regardless of whether
+the change was in `Terminal.Core/**` or `Terminal.Controls/**`. Core ships inside the
+Controls package, so both assemblies share that one version. The csproj files do not
+carry a `<Version>`.
+
+**Decide the version from nuget.org, not from `Directory.Build.props` alone.** The props
+value can be ahead of what was actually published (e.g. a bump commit was made but the
+push never happened — this once caused 1.0.40 to be skipped: props said 1.0.40, it was
+never published, and blindly bumping produced 1.0.41). Never leave a gap in the published
+version sequence.
+
+Fetch the latest published version (the flat-container index includes unlisted versions):
+```pwsh
+$published = (Invoke-RestMethod https://api.nuget.org/v3-flatcontainer/sk0ya.terminal.controls/index.json).versions
+$latest = $published[-1]; $latest
+Select-String -Path Directory.Build.props -Pattern '<Version>'
+```
+Then:
+- **props == latest published** → normal case. Patch-bump (e.g. `1.0.22 → 1.0.23`, unless
+  told otherwise) and make the bump commit (step 2).
+- **props == latest published + one patch, and that version is not in `$published`** → a
+  previous bump was never published. **Do not bump again**; reuse the props version as-is
+  and skip the bump commit in step 2 (the existing `Bump ... to <X.Y.Z>` commit stays).
+- **anything else** (props behind nuget.org, or more than one version ahead) → stop and
+  report the mismatch to the user instead of guessing.
+
+Also check `git log origin/main..main` — unpushed `Bump ...` commits are a sign of the
+"bumped but never published" case above.
 
 ## Steps
 
@@ -29,7 +53,8 @@ that one version. The csproj files do not carry a `<Version>`.
    dotnet test tests/Terminal.Tests/Terminal.Tests.csproj -c Debug --nologo
    ```
 
-2. **Bump version** — edit the `<Version>` in `Directory.Build.props`, then commit:
+2. **Bump version** — only if the version check above says to bump (skip this step when
+   reusing an unpublished props version). Edit the `<Version>` in `Directory.Build.props`, then commit:
    ```pwsh
    git commit -am "Bump Terminal.Controls package to <X.Y.Z>"
    ```
