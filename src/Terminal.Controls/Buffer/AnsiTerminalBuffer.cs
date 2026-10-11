@@ -845,6 +845,49 @@ internal sealed partial class AnsiTerminalBuffer
     /// <summary>The absolute line the cursor is on (scrollback rows first, then the screen).</summary>
     internal int CursorAbsoluteLine => _scrollback.Count + _cursorRow;
 
+    /// <summary>Bumped whenever the line numbering is rebuilt (reflow on resize, scrollback clear); a
+    /// <see cref="TerminalLineMark"/> from an older generation no longer points at the same text.</summary>
+    internal int NumberingGeneration => _screenStore.NumberingGeneration;
+
+    /// <summary>
+    /// The logical lines in [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>): rows that
+    /// soft-wrapped into the next one are joined, so a long line comes back whole rather than cut at the
+    /// screen width. Callers end the range at the start of a wrapped run; a run cut by the end of the range
+    /// is returned as far as it goes.
+    /// </summary>
+    internal List<string> GetLogicalLines(int startInclusive, int endExclusive)
+    {
+        int scrollbackCount = _scrollback.Count;
+        int total = scrollbackCount + _screen.Count;
+        int start = Math.Clamp(startInclusive, 0, total);
+        int end = Math.Clamp(endExclusive, start, total);
+
+        var lines = new List<string>();
+        var current = new StringBuilder();
+        bool open = false;
+        for (int absolute = start; absolute < end; absolute++)
+        {
+            TerminalLine line = absolute < scrollbackCount ? _scrollback[absolute] : _screen[absolute - scrollbackCount];
+            string text = ExtractLineText(line);
+            // A wrapped row is full to the edge, so its trailing spaces are real text of the logical line.
+            current.Append(line.IsWrapped ? text : text.TrimEnd());
+            open = true;
+            if (!line.IsWrapped)
+            {
+                lines.Add(current.ToString());
+                current.Clear();
+                open = false;
+            }
+        }
+
+        if (open)
+        {
+            lines.Add(current.ToString().TrimEnd());
+        }
+
+        return lines;
+    }
+
     /// <summary>The first row of the soft-wrapped run that <paramref name="absoluteLine"/> belongs to
     /// (a long prompt that wrapped starts on an earlier row than the one the cursor is on).</summary>
     internal int WrappedRunStart(int absoluteLine)

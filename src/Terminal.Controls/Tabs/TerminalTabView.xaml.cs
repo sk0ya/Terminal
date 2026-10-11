@@ -389,7 +389,7 @@ public partial class TerminalTabView : UserControl
 
     private void ClearButton_Click(object sender, RoutedEventArgs e)
     {
-        _terminalBuffer.ClearScrollback();
+        RenumberOutputTaps(_terminalBuffer.ClearScrollback);
         RequestDocumentRender();
         SetStatus("Cleared local scrollback.");
     }
@@ -850,7 +850,7 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
-        _terminalBuffer.Resize(columns, rows);
+        RenumberOutputTaps(() => _terminalBuffer.Resize(columns, rows));
         RequestDocumentRender();
 
         if (_session is null)
@@ -1009,6 +1009,7 @@ public partial class TerminalTabView : UserControl
         session.OutputReceived -= OnOutputReceived;
         session.Exited -= OnProcessExited;
         AbortActiveAgentCommand();
+        AbortOutputTaps();
     }
 
     private void ResetViewForSessionStart()
@@ -1224,6 +1225,10 @@ public partial class TerminalTabView : UserControl
             bool wasReplaying = _terminalBuffer.IsReplaying;
             bool endedSynchronizedUpdate = _terminalBuffer.Process(nextBatch);
             TryCompleteAgentSentinel();
+            if (!_terminalBuffer.IsReplaying)
+            {
+                PumpOutputTaps();
+            }
             if (_commandOutput.HasPending)
             {
                 // Still painting after D (ConPTY paints text after forwarding the marker): wait for quiet.
@@ -2314,6 +2319,7 @@ public partial class TerminalTabView : UserControl
         UpdateScrollMarkers();
 
         OnAgentShellCommandZone(e);
+        OnOutputTapShellZone(e);
         OnCommandOutputZone(e);
         RaiseShellCommandActivity(e);
         if (e.ZoneType == ShellCommandZoneType.PromptStart)
