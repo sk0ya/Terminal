@@ -98,6 +98,11 @@ internal static class TerminalKeyChordTranslator
         ModifierKeys modifiers,
         bool applicationCursorKeys)
     {
+        if (IsReservedWindowChord(key, modifiers))
+        {
+            return null;
+        }
+
         return key switch
         {
             Key.Enter => TerminalInputEncoder.EncodePrefixedControl("\r", modifiers),
@@ -138,6 +143,11 @@ internal static class TerminalKeyChordTranslator
         int modifyOtherKeysLevel,
         int kittyKeyboardFlags = 0)
     {
+        if (IsReservedWindowChord(key, modifiers))
+        {
+            return null;
+        }
+
         if (TerminalInputEncoder.ShouldUseKittyEncoding(key, modifiers, kittyKeyboardFlags))
         {
             int? codePoint = GetKittyFunctionalKeyCode(key);
@@ -189,6 +199,13 @@ internal static class TerminalKeyChordTranslator
 
         return TranslateSpecialKey(Key.Enter, modifiers, applicationCursorKeys, modifyOtherKeysLevel, kittyKeyboardFlags);
     }
+
+    /// <summary>
+    /// Alt+F4 stays with Windows (close the window): Alt chords reach the terminal as their real key
+    /// rather than Key.System, so without this the shell would swallow it.
+    /// </summary>
+    internal static bool IsReservedWindowChord(Key key, ModifierKeys modifiers) =>
+        key == Key.F4 && modifiers == ModifierKeys.Alt;
 
     private static int? GetKittyFunctionalKeyCode(Key key)
     {

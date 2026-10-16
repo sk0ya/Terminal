@@ -259,6 +259,7 @@ public partial class TerminalTabView : UserControl
         TerminalInputProxy.AddHandler(TextCompositionManager.PreviewTextInputStartEvent, new TextCompositionEventHandler(TerminalInputProxy_PreviewTextInputStart), handledEventsToo: true);
         TerminalInputProxy.AddHandler(TextCompositionManager.PreviewTextInputUpdateEvent, new TextCompositionEventHandler(TerminalInputProxy_PreviewTextInputUpdate), handledEventsToo: true);
         TerminalInputProxy.AddHandler(TextCompositionManager.TextInputEvent, new TextCompositionEventHandler(TerminalInputProxy_TextInput), handledEventsToo: true);
+        TerminalInputProxy.AddHandler(TextCompositionManager.PreviewTextInputEvent, new TextCompositionEventHandler(TerminalInputProxy_PreviewTextInput));
 
         _terminalBuffer.InputSequenceGenerated += TerminalBuffer_InputSequenceGenerated;
         _terminalBuffer.ClipboardSetRequested += TerminalBuffer_ClipboardSetRequested;
@@ -648,16 +649,46 @@ public partial class TerminalTabView : UserControl
 
     private void TerminalOutput_PreviewTextInput(object sender, TextCompositionEventArgs e)
     {
-        string text = string.IsNullOrEmpty(e.Text) ? e.SystemText : e.Text;
-        if (string.IsNullOrEmpty(text))
+        if (string.IsNullOrEmpty(e.Text))
+        {
+            e.Handled = SendAltSystemText(e.SystemText);
+            return;
+        }
+
+        if (SendTerminalText(e.Text, prefixAltIfNeeded: true))
+        {
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// Alt+letter arrives as WM_SYSCHAR: an empty <see cref="TextCompositionEventArgs.Text"/> with the
+    /// character in <see cref="TextCompositionEventArgs.SystemText"/>. Keyboard focus normally sits on
+    /// this proxy, and a TextBox ignores system text, so without this handler Alt+V (Claude Code's image
+    /// paste), PSReadLine's Alt+B/Alt+F and every other meta chord were silently dropped.
+    /// </summary>
+    private void TerminalInputProxy_PreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(e.Text) || HasPendingProxyText())
         {
             return;
         }
 
-        if (SendTerminalText(text, prefixAltIfNeeded: true))
+        e.Handled = SendAltSystemText(e.SystemText);
+    }
+
+    /// <summary>
+    /// System text only exists while Alt is held, so the meta prefix does not depend on reading the
+    /// live modifier state (which can already have changed by the time the event is dispatched).
+    /// </summary>
+    private bool SendAltSystemText(string? systemText)
+    {
+        if (string.IsNullOrEmpty(systemText))
         {
-            e.Handled = true;
+            return false;
         }
+
+        return SendUserInput(_terminalBuffer.AltSendsEscape ? $"\u001b{systemText}" : systemText);
     }
 
     private void TerminalOutput_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -1858,9 +1889,14 @@ public partial class TerminalTabView : UserControl
 
     private static Key GetEffectiveKey(KeyEventArgs e)
     {
-        Key key = e.Key == Key.ImeProcessed && e.ImeProcessedKey != Key.None
-            ? e.ImeProcessedKey
-            : e.Key;
+        // Alt chords (and a lone F10) arrive as Key.System; the real key is in SystemKey. Without this
+        // Alt+arrows, Alt+Enter, Alt+Backspace and F10 never reached the shell.
+        Key key = e.Key switch
+        {
+            Key.ImeProcessed when e.ImeProcessedKey != Key.None => e.ImeProcessedKey,
+            Key.System when e.SystemKey != Key.None => e.SystemKey,
+            _ => e.Key
+        };
 
         if (key == Key.ImeProcessed)
         {
