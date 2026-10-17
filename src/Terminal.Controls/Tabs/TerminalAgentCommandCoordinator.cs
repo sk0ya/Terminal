@@ -24,6 +24,9 @@ internal sealed class TerminalAgentCommandCoordinator
     public bool ShellIntegrationObserved { get; private set; }
     public TerminalAgentCommandExecution? Current => _current;
 
+    /// <summary>True while a command is waiting for its sentinel markers (no OSC 133 to rely on).</summary>
+    public bool IsAwaitingSentinel => _current is { UseShellIntegration: false };
+
     public TerminalAgentCommandExecution Begin(string command, string markerId, int fallbackOutputStartLine)
     {
         bool useShellIntegration = ShellIntegrationObserved;

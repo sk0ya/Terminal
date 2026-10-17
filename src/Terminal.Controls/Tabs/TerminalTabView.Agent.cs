@@ -80,6 +80,13 @@ public partial class TerminalTabView
     /// </summary>
     private void TryCompleteAgentSentinel()
     {
+        // This runs on every output flush, and the snapshot is the whole scrollback as text:
+        // building it when no fallback command is waiting made each flush O(scrollback).
+        if (!_agentCommands.IsAwaitingSentinel)
+        {
+            return;
+        }
+
         _agentCommands.TryCompleteSentinel(_terminalBuffer.CreatePlainTextSnapshot());
     }
 }
