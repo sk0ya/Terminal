@@ -87,6 +87,20 @@ public partial class TerminalTabView : UserControl
     public event EventHandler<string>? HeaderTitleChanged;
 
     /// <summary>
+    /// Raised on the dispatcher thread when the application's own window title (OSC 0/2) changes,
+    /// <b>before</b> any tab-header shaping. <see cref="HeaderTitleChanged"/> carries the header the
+    /// view derived from it (path-like segments dropped, profile name as fallback), which loses
+    /// information hosts may need — e.g. an agent that prefixes its status to a title such as
+    /// "◐ Fix src/foo.cs" would read as the profile name. Hosts that interpret the title use this.
+    /// </summary>
+    public event EventHandler<string>? WindowTitleChanged;
+
+    /// <summary>The application's current raw window title (OSC 0/2); empty when none was set.</summary>
+    public string WindowTitle => _terminalBuffer.WindowTitle ?? string.Empty;
+
+    private string _lastRawWindowTitle = string.Empty;
+
+    /// <summary>
     /// Raised on the dispatcher thread for every OSC 133 shell-integration marker observed
     /// on this session: prompt shown, command input started, command executing, and command
     /// finished (with exit code). Fires for commands typed by the user as well as those sent
@@ -2580,6 +2594,9 @@ public partial class TerminalTabView : UserControl
     /// <summary>Feeds raw PTY output into the terminal buffer; test seam for marker-driven events.</summary>
     internal void FeedOutputForTests(string data) => _terminalBuffer.Process(data);
 
+    /// <summary>Runs the title update the render pass would run; test seam (rendering is deferred).</summary>
+    internal void RefreshTitleForTests() => UpdateWindowTitle();
+
     /// <summary>The OSC 133 command marks as observed; test seam for line-position checks.</summary>
     internal TerminalCommandNavigationCoordinator CommandNavigationForTests => _commandNavigation;
 
@@ -3029,6 +3046,13 @@ public partial class TerminalTabView : UserControl
 
     private void UpdateWindowTitle()
     {
+        string rawTitle = _terminalBuffer.WindowTitle ?? string.Empty;
+        if (!string.Equals(_lastRawWindowTitle, rawTitle, StringComparison.Ordinal))
+        {
+            _lastRawWindowTitle = rawTitle;
+            WindowTitleChanged?.Invoke(this, rawTitle);
+        }
+
         string nextTitle = TerminalTabTitleResolver.Resolve(
             _terminalBuffer.WindowTitle,
             GetEffectiveTabTitleCommandLine(),
