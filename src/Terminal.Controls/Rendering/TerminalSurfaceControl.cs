@@ -118,6 +118,57 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
 
     public event EventHandler<TerminalHyperlinkActivatedEventArgs>? HyperlinkActivated;
 
+    /// <summary>
+    /// Raised when a link (OSC 8 hyperlink, detected URL or file path) is Ctrl+dragged out of the
+    /// terminal, before the OLE drag starts. <see cref="TerminalHyperlinkDragEventArgs.Data"/> already
+    /// carries the link as text (and as a URL for web links); a host can add its own formats (e.g. the
+    /// resolved file for a relative path) or set <see cref="TerminalHyperlinkDragEventArgs.Cancel"/>.
+    /// </summary>
+    public event EventHandler<TerminalHyperlinkDragEventArgs>? HyperlinkDragStarting;
+
+    // Ctrl+press on a link arms it; release activates it, moving past the drag threshold drags it out.
+    private string? _pendingLink;
+    private Point? _pendingLinkPoint;
+
+    private void ClearPendingLink()
+    {
+        _pendingLink = null;
+        _pendingLinkPoint = null;
+    }
+
+    /// <summary>Activates the armed link (once). False when nothing was armed.</summary>
+    private bool ActivatePendingLink()
+    {
+        if (_pendingLink is not { } link)
+        {
+            return false;
+        }
+
+        ClearPendingLink();
+        HyperlinkActivated?.Invoke(this, new TerminalHyperlinkActivatedEventArgs(link));
+        return true;
+    }
+
+    private void StartHyperlinkDrag(string target)
+    {
+        var data = TerminalHyperlinkDragEventArgs.CreateDefaultData(target);
+        var args = new TerminalHyperlinkDragEventArgs(target, data);
+        HyperlinkDragStarting?.Invoke(this, args);
+        if (args.Cancel)
+        {
+            return;
+        }
+
+        try
+        {
+            DragDrop.DoDragDrop(this, data, DragDropEffects.Copy | DragDropEffects.Link);
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+            // Another drag/drop is already in progress; nothing to carry.
+        }
+    }
+
     static TerminalSurfaceControl()
     {
         FocusableProperty.OverrideMetadata(typeof(TerminalSurfaceControl), new FrameworkPropertyMetadata(true));
@@ -1132,14 +1183,18 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
             return;
         }
 
-        // Ctrl+Click activates the link (URL/file path) under the pointer. Done on mouse-down so it
-        // isn't lost to the capture release in TerminalTabView's PreviewMouseUp, and so it doesn't
-        // interfere with plain-click/drag text selection.
+        // Ctrl+Click activates the link (URL/file path) under the pointer; Ctrl+drag carries it out
+        // to another pane or app instead. The press only arms the link: it is activated on release
+        // (OnMouseLeftButtonUp, or OnLostMouseCapture when TerminalTabView's PreviewMouseUp releases
+        // the capture first) unless the pointer moved past the drag threshold in between. Either way
+        // it doesn't interfere with plain-click/drag text selection.
         if ((Keyboard.Modifiers & ModifierKeys.Control) != 0 &&
             TryGetHyperlink(position.LineIndex, position.TextIndex, out string? linkTarget) &&
             !string.IsNullOrEmpty(linkTarget))
         {
-            HyperlinkActivated?.Invoke(this, new TerminalHyperlinkActivatedEventArgs(linkTarget));
+            _pendingLink = linkTarget;
+            _pendingLinkPoint = e.GetPosition(this);
+            CaptureMouse();
             e.Handled = true;
             return;
         }
@@ -1254,6 +1309,20 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
             return;
         }
 
+        if (_pendingLink is { } armedLink && _pendingLinkPoint is { } armedPoint)
+        {
+            Vector moved = e.GetPosition(this) - armedPoint;
+            if (Math.Abs(moved.X) >= SystemParameters.MinimumHorizontalDragDistance ||
+                Math.Abs(moved.Y) >= SystemParameters.MinimumVerticalDragDistance)
+            {
+                ClearPendingLink();
+                ReleaseMouseCapture();
+                StartHyperlinkDrag(armedLink);
+            }
+
+            return;
+        }
+
         // A drag is in progress — selection, not a link hover.
         SetHoveredLink(null);
 
@@ -1288,6 +1357,13 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
     {
         base.OnMouseLeftButtonUp(e);
 
+        if (ActivatePendingLink())
+        {
+            ReleaseMouseCapture();
+            e.Handled = true;
+            return;
+        }
+
         ReleaseMouseCapture();
         if (!_selectionAnchor.HasValue)
         {
@@ -1313,6 +1389,18 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
     protected override void OnLostMouseCapture(MouseEventArgs e)
     {
         base.OnLostMouseCapture(e);
+        // TerminalTabView's PreviewMouseUp releases the capture before OnMouseLeftButtonUp runs, so a
+        // Ctrl+click usually completes here. Capture lost while the button is still down (another
+        // window took it) is not a click — drop the armed link without opening it.
+        if (Mouse.LeftButton == MouseButtonState.Released)
+        {
+            ActivatePendingLink();
+        }
+        else
+        {
+            ClearPendingLink();
+        }
+
         _selectionAnchor = null;
         _selectionAnchorPoint = null;
         _selectionDragStarted = false;
@@ -2785,6 +2873,32 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
+}
+
+/// <summary>Arguments of <see cref="TerminalSurfaceControl.HyperlinkDragStarting"/>.</summary>
+public sealed class TerminalHyperlinkDragEventArgs(string target, DataObject data) : EventArgs
+{
+    /// <summary>The raw link text (OSC 8 URI, detected URL, or file path possibly with <c>:line[:col]</c>).</summary>
+    public string Target { get; } = target;
+
+    /// <summary>The data being dragged. Hosts may add formats to it.</summary>
+    public DataObject Data { get; } = data;
+
+    /// <summary>Set to <c>true</c> to not start the drag.</summary>
+    public bool Cancel { get; set; }
+
+    /// <summary>The link as Unicode text, plus <c>UniformResourceLocatorW</c> for web links so browsers accept it.</summary>
+    public static DataObject CreateDefaultData(string target)
+    {
+        var data = new DataObject();
+        data.SetData(DataFormats.UnicodeText, target);
+        if (Uri.TryCreate(target, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+        {
+            data.SetData("UniformResourceLocatorW", new System.IO.MemoryStream(System.Text.Encoding.Unicode.GetBytes(target + "\0")));
+        }
+
+        return data;
+    }
 }
 
 public sealed class TerminalHyperlinkActivatedEventArgs(string target) : EventArgs

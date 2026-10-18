@@ -65,9 +65,10 @@ internal static class TerminalWidthReflowCalculator
             int logicalEnd = sourceRow - 1;
             int outputStart = result.Count;
             TerminalLineSize lineSize = source[logicalStart].LineSize;
+            long writtenAt = TerminalReflowCalculator.FirstWrittenAt(source, logicalStart, logicalEnd);
             if (logicalCells.Count == 0)
             {
-                var line = new TerminalLine(targetColumns, TerminalStyle.Default) { LineSize = lineSize };
+                var line = new TerminalLine(targetColumns, TerminalStyle.Default) { LineSize = lineSize, WrittenAtUtcTicks = writtenAt };
                 TerminalReflowImages.PlaceRemaining(line, images, 0, targetColumns);
                 result.Add(line);
             }
@@ -76,7 +77,7 @@ internal static class TerminalWidthReflowCalculator
                 int offset = 0;
                 while (offset < logicalCells.Count)
                 {
-                    var line = new TerminalLine(targetColumns, TerminalStyle.Default) { LineSize = lineSize };
+                    var line = new TerminalLine(targetColumns, TerminalStyle.Default) { LineSize = lineSize, WrittenAtUtcTicks = writtenAt };
                     int column = 0;
                     while (offset < logicalCells.Count && column < targetColumns)
                     {

@@ -50,8 +50,23 @@ internal sealed partial class AnsiTerminalBuffer
     /// <summary>Scrollback then screen, top to bottom (tests compare buffers through this).</summary>
     internal IEnumerable<TerminalLine> AllLinesForTests => _scrollback.Concat(_screen);
 
+    /// <summary>再生の中で、これから書かれる行の元の時刻（<c>OSC 7770;t;&lt;ticks&gt;</c>）。0 は不明。</summary>
+    private long _replayLineTicks;
+
     private void DispatchReplayOsc(string value)
     {
+        if (value.StartsWith("t;", StringComparison.Ordinal))
+        {
+            // 行の時刻は再生の中だけで意味を持つ（外で同じ並びが流れても、ただの印字として捨てる）。
+            if (IsReplaying && long.TryParse(value.AsSpan(2), System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out long ticks))
+            {
+                _replayLineTicks = ticks;
+            }
+
+            return;
+        }
+
         if (value == "begin")
         {
             IsReplaying = _replayBracketAllowed;
@@ -59,6 +74,7 @@ internal sealed partial class AnsiTerminalBuffer
         else if (value == "end")
         {
             IsReplaying = false;
+            _replayLineTicks = 0;
         }
 
         _replayBracketAllowed = false;
@@ -101,6 +117,7 @@ internal sealed partial class AnsiTerminalBuffer
         int scrollbackCount = _scrollback.Count;
         int total = scrollbackCount + primaryScreen.Count;
         bool previousWrapped = false;
+        long lastWrittenAt = 0;
         for (int index = 0; index < total; index++)
         {
             foreach (TerminalShellMark mark in marksByLine[index])
@@ -114,6 +131,15 @@ internal sealed partial class AnsiTerminalBuffer
             }
 
             TerminalLine line = index < scrollbackCount ? _scrollback[index] : primaryScreen[index - scrollbackCount];
+            // 行の時刻は変わるところでだけ送る（同じコマンドの出力は同じ時刻が続くことが多い）。
+            if (line.WrittenAtUtcTicks != lastWrittenAt)
+            {
+                output.Append("\u001b]7770;t;")
+                    .Append(line.WrittenAtUtcTicks.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                    .Append('\u0007');
+                lastWrittenAt = line.WrittenAtUtcTicks;
+            }
+
             writer.WriteLine(line, previousWrapped, isLast: index == total - 1);
             previousWrapped = line.IsWrapped;
         }

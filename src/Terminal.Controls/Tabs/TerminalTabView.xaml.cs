@@ -169,6 +169,13 @@ public partial class TerminalTabView : UserControl
     public event EventHandler<TerminalHyperlinkActivatedEventArgs>? HyperlinkActivated;
 
     /// <summary>
+    /// Raised when a link is Ctrl+dragged out of the terminal, before the drag starts. A host can add
+    /// formats to <see cref="TerminalHyperlinkDragEventArgs.Data"/> (e.g. the resolved file of a relative
+    /// path, so dropping it on an editor opens it) or cancel. See <see cref="TerminalSurfaceControl.HyperlinkDragStarting"/>.
+    /// </summary>
+    public event EventHandler<TerminalHyperlinkDragEventArgs>? HyperlinkDragStarting;
+
+    /// <summary>
     /// Raised while the right-click context menu is opening, after the built-in Copy/Paste items.
     /// It is raised only when there is a selection (Shift+right-click also opens the menu without one,
     /// for the command items, but then host items are not offered), so handlers can rely on
@@ -204,6 +211,13 @@ public partial class TerminalTabView : UserControl
     /// ホストは非アクティブタブのヘッダにベルインジケータを出すなどに利用できる。
     /// </summary>
     public event EventHandler? BellRang;
+
+    /// <summary>
+    /// アプリケーションがデスクトップ通知を求めたとき（OSC 9 の本文・OSC 777;notify;題;本文）にディスパッチャスレッドで発火する。
+    /// 既定ではタブの中に数秒のトーストを出す。ホストが自前の通知欄へ載せるなら
+    /// <see cref="TerminalNotificationEventArgs.Handled"/> を true にしてトーストを止める。画面の再生（再接続）では発火しない。
+    /// </summary>
+    public event EventHandler<TerminalNotificationEventArgs>? NotificationReceived;
 
     /// <summary>
     /// 直近のベルがまだ確認（このタブの表示）されていないかどうか。ホストがタブヘッダの
@@ -270,6 +284,7 @@ public partial class TerminalTabView : UserControl
         _commandOutputSettleTimer.Tick += CommandOutputSettleTimer_Tick;
 
         TerminalOutput.HyperlinkActivated += TerminalOutput_HyperlinkActivated;
+        TerminalOutput.HyperlinkDragStarting += (_, e) => HyperlinkDragStarting?.Invoke(this, e);
         TerminalInputProxy.AddHandler(TextCompositionManager.PreviewTextInputStartEvent, new TextCompositionEventHandler(TerminalInputProxy_PreviewTextInputStart), handledEventsToo: true);
         TerminalInputProxy.AddHandler(TextCompositionManager.PreviewTextInputUpdateEvent, new TextCompositionEventHandler(TerminalInputProxy_PreviewTextInputUpdate), handledEventsToo: true);
         TerminalInputProxy.AddHandler(TextCompositionManager.TextInputEvent, new TextCompositionEventHandler(TerminalInputProxy_TextInput), handledEventsToo: true);
@@ -279,7 +294,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ClipboardSetRequested += TerminalBuffer_ClipboardSetRequested;
         _terminalBuffer.ClipboardQueryRequested += TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
-        _terminalBuffer.NotificationRequested += TerminalBuffer_NotificationRequested;
+        _terminalBuffer.DesktopNotificationRequested += TerminalBuffer_DesktopNotificationRequested;
         _terminalBuffer.TaskbarProgressChanged += TerminalBuffer_TaskbarProgressChanged;
         _terminalBuffer.BellReceived += TerminalBuffer_BellReceived;
         _terminalBuffer.ShellCommandZoneReceived += TerminalBuffer_ShellCommandZoneReceived;
@@ -2195,7 +2210,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ClipboardSetRequested -= TerminalBuffer_ClipboardSetRequested;
         _terminalBuffer.ClipboardQueryRequested -= TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer.CurrentDirectoryChanged -= TerminalBuffer_CurrentDirectoryChanged;
-        _terminalBuffer.NotificationRequested -= TerminalBuffer_NotificationRequested;
+        _terminalBuffer.DesktopNotificationRequested -= TerminalBuffer_DesktopNotificationRequested;
         _terminalBuffer.TaskbarProgressChanged -= TerminalBuffer_TaskbarProgressChanged;
         _terminalBuffer.BellReceived -= TerminalBuffer_BellReceived;
         _terminalBuffer.ShellCommandZoneReceived -= TerminalBuffer_ShellCommandZoneReceived;
@@ -2217,7 +2232,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ClipboardSetRequested += TerminalBuffer_ClipboardSetRequested;
         _terminalBuffer.ClipboardQueryRequested += TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
-        _terminalBuffer.NotificationRequested += TerminalBuffer_NotificationRequested;
+        _terminalBuffer.DesktopNotificationRequested += TerminalBuffer_DesktopNotificationRequested;
         _terminalBuffer.TaskbarProgressChanged += TerminalBuffer_TaskbarProgressChanged;
         _terminalBuffer.BellReceived += TerminalBuffer_BellReceived;
         _terminalBuffer.ShellCommandZoneReceived += TerminalBuffer_ShellCommandZoneReceived;
@@ -2288,14 +2303,20 @@ public partial class TerminalTabView : UserControl
         UpdateTerminalChrome();
     }
 
-    private void TerminalBuffer_NotificationRequested(object? sender, string message)
+    private void TerminalBuffer_DesktopNotificationRequested(object? sender, Terminal.Buffer.TerminalDesktopNotification notification)
     {
         if (_session is null)
         {
             return;
         }
 
-        ShowToastNotification(message);
+        // Process はディスパッチャスレッドで実行されるため、そのまま UI 処理してよい。
+        var args = new TerminalNotificationEventArgs(notification.Title, notification.Body);
+        NotificationReceived?.Invoke(this, args);
+        if (!args.Handled)
+        {
+            ShowToastNotification(notification.DisplayText);
+        }
     }
 
     private void TerminalBuffer_TaskbarProgressChanged(object? sender, Terminal.Buffer.TaskbarProgressEventArgs e)

@@ -238,6 +238,13 @@ internal sealed partial class AnsiTerminalBuffer
     public event EventHandler<string>? NotificationRequested;
 
     /// <summary>
+    /// アプリケーションがデスクトップ通知を求めたときに発火する（OSC 9 の本文・OSC 777;notify;題;本文）。
+    /// <see cref="NotificationRequested"/> と同じ契機で、題と本文を分けて渡す（OSC 9 は題なし）。
+    /// 画面の再生（VT スナップショット）の中では発火しない——再生は過去の画面で、いま届いた知らせではない。
+    /// </summary>
+    public event EventHandler<TerminalDesktopNotification>? DesktopNotificationRequested;
+
+    /// <summary>
     /// 通常状態で BEL（0x07）を受信したときに発火する。OSC / DCS の終端文字として
     /// 消費される 0x07 は対象外で、あくまで制御文字として届いたベルのみを通知する。
     /// </summary>
@@ -809,6 +816,35 @@ internal sealed partial class AnsiTerminalBuffer
     /// Absolute line indices are stable as output scrolls into the scrollback, which is
     /// why they can be recorded earlier (e.g. at an OSC 133 marker) and resolved later.
     /// </summary>
+    /// <summary>その行に最初に文字が書かれた時刻（UTC の Ticks）。範囲外・不明は 0。</summary>
+    internal long GetLineWrittenAtTicks(int absoluteLine)
+    {
+        int scrollbackCount = _scrollback.Count;
+        if (absoluteLine < 0 || absoluteLine >= scrollbackCount + _screen.Count)
+        {
+            return 0;
+        }
+
+        return (absoluteLine < scrollbackCount ? _scrollback[absoluteLine] : _screen[absoluteLine - scrollbackCount]).WrittenAtUtcTicks;
+    }
+
+    /// <summary>その時刻以降に書かれた最初の行（絶対行）。時刻の無い行は飛ばす。無ければ null。</summary>
+    internal int? FindFirstLineWrittenAtOrAfter(long utcTicks)
+    {
+        int scrollbackCount = _scrollback.Count;
+        int total = scrollbackCount + _screen.Count;
+        for (int absolute = 0; absolute < total; absolute++)
+        {
+            long ticks = (absolute < scrollbackCount ? _scrollback[absolute] : _screen[absolute - scrollbackCount]).WrittenAtUtcTicks;
+            if (ticks != 0 && ticks >= utcTicks)
+            {
+                return absolute;
+            }
+        }
+
+        return null;
+    }
+
     internal string GetPlainTextForAbsoluteLineRange(int startInclusive, int endExclusive)
     {
         int scrollbackCount = _scrollback.Count;
@@ -1647,6 +1683,31 @@ internal sealed partial class AnsiTerminalBuffer
         return $"{string.Join(';', parameters)}m";
     }
 
+    /// <summary>行の時刻の出どころ（テストで差し替える）。</summary>
+    internal Func<long> UtcTicksProvider { get; set; } = static () => DateTime.UtcNow.Ticks;
+
+    /// <summary>行に最初の文字が書かれた時刻を付ける。再生（再接続）の中は、送り手が書いた元の時刻（<see cref="_replayLineTicks"/>）。</summary>
+    private void StampLineWritten(TerminalLine line)
+    {
+        if (line.WrittenAtUtcTicks != 0)
+        {
+            return;
+        }
+
+        line.WrittenAtUtcTicks = IsReplaying ? _replayLineTicks : UtcTicksProvider();
+    }
+
+    private void RaiseDesktopNotification(TerminalDesktopNotification notification)
+    {
+        if (IsReplaying)
+        {
+            return;
+        }
+
+        NotificationRequested?.Invoke(this, notification.DisplayText);
+        DesktopNotificationRequested?.Invoke(this, notification);
+    }
+
     private void DispatchOsc(string content)
     {
         OscCommand oscCommand = OscDecoder.Decode(content);
@@ -1710,7 +1771,21 @@ internal sealed partial class AnsiTerminalBuffer
 
             if (!string.IsNullOrEmpty(value))
             {
-                NotificationRequested?.Invoke(this, value);
+                if (TerminalDesktopNotification.Create(null, value) is { } notification)
+                {
+                    RaiseDesktopNotification(notification);
+                }
+            }
+
+            return;
+        }
+
+        if (command == "777")
+        {
+            // urxvt の OSC 777;notify;<題>;<本文>（Windows Terminal 1.26 も対応）。notify 以外の副命令は無視する。
+            if (TerminalDesktopNotification.TryParseOsc777(value) is { } notification)
+            {
+                RaiseDesktopNotification(notification);
             }
 
             return;
@@ -3870,6 +3945,7 @@ internal sealed partial class AnsiTerminalBuffer
             InsertCharacters(normalizedWidth);
         }
 
+        StampLineWritten(_screen[_cursorRow]);
         _screenStore.PlaceCell(
             _cursorRow,
             _cursorColumn,

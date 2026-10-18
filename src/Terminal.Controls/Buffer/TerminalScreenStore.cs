@@ -520,6 +520,7 @@ internal sealed class TerminalScreenStore
         clone.Images.AddRange(line.Images);
         clone.IsWrapped = line.IsWrapped;
         clone.LineSize = line.LineSize;
+        clone.WrittenAtUtcTicks = line.WrittenAtUtcTicks;
         return clone;
     }
 

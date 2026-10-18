@@ -2,6 +2,20 @@ namespace Terminal.Buffer;
 
 internal static class TerminalReflowCalculator
 {
+    /// <summary>論理行（折り返しでつながった行）のうち、最初に時刻を持っている行の時刻。無ければ 0。</summary>
+    internal static long FirstWrittenAt(IReadOnlyList<TerminalLine> source, int start, int end)
+    {
+        for (int row = start; row <= end && row < source.Count; row++)
+        {
+            if (source[row].WrittenAtUtcTicks != 0)
+            {
+                return source[row].WrittenAtUtcTicks;
+            }
+        }
+
+        return 0;
+    }
+
     public static List<TerminalLine> ReflowLines(
         List<TerminalLine> source,
         int targetColumns,
@@ -75,9 +89,10 @@ internal static class TerminalReflowCalculator
             int logicalEnd = sourceRow - 1;
             int outputStart = result.Count;
             TerminalLineSize lineSize = source[logicalStart].LineSize;
+            long writtenAt = FirstWrittenAt(source, logicalStart, logicalEnd);
             if (cells.Count == 0)
             {
-                var line = new TerminalLine(targetColumns, TerminalStyle.Default) { LineSize = lineSize };
+                var line = new TerminalLine(targetColumns, TerminalStyle.Default) { LineSize = lineSize, WrittenAtUtcTicks = writtenAt };
                 TerminalReflowImages.PlaceRemaining(line, images, 0, targetColumns);
                 result.Add(line);
             }
@@ -86,7 +101,7 @@ internal static class TerminalReflowCalculator
                 int offset = 0;
                 while (offset < cells.Count)
                 {
-                    var line = new TerminalLine(targetColumns, TerminalStyle.Default) { LineSize = lineSize };
+                    var line = new TerminalLine(targetColumns, TerminalStyle.Default) { LineSize = lineSize, WrittenAtUtcTicks = writtenAt };
                     int lineStartOffset = offset;
                     int column = 0;
                     while (offset < cells.Count && column < targetColumns)

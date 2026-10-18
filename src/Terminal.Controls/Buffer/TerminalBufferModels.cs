@@ -25,6 +25,10 @@ internal sealed class TerminalLine
     public List<TerminalImage> Images { get; } = [];
     public bool IsWrapped { get; set; }
     public TerminalLineSize LineSize { get; set; }
+
+    /// <summary>この行に最初に文字が書かれた時刻（UTC の Ticks）。0 は不明（まだ何も書かれていない・古い再生）。
+    /// 折り返し直しでは論理行の先頭の行の値を引き継ぐ。</summary>
+    public long WrittenAtUtcTicks { get; set; }
 }
 
 internal readonly record struct TerminalCell(
