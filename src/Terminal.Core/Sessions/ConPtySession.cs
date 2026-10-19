@@ -24,7 +24,12 @@ public sealed class ConPtySession : ITerminalSession
         SupportsResize: true,
         SupportsTerminalInput: true);
 
-    internal int ProcessId => _processId;
+    /// <summary>
+    /// ConPTY の上で起動したプロセス（シェル）の PID。起動前・起動に失敗したときは 0。
+    /// ホストが「このタブのシェルの子孫で動いているプログラム」を確かめるために使う（親をたどって行き着くか）。
+    /// PID は終了後に再利用されうるので、照合はプロセスが生きている間に行うこと。
+    /// </summary>
+    public int ProcessId => _processId;
 
     public event EventHandler<string>? OutputReceived;
     public event EventHandler<int>? Exited;
