@@ -110,6 +110,35 @@ public sealed class TerminalCommandOutputTests
     }
 
     [Fact]
+    public void StyledLinesFollowTheOutputRowForRow()
+    {
+        StaTestRunner.Run(() =>
+        {
+            var view = new TerminalTabView("cmd.exe", Environment.CurrentDirectory);
+            var captured = new List<ShellCommandOutputEventArgs>();
+            view.CommandOutputCaptured += (_, e) => captured.Add(e);
+
+            view.FeedOutputForTests($"{Osc("133;A")}PS> {Osc("133;B")}dotnet test\r\n{Osc("633;E;dotnet test")}{Osc("133;C")}");
+            view.FeedOutputForTests($"\r\n{Esc}[31;1mFailed{Esc}[0m: 1   \r\nPassed: {Esc}[32m3{Esc}[0m\r\n\r\n");
+            view.FeedOutputForTests($"{Osc("133;D;1")}{Osc("133;A")}PS> {Osc("133;B")}");
+            view.SettleCommandOutputForTests();
+
+            var output = Assert.Single(captured);
+            Assert.Equal("Failed: 1" + Nl + "Passed: 3", output.Output);
+            var styled = Assert.IsAssignableFrom<IReadOnlyList<IReadOnlyList<TerminalOutputRun>>>(output.StyledLines);
+            // The echo and the blank rows are cut the same way, and each row's runs join to the plain row.
+            Assert.Equal(output.Output.Split(Nl), styled.Select(row => string.Concat(row.Select(run => run.Text))));
+            var failed = styled[0][0];
+            Assert.Equal("Failed", failed.Text);
+            Assert.True(failed.Bold);
+            Assert.NotNull(failed.Foreground);
+            Assert.True(styled[0][1].IsPlain);
+            Assert.Equal("3", styled[1][^1].Text);
+            Assert.NotNull(styled[1][^1].Foreground);
+        });
+    }
+
+    [Fact]
     public void OutputWithoutEchoIsKeptWhole()
     {
         var lines = new List<string> { "", "row 1", "row 2   ", "" };

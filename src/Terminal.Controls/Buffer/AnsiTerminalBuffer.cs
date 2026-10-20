@@ -1029,6 +1029,94 @@ internal sealed partial class AnsiTerminalBuffer
         return true;
     }
 
+    /// <summary>
+    /// The same rows as <see cref="TryGetPlainLinesFromMark"/>, as runs of same-styled text. Row for row, the
+    /// runs' text joins to the plain line (continuation cells skipped, trailing blanks trimmed), so a caller
+    /// can cut both lists with the same indices.
+    /// </summary>
+    internal bool TryGetStyledLinesFromMark(
+        TerminalLineMark start, int endExclusive, out List<IReadOnlyList<Terminal.Tabs.TerminalOutputRun>> lines)
+    {
+        lines = [];
+        if (start.Generation != _screenStore.NumberingGeneration)
+        {
+            return false;
+        }
+
+        long shifted = Math.Max(0, start.AbsoluteLine - (_screenStore.EvictedLineCount - start.EvictedLineCount));
+        if (endExclusive <= shifted)
+        {
+            return true;
+        }
+
+        // Same clamping as GetPlainTextForAbsoluteLineRange, so the row counts match.
+        int scrollbackCount = _scrollback.Count;
+        int totalLines = scrollbackCount + FindLastVisibleScreenRow(showCursor: false) + 1;
+        int first = (int)Math.Clamp(shifted, 0, totalLines);
+        int end = Math.Clamp(endExclusive, first, totalLines);
+        for (int absolute = first; absolute < end; absolute++)
+        {
+            TerminalLine line = absolute < scrollbackCount ? _scrollback[absolute] : _screen[absolute - scrollbackCount];
+            lines.Add(StyledRuns(line));
+        }
+
+        return true;
+    }
+
+    internal static IReadOnlyList<Terminal.Tabs.TerminalOutputRun> StyledRuns(TerminalLine line)
+    {
+        var runs = new List<Terminal.Tabs.TerminalOutputRun>();
+        var text = new StringBuilder();
+        TerminalStyle style = TerminalStyle.Default;
+        TerminalHyperlink? link = null;
+
+        void Flush()
+        {
+            if (text.Length > 0)
+            {
+                runs.Add(new Terminal.Tabs.TerminalOutputRun(
+                    text.ToString(), style.Foreground, style.Background, style.Bold, style.Dim, style.Italic,
+                    style.UnderlineStyle != UnderlineStyle.None, style.Strikethrough, style.Inverse, link?.Uri));
+                text.Clear();
+            }
+        }
+
+        foreach (TerminalCell cell in line.Cells)
+        {
+            if (cell.IsContinuation)
+            {
+                continue;
+            }
+
+            if (text.Length > 0 && (cell.Style != style || !ReferenceEquals(cell.Hyperlink, link)))
+            {
+                Flush();
+            }
+
+            style = cell.Style;
+            link = cell.Hyperlink;
+            text.Append(cell.Text);
+        }
+
+        Flush();
+
+        // Trailing blanks are trimmed, as in the plain line.
+        while (runs.Count > 0)
+        {
+            Terminal.Tabs.TerminalOutputRun last = runs[^1];
+            string trimmed = last.Text.TrimEnd();
+            if (trimmed.Length > 0)
+            {
+                runs[^1] = last with { Text = trimmed };
+                break;
+            }
+
+            runs.RemoveAt(runs.Count - 1);
+        }
+
+        return runs;
+    }
+
     internal string GetScreenLineText(int row)
     {
         if (row < 0 || row >= _screen.Count)

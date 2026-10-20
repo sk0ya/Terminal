@@ -188,16 +188,33 @@ internal sealed class TerminalCommandOutputCoordinator
             return null;
         }
 
+        (int first, int last) = ExtractRange(lines, range.CommandLine, range.NextCommandLine);
+        // The styled rows are the same rows, so the same cut applies. Left out when they do not line up.
+        IReadOnlyList<IReadOnlyList<TerminalOutputRun>>? styled =
+            buffer.TryGetStyledLinesFromMark(range.Start, endExclusive, out var styledLines) && styledLines.Count == lines.Count
+                ? styledLines.GetRange(first, last - first)
+                : null;
         return new ShellCommandOutputEventArgs(
             range.CommandLine,
             range.ExitCode,
-            ExtractOutput(lines, range.CommandLine, range.NextCommandLine),
-            headLost);
+            Join(lines, first, last),
+            headLost,
+            styled);
     }
 
     /// <summary>Drops the echoed command at the head, the next command's echo at the tail, and blank
     /// rows at both ends.</summary>
     internal static string ExtractOutput(List<string> lines, string? commandLine, string? nextCommandLine)
+    {
+        (int first, int last) = ExtractRange(lines, commandLine, nextCommandLine);
+        return Join(lines, first, last);
+    }
+
+    private static string Join(List<string> lines, int first, int last) =>
+        string.Join(Environment.NewLine, lines.Skip(first).Take(last - first).Select(l => l.TrimEnd()));
+
+    /// <summary>The rows left after <see cref="ExtractOutput"/>'s trimming, as [first, last).</summary>
+    internal static (int First, int Last) ExtractRange(List<string> lines, string? commandLine, string? nextCommandLine)
     {
         int first = 0;
         int last = lines.Count;
@@ -230,7 +247,7 @@ internal sealed class TerminalCommandOutputCoordinator
 
         first = SkipBlankHead(lines, first, last);
         last = SkipBlankTail(lines, first, last);
-        return string.Join(Environment.NewLine, lines.Skip(first).Take(last - first).Select(l => l.TrimEnd()));
+        return (first, last);
     }
 
     private static int SkipBlankHead(List<string> lines, int first, int last)

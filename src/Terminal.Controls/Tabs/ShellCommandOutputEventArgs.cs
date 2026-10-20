@@ -3,12 +3,15 @@ namespace Terminal.Tabs;
 /// <summary>Event data for <see cref="TerminalTabView.CommandOutputCaptured"/>.</summary>
 public sealed class ShellCommandOutputEventArgs : EventArgs
 {
-    internal ShellCommandOutputEventArgs(string? commandLine, int? exitCode, string output, bool headLost)
+    internal ShellCommandOutputEventArgs(
+        string? commandLine, int? exitCode, string output, bool headLost,
+        IReadOnlyList<IReadOnlyList<TerminalOutputRun>>? styledLines = null)
     {
         CommandLine = commandLine;
         ExitCode = exitCode;
         Output = output;
         HeadLost = headLost;
+        StyledLines = styledLines;
     }
 
     /// <summary>The command line as reported via OSC 633;E (null when the shell did not report one).</summary>
@@ -29,4 +32,11 @@ public sealed class ShellCommandOutputEventArgs : EventArgs
     /// <summary>True when the head of the output had already scrolled out of the scrollback limit,
     /// so <see cref="Output"/> starts at the oldest line still kept.</summary>
     public bool HeadLost { get; }
+
+    /// <summary>
+    /// <see cref="Output"/> with the styling it was drawn with: one entry per row of <see cref="Output"/> (split on
+    /// <see cref="Environment.NewLine"/>), each the row's runs of same-styled text, whose text joins to that row.
+    /// Null when the styled rows could not be read in step with the plain ones.
+    /// </summary>
+    public IReadOnlyList<IReadOnlyList<TerminalOutputRun>>? StyledLines { get; }
 }
