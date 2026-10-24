@@ -10,7 +10,8 @@ namespace Terminal.Buffer;
 /// <para>仕様の MUST をここで守る：各報告はそのレコードを丸ごと置き換える／<c>state=clear</c> はその id と下の全部を消す
 /// （id 無しなら全部）／<c>app</c> は最も近い祖先から継ぐ／上限を破る報告は丸ごと捨てる／解いた <c>msg</c>・<c>title</c> に
 /// 制御文字があれば捨てる／プロセスが終わるか次のプロンプト（OSC 133 A）が来たら <c>working</c> と <c>blocked</c> を落とす
-/// （<c>done</c>・<c>error</c> は残す）。表示の仕方と、<c>done</c>・<c>error</c> をいつ消すかは受け手が決める。</para>
+/// （<c>done</c>・<c>error</c> は残す。<c>idle</c> も落とす——仕様は MAY で、落とさないと <c>clear</c> を送らずに終わった
+/// プログラムがいつまでも「居る」ことになる）。表示の仕方と、<c>done</c>・<c>error</c> をいつ消すかは受け手が決める。</para>
 /// </summary>
 internal sealed class ProgramStatusTable
 {
@@ -137,11 +138,12 @@ internal sealed class ProgramStatusTable
         return true;
     }
 
-    /// <summary>プロセスが終わった・次のプロンプトが来た：<c>working</c> と <c>blocked</c> を落とす。変わったら true。</summary>
+    /// <summary>プロセスが終わった・次のプロンプトが来た：<c>working</c>・<c>blocked</c>・<c>idle</c> を落とす（<c>done</c>・<c>error</c> は残す）。
+    /// 変わったら true。</summary>
     public bool DropTransient()
     {
         List<string> stale = _records
-            .Where(r => r.Value.State is ProgramStatusState.Working or ProgramStatusState.Blocked)
+            .Where(r => r.Value.State is ProgramStatusState.Working or ProgramStatusState.Blocked or ProgramStatusState.Idle)
             .Select(r => r.Key)
             .ToList();
         foreach (string key in stale)

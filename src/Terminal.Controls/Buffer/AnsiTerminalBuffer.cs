@@ -2227,7 +2227,7 @@ internal sealed partial class AnsiTerminalBuffer
         }
     }
 
-    /// <summary>プロセスが終わった：申告の working と blocked を落とす（仕様の寿命の規則）。</summary>
+    /// <summary>プロセスが終わった：申告の working・blocked・idle を落とす（仕様の寿命の規則。done・error は残す）。</summary>
     internal void DropTransientProgramStatus()
     {
         if (_programStatus.DropTransient())
@@ -2368,7 +2368,7 @@ internal sealed partial class AnsiTerminalBuffer
                 }
 
                 FlushDeferredCommandStart();
-                // 次のプロンプトが来た＝前のプログラムは終わっている。申告の working と blocked を落とす（OSC 7501）。
+                // 次のプロンプトが来た＝前のプログラムは終わっている。申告の working・blocked・idle を落とす（OSC 7501）。
                 if (zoneType == ShellCommandZoneType.PromptStart && _programStatus.DropTransient())
                 {
                     ProgramStatusChanged?.Invoke(this, EventArgs.Empty);

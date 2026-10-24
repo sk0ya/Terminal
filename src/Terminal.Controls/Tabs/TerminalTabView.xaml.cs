@@ -210,7 +210,7 @@ public partial class TerminalTabView : UserControl
     /// 端末の中のプログラムが OSC 7501（Program Status Protocol）で申告した状態が変わったときに発火する
     /// （ディスパッチャスレッド）。Claude Code は作業中・承認待ち・入力待ちを、ビルドやデプロイの道具は進捗と
     /// 「人の番」をここへ出す。次のプロンプト（OSC 133 A）・プロセスの終了・セッションの作り直しで
-    /// working／blocked は落ちる。常駐セッションへ付け直したときは再生の中で今の表が届く。
+    /// working／blocked／idle は落ちる（done／error は残る）。常駐セッションへ付け直したときは再生の中で今の表が届く。
     /// </summary>
     public event EventHandler<ProgramStatusChangedEventArgs>? ProgramStatusChanged;
 
@@ -1193,7 +1193,7 @@ public partial class TerminalTabView : UserControl
 
     private async Task HandleProcessExitedAsync(ITerminalSession session, int exitCode)
     {
-        // プロセスが終わった：申告の working／blocked は落とす（OSC 7501 の寿命の規則。done／error は残す）。
+        // プロセスが終わった：申告の working／blocked／idle は落とす（OSC 7501 の寿命の規則。done／error は残す）。
         _terminalBuffer.DropTransientProgramStatus();
         try
         {

@@ -100,7 +100,7 @@ public class ProgramStatusTests
     }
 
     [Fact]
-    public void Next_prompt_drops_working_and_blocked_but_keeps_done_and_error()
+    public void Next_prompt_drops_working_blocked_and_idle_but_keeps_done_and_error()
     {
         var buffer = new AnsiTerminalBuffer(80, 10);
         buffer.Process(Report("state=working:id=a"));
@@ -111,7 +111,7 @@ public class ProgramStatusTests
 
         buffer.Process($"{Esc}]133;A\u0007");
 
-        Assert.Equal(["c", "d", "e"], buffer.ProgramStatus.Select(r => r.Id));
+        Assert.Equal(["c", "d"], buffer.ProgramStatus.Select(r => r.Id));
     }
 
     [Fact]
