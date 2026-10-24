@@ -207,6 +207,17 @@ public partial class TerminalTabView : UserControl
     public int CurrentTaskbarProgress => _taskbarProgress.Current.Progress;
 
     /// <summary>
+    /// 端末の中のプログラムが OSC 7501（Program Status Protocol）で申告した状態が変わったときに発火する
+    /// （ディスパッチャスレッド）。Claude Code は作業中・承認待ち・入力待ちを、ビルドやデプロイの道具は進捗と
+    /// 「人の番」をここへ出す。次のプロンプト（OSC 133 A）・プロセスの終了・セッションの作り直しで
+    /// working／blocked は落ちる。常駐セッションへ付け直したときは再生の中で今の表が届く。
+    /// </summary>
+    public event EventHandler<ProgramStatusChangedEventArgs>? ProgramStatusChanged;
+
+    /// <summary>いまプログラムが申告している状態（Id 順）。タブ切替・付け直しのときにホストが読み出せる。</summary>
+    public IReadOnlyList<ProgramStatusRecord> ProgramStatus => _terminalBuffer.ProgramStatus;
+
+    /// <summary>
     /// アプリケーションが BEL（0x07）を出力したときにディスパッチャスレッドで発火する。
     /// ホストは非アクティブタブのヘッダにベルインジケータを出すなどに利用できる。
     /// </summary>
@@ -296,6 +307,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.DesktopNotificationRequested += TerminalBuffer_DesktopNotificationRequested;
         _terminalBuffer.TaskbarProgressChanged += TerminalBuffer_TaskbarProgressChanged;
+        _terminalBuffer.ProgramStatusChanged += TerminalBuffer_ProgramStatusChanged;
         _terminalBuffer.BellReceived += TerminalBuffer_BellReceived;
         _terminalBuffer.ShellCommandZoneReceived += TerminalBuffer_ShellCommandZoneReceived;
         _terminalBuffer.ShellCommandLineReceived += TerminalBuffer_ShellCommandLineReceived;
@@ -1181,6 +1193,8 @@ public partial class TerminalTabView : UserControl
 
     private async Task HandleProcessExitedAsync(ITerminalSession session, int exitCode)
     {
+        // プロセスが終わった：申告の working／blocked は落とす（OSC 7501 の寿命の規則。done／error は残す）。
+        _terminalBuffer.DropTransientProgramStatus();
         try
         {
             TerminalSessionStopResult result = await _sessionOrchestrator.HandleExitAsync(
@@ -2212,6 +2226,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.CurrentDirectoryChanged -= TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.DesktopNotificationRequested -= TerminalBuffer_DesktopNotificationRequested;
         _terminalBuffer.TaskbarProgressChanged -= TerminalBuffer_TaskbarProgressChanged;
+        _terminalBuffer.ProgramStatusChanged -= TerminalBuffer_ProgramStatusChanged;
         _terminalBuffer.BellReceived -= TerminalBuffer_BellReceived;
         _terminalBuffer.ShellCommandZoneReceived -= TerminalBuffer_ShellCommandZoneReceived;
         _terminalBuffer.ShellCommandLineReceived -= TerminalBuffer_ShellCommandLineReceived;
@@ -2234,6 +2249,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.DesktopNotificationRequested += TerminalBuffer_DesktopNotificationRequested;
         _terminalBuffer.TaskbarProgressChanged += TerminalBuffer_TaskbarProgressChanged;
+        _terminalBuffer.ProgramStatusChanged += TerminalBuffer_ProgramStatusChanged;
         _terminalBuffer.BellReceived += TerminalBuffer_BellReceived;
         _terminalBuffer.ShellCommandZoneReceived += TerminalBuffer_ShellCommandZoneReceived;
         _terminalBuffer.ShellCommandLineReceived += TerminalBuffer_ShellCommandLineReceived;
@@ -2241,6 +2257,8 @@ public partial class TerminalTabView : UserControl
 
         // 新しいセッションはタスクバー進捗をクリアした状態から始める。
         SetTaskbarProgress(_taskbarProgress.Clear());
+        // プログラムの申告も新しい画面（空の表）から。前のセッションの「承認待ち」を残さない。
+        RaiseProgramStatusChanged();
     }
 
     private void TerminalBuffer_ShellHistoryPathReceived(object? sender, string path)
@@ -2318,6 +2336,11 @@ public partial class TerminalTabView : UserControl
             ShowToastNotification(notification.DisplayText);
         }
     }
+
+    private void TerminalBuffer_ProgramStatusChanged(object? sender, EventArgs e) => RaiseProgramStatusChanged();
+
+    private void RaiseProgramStatusChanged()
+        => ProgramStatusChanged?.Invoke(this, new ProgramStatusChangedEventArgs(_terminalBuffer.ProgramStatus));
 
     private void TerminalBuffer_TaskbarProgressChanged(object? sender, Terminal.Buffer.TaskbarProgressEventArgs e)
     {

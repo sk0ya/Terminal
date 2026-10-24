@@ -177,6 +177,13 @@ internal sealed partial class AnsiTerminalBuffer
             output.Append("\u001b]633;P;HistoryPath=").Append(EncodeShellEscapes(historyPath)).Append('\u0007');
         }
 
+        // プログラムの申告（OSC 7501）。画面の中身（プロンプトの印を含む）の後に置く——前に置くと、再生の中の
+        // プロンプトの印が working／blocked を落としてしまう。
+        foreach (string report in _programStatus.Reports())
+        {
+            output.Append("\u001b]7501;").Append(report).Append("\u001b\\");
+        }
+
         // Last: a title change is what ends a synthetic alternate screen, so it must not land before
         // the content it would otherwise act on.
         if (!string.IsNullOrEmpty(_windowTitle))

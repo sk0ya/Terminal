@@ -197,6 +197,7 @@ internal sealed partial class AnsiTerminalBuffer
     private TerminalHyperlink? _savedHyperlink;
     private readonly TerminalHyperlinkRegistry _hyperlinks = new();
     private string _windowTitle = string.Empty;
+    private readonly ProgramStatusTable _programStatus = new();
     private string _iconTitle = string.Empty;
     // XTWINOPS 22/23 window-title stack (vim / tmux save & restore the title around their session).
     private readonly Stack<string> _windowTitleStack = new();
@@ -255,6 +256,13 @@ internal sealed partial class AnsiTerminalBuffer
     /// （OSC 9;&lt;message&gt;）とは区別され、<c>9;4;</c> プレフィックスのときだけこちらが発火する。
     /// </summary>
     public event EventHandler<TaskbarProgressEventArgs>? TaskbarProgressChanged;
+
+    /// <summary>OSC 7501（Program Status Protocol）のレコード表が変わった。中身は <see cref="ProgramStatus"/>。</summary>
+    public event EventHandler? ProgramStatusChanged;
+
+    /// <summary>OSC 7501 でプログラムが申告している状態（Id 順）。</summary>
+    public IReadOnlyList<Terminal.Tabs.ProgramStatusRecord> ProgramStatus => _programStatus.Snapshot();
+
     public event EventHandler<ShellCommandZoneEventArgs>? ShellCommandZoneReceived;
 
     /// <summary>
@@ -1868,6 +1876,12 @@ internal sealed partial class AnsiTerminalBuffer
             return;
         }
 
+        if (command == "7501")
+        {
+            DispatchOscProgramStatus(value);
+            return;
+        }
+
         if (command == "777")
         {
             // urxvt の OSC 777;notify;<題>;<本文>（Windows Terminal 1.26 も対応）。notify 以外の副命令は無視する。
@@ -2198,6 +2212,30 @@ internal sealed partial class AnsiTerminalBuffer
         return true;
     }
 
+    private void DispatchOscProgramStatus(string value)
+    {
+        if (value == "?")
+        {
+            // 問い合わせ（OSC 7501 ; ?）。対応している端末は「?」だけで答えてよい（状態と種類は既定の一覧）。
+            EmitInputSequence("\u001b]7501;?\u001b\\");
+            return;
+        }
+
+        if (_programStatus.Apply(value, DateTimeOffset.Now))
+        {
+            ProgramStatusChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>プロセスが終わった：申告の working と blocked を落とす（仕様の寿命の規則）。</summary>
+    internal void DropTransientProgramStatus()
+    {
+        if (_programStatus.DropTransient())
+        {
+            ProgramStatusChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
     private void DispatchOscTaskbarProgress(string value)
     {
         if (!OscDecoder.TryDecodeTaskbarProgress(value, out OscTaskbarProgress progress))
@@ -2330,6 +2368,12 @@ internal sealed partial class AnsiTerminalBuffer
                 }
 
                 FlushDeferredCommandStart();
+                // 次のプロンプトが来た＝前のプログラムは終わっている。申告の working と blocked を落とす（OSC 7501）。
+                if (zoneType == ShellCommandZoneType.PromptStart && _programStatus.DropTransient())
+                {
+                    ProgramStatusChanged?.Invoke(this, EventArgs.Empty);
+                }
+
                 ShellCommandZoneReceived?.Invoke(
                     this,
                     new ShellCommandZoneEventArgs(zoneType, ShellZoneAbsoluteLine(), payload.ExitCode));
