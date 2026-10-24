@@ -136,7 +136,7 @@ public sealed class ConPtySession : ITerminalSession
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        int hr = ResizePseudoConsole(_handles.PseudoConsole, new Coord(columns, rows));
+        int hr = ConPtyNative.Resize(_handles.PseudoConsole, new ConPtyNative.Coord(columns, rows));
         if (hr != 0)
         {
             Marshal.ThrowExceptionForHR(hr);
@@ -236,13 +236,7 @@ public sealed class ConPtySession : ITerminalSession
         });
     }
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern int ResizePseudoConsole(
-        IntPtr hPC,
-        Coord size);
-
-    [DllImport("kernel32.dll", SetLastError = false, EntryPoint = "ClosePseudoConsole")]
-    private static extern void ClosePseudoConsoleHandle(IntPtr hPC);
+    private static void ClosePseudoConsoleHandle(IntPtr hPC) => ConPtyNative.Close(hPC);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Coord

@@ -1,0 +1,21 @@
+<Project>
+  <!--
+    同梱の ConPTY（Microsoft.Windows.Console.ConPTY）の OpenConsole.exe を、消費側の出力の <arch>\ へ置く。
+    conpty.dll は runtimes/win-<arch>/native/ にあり NuGet が出力の直下へ運ぶ。conpty.dll は自分の隣の <arch>\OpenConsole.exe を
+    起こすので、二つが揃って初めて新しい ConPTY が使われる（Terminal.Sessions.ConPtyNative が揃っているかを見て選ぶ）。
+    依存パッケージの build/ のターゲットは推移しないので、このパッケージが自分で運ぶ。
+  -->
+  <PropertyGroup>
+    <_SkTerminalConPtyArch Condition="'$(RuntimeIdentifier)' == 'win-arm64' or '$(PlatformTarget)' == 'ARM64'">arm64</_SkTerminalConPtyArch>
+    <_SkTerminalConPtyArch Condition="'$(_SkTerminalConPtyArch)' == ''">x64</_SkTerminalConPtyArch>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)OpenConsole\$(_SkTerminalConPtyArch)\OpenConsole.exe"
+          Link="$(_SkTerminalConPtyArch)\OpenConsole.exe"
+          Condition="Exists('$(MSBuildThisFileDirectory)OpenConsole\$(_SkTerminalConPtyArch)\OpenConsole.exe')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <Visible>false</Visible>
+    </None>
+  </ItemGroup>
+</Project>

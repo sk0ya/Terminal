@@ -32,6 +32,31 @@
     <ProjectReference Include="..\Terminal.Core\Terminal.Core.csproj" PrivateAssets="all" />
   </ItemGroup>
 
+  <!--
+    新しい ConPTY を同梱する（Microsoft.Windows.Console.ConPTY・MIT）。受信箱の conhost は DA1（CSI c）に自分で即答するので、
+    問い合わせのあとに DA1 を送って順番で対応を判定するプログラム（Claude Code の OSC 7501 など）では端末の返事が必ず負ける。
+    新しい ConPTY（microsoft/terminal #17510 以降）は問い合わせを端末へ回す。使うかどうかは Terminal.Sessions.ConPtyNative が
+    実行フォルダーに conpty.dll と <arch>\OpenConsole.exe が揃っているかで決める（環境変数 TERMINAL_CONPTY=inbox で受信箱へ戻せる）。
+    参照は私的にして、ファイルはこのパッケージが自分で運ぶ：conpty.dll は runtimes/win-<arch>/native/、OpenConsole.exe は
+    buildTransitive のターゲットが消費側の出力の <arch>\ へ（依存パッケージの build/ は推移しないため）。
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.Console.ConPTY" Version="1.25.260930003"
+                      PrivateAssets="all" GeneratePathProperty="true" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="$(PkgMicrosoft_Windows_Console_ConPTY)\runtimes\win-x64\native\conpty.dll"
+          Pack="true" PackagePath="runtimes\win-x64\native\" Visible="false" />
+    <None Include="$(PkgMicrosoft_Windows_Console_ConPTY)\runtimes\win-arm64\native\conpty.dll"
+          Pack="true" PackagePath="runtimes\win-arm64\native\" Visible="false" />
+    <None Include="$(PkgMicrosoft_Windows_Console_ConPTY)\build\native\runtimes\x64\OpenConsole.exe"
+          Pack="true" PackagePath="buildTransitive\OpenConsole\x64\" Visible="false" />
+    <None Include="$(PkgMicrosoft_Windows_Console_ConPTY)\build\native\runtimes\arm64\OpenConsole.exe"
+          Pack="true" PackagePath="buildTransitive\OpenConsole\arm64\" Visible="false" />
+    <None Include="buildTransitive\sk0ya.Terminal.Controls.targets" Pack="true" PackagePath="buildTransitive\" />
+    <None Include="THIRD-PARTY-NOTICES.txt" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
   <!-- Fold Terminal.Core.dll (and any of its copy-local outputs) into the package's lib folder. -->
   <Target Name="IncludeReferencedProjectsInPackage" DependsOnTargets="ResolveReferences">
     <ItemGroup>

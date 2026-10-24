@@ -115,7 +115,7 @@ internal sealed class WindowsConPtyPseudoConsoleApi : IConPtyPseudoConsoleApi
 
     public IntPtr CreatePseudoConsole(short columns, short rows, IntPtr inputRead, IntPtr outputWrite)
     {
-        int hr = CreatePseudoConsoleNative(new Coord(columns, rows), inputRead, outputWrite, 0, out IntPtr result);
+        int hr = ConPtyNative.Create(new ConPtyNative.Coord(columns, rows), inputRead, outputWrite, 0, out IntPtr result);
         if (hr != 0)
         {
             Marshal.ThrowExceptionForHR(hr);
@@ -124,7 +124,7 @@ internal sealed class WindowsConPtyPseudoConsoleApi : IConPtyPseudoConsoleApi
     }
 
     public SafeFileHandle CreateOwnedPipeHandle(IntPtr handle) => new(handle, ownsHandle: true);
-    public void ClosePseudoConsole(IntPtr handle) => ClosePseudoConsoleNative(handle);
+    public void ClosePseudoConsole(IntPtr handle) => ConPtyNative.Close(handle);
     public void CloseHandle(IntPtr handle) => _ = CloseHandleNative(handle);
 
     [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "CreatePipe")]
@@ -132,12 +132,6 @@ internal sealed class WindowsConPtyPseudoConsoleApi : IConPtyPseudoConsoleApi
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
-
-    [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "CreatePseudoConsole")]
-    private static extern int CreatePseudoConsoleNative(Coord size, IntPtr input, IntPtr output, uint flags, out IntPtr pseudoConsole);
-
-    [DllImport("kernel32.dll", SetLastError = false, EntryPoint = "ClosePseudoConsole")]
-    private static extern void ClosePseudoConsoleNative(IntPtr pseudoConsole);
 
     [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "CloseHandle")]
     private static extern bool CloseHandleNative(IntPtr handle);
