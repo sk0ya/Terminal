@@ -2921,6 +2921,7 @@ internal sealed partial class AnsiTerminalBuffer
                 case 1047:
                     if (enabled)
                     {
+                        AbandonSyntheticAlternateScreen();
                         EnterAlternateScreen();
                     }
                     else
@@ -2943,6 +2944,7 @@ internal sealed partial class AnsiTerminalBuffer
                 case 1049:
                     if (enabled)
                     {
+                        AbandonSyntheticAlternateScreen();
                         SaveCursorState();
                         EnterAlternateScreen();
                     }
@@ -3577,6 +3579,25 @@ internal sealed partial class AnsiTerminalBuffer
         _syntheticAlternateScreenActive = true;
         _syntheticAlternateScreenEntryTitle = previousTitle;
         InvalidateScreenRenderCache();
+    }
+
+    /// <summary>
+    /// Puts the primary screen back when a program that looked like it would draw over it asks for
+    /// the real alternate screen after all, so the request is served as from the primary screen.
+    /// </summary>
+    /// <remarks>
+    /// Claude Code sets its title before sending ?1049h. Leaving the synthetic screen standing made
+    /// the real request a no-op: the cursor ?1049h saves was overwritten on ?1049l by the state
+    /// captured at the title, whose saved cursor had never been set, so the cursor came back at the
+    /// top-left. ConPTY asks for the cursor position right after the program exits and paints the
+    /// next prompt where it is told, so the prompt landed on the top row over the old output.
+    /// </remarks>
+    private void AbandonSyntheticAlternateScreen()
+    {
+        if (_syntheticAlternateScreenActive)
+        {
+            ExitAlternateScreen();
+        }
     }
 
     private static bool IsClaudeSyntheticAlternateScreenTitle(string title)

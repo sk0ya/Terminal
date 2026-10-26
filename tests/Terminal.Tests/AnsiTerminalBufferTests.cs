@@ -1361,6 +1361,40 @@ public sealed class AnsiTerminalBufferTests
     }
 
     /// <summary>
+    /// Claude Code (2.1.310) sets its title before asking for the real alternate screen, so the
+    /// synthetic one is already up when ?1049h arrives. The cursor that request saves has to be the
+    /// one ?1049l restores: ConPTY asks for the cursor position (CSI 6n) right after the program
+    /// exits and paints the next prompt where it is told. Answering with the state captured at the
+    /// title — whose saved cursor was never set — put the prompt on the top row, over old output.
+    /// </summary>
+    [Fact]
+    public void RealAlternateScreenRequestedUnderSyntheticOneRestoresTheCursorItSaved()
+    {
+        var buffer = new AnsiTerminalBuffer(40, 10);
+        var responses = new List<string>();
+        buffer.InputSequenceGenerated += (_, response) => responses.Add(response);
+
+        for (int line = 1; line <= 9; line++)
+        {
+            buffer.Process($"line {line}\r\n");
+        }
+
+        buffer.Process("PS> claude\r\n");
+        // The order Claude Code sends on launch: title, cursor save/restore around a margin reset,
+        // then the real alternate screen.
+        buffer.Process("\u001b]0;claude\u001b\\\u001b7\u001b[r\u001b8");
+        buffer.Process("\u001b]0;Claude Code\u001b\\\u001b[?1049h\u001b[2J\u001b[H");
+        buffer.Process("Claude UI\u001b[5;3H\u001b7\u001b[1;1H\u001b8");
+        buffer.Process("\u001b[?1049l\u001b]0;\u001b\\");
+
+        Assert.False(buffer.IsAlternateScreenActive);
+        buffer.Process("\u001b[6n");
+
+        Assert.Equal("\u001b[10;1R", responses[^1]);
+        Assert.Equal("PS> claude", buffer.GetScreenLineText(8).TrimEnd());
+    }
+
+    /// <summary>
     /// A real alternate screen is a different contract: the program asked the terminal itself to
     /// save and restore the primary screen, so its images come back with it.
     /// </summary>
