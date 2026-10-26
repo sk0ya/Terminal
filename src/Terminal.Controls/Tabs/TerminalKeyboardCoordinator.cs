@@ -30,7 +30,8 @@ internal sealed record TerminalKeyboardRequest(
     string? EnterSequence,
     string? SpecialSequence,
     TerminalKeyboardActionKind? ConfiguredShortcut = null,
-    bool UseConfiguredShortcuts = false);
+    bool UseConfiguredShortcuts = false,
+    bool CtrlVPastesClipboardText = false);
 
 internal sealed record TerminalKeyboardAction(
     TerminalKeyboardActionKind Kind,
@@ -47,7 +48,7 @@ internal sealed class TerminalKeyboardCoordinator
         }
 
         TerminalKeyboardAction? clipboard = request.UseConfiguredShortcuts
-            ? ResolveConfiguredShortcut(request.ConfiguredShortcut, request.ShortcutKey, request.Modifiers)
+            ? ResolveConfiguredShortcut(request.ConfiguredShortcut, request.ShortcutKey, request.Modifiers, request.CtrlVPastesClipboardText)
             : ResolveClipboard(request.ShortcutKey, request.Modifiers);
         if (clipboard is not null)
         {
@@ -144,11 +145,17 @@ internal sealed class TerminalKeyboardCoordinator
     private static TerminalKeyboardAction? ResolveConfiguredShortcut(
         TerminalKeyboardActionKind? configured,
         TerminalKeyboardKey key,
-        TerminalKeyboardModifiers modifiers)
+        TerminalKeyboardModifiers modifiers,
+        bool ctrlVPastesClipboardText)
     {
         if (configured.HasValue) return new(configured.Value);
         return (key, modifiers) switch
         {
+            // Windows clipboard history (Win+V) and most apps' paste send a plain Ctrl+V. Pasting
+            // text there is what the user means; the caller only sets the flag when the clipboard
+            // holds text and no image, outside the alternate screen, so ^V still reaches Claude
+            // Code's image paste and full-screen programs (Vim's visual block).
+            (TerminalKeyboardKey.V, TerminalKeyboardModifiers.Control) when ctrlVPastesClipboardText => new(TerminalKeyboardActionKind.Paste),
             (TerminalKeyboardKey.Insert, TerminalKeyboardModifiers.Control) => new(TerminalKeyboardActionKind.Copy),
             (TerminalKeyboardKey.Insert, TerminalKeyboardModifiers.Shift) => new(TerminalKeyboardActionKind.Paste),
             _ => null

@@ -785,7 +785,27 @@ public partial class TerminalTabView : UserControl
             enterSequence,
             specialSequence,
             ResolveConfiguredTerminalShortcut(key, Keyboard.Modifiers),
-            UseConfiguredShortcuts: true);
+            UseConfiguredShortcuts: true,
+            CtrlVPastesClipboardText: e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control &&
+                ShouldCtrlVPasteClipboardText());
+    }
+
+    private bool ShouldCtrlVPasteClipboardText()
+    {
+        if (_terminalBuffer.IsAlternateScreenActive)
+        {
+            return false;
+        }
+
+        try
+        {
+            return Clipboard.ContainsText() && !Clipboard.ContainsImage();
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            // Another process holds the clipboard open; fall back to sending ^V.
+            return false;
+        }
     }
 
     private TerminalKeyboardActionKind? ResolveConfiguredTerminalShortcut(Key key, ModifierKeys modifiers)

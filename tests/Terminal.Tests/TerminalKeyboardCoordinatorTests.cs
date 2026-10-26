@@ -155,6 +155,28 @@ public sealed class TerminalKeyboardCoordinatorTests
         Assert.Equal(TerminalKeyboardActionKind.Paste, newChord.Kind);
     }
 
+    // Win+V (clipboard history) injects a plain Ctrl+V. With text on the clipboard it has to paste;
+    // otherwise (image only, alternate screen) ^V keeps reaching the program.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void CtrlVPastesOnlyWhenTheCallerSaysTheClipboardHoldsText(bool pastesText)
+    {
+        TerminalKeyboardActionKind expected = pastesText
+            ? TerminalKeyboardActionKind.Paste
+            : TerminalKeyboardActionKind.SendText;
+        TerminalKeyboardAction action = _coordinator.Resolve(new(
+            TerminalKeyboardSource.Proxy, TerminalKeyboardKey.V, TerminalKeyboardKey.V,
+            TerminalKeyboardModifiers.Control, TerminalKeyboardModifiers.Control,
+            HasSession: true, HasPendingProxyText: false, IsImeInput: false,
+            SupportsTerminalInput: true, ApplicationKeypadEnabled: false,
+            ControlSequence: "\u0016", EnterSequence: null, SpecialSequence: null,
+            ConfiguredShortcut: null, UseConfiguredShortcuts: true,
+            CtrlVPastesClipboardText: pastesText));
+
+        Assert.Equal(expected, action.Kind);
+    }
+
     // Ctrl+L is an ordinary control chord: it has to reach the shell as \f so PSReadLine's
     // ClearScreen runs. It is not a terminal shortcut and must not be swallowed.
     [Fact]
