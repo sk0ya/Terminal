@@ -790,13 +790,10 @@ public partial class TerminalTabView : UserControl
                 ShouldCtrlVPasteClipboardText());
     }
 
-    private bool ShouldCtrlVPasteClipboardText()
+    // The alternate screen is deliberately not an exception: Claude Code's fullscreen renderer runs
+    // there, and Win+V into it is exactly the case this exists for.
+    private static bool ShouldCtrlVPasteClipboardText()
     {
-        if (_terminalBuffer.IsAlternateScreenActive)
-        {
-            return false;
-        }
-
         try
         {
             return Clipboard.ContainsText() && !Clipboard.ContainsImage();

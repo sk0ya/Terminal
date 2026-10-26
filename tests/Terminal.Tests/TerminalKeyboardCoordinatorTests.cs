@@ -156,7 +156,7 @@ public sealed class TerminalKeyboardCoordinatorTests
     }
 
     // Win+V (clipboard history) injects a plain Ctrl+V. With text on the clipboard it has to paste;
-    // otherwise (image only, alternate screen) ^V keeps reaching the program.
+    // otherwise (image only) ^V keeps reaching the program.
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

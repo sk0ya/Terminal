@@ -153,8 +153,7 @@ internal sealed class TerminalKeyboardCoordinator
         {
             // Windows clipboard history (Win+V) and most apps' paste send a plain Ctrl+V. Pasting
             // text there is what the user means; the caller only sets the flag when the clipboard
-            // holds text and no image, outside the alternate screen, so ^V still reaches Claude
-            // Code's image paste and full-screen programs (Vim's visual block).
+            // holds text and no image, so with an image ^V still reaches Claude Code's image paste.
             (TerminalKeyboardKey.V, TerminalKeyboardModifiers.Control) when ctrlVPastesClipboardText => new(TerminalKeyboardActionKind.Paste),
             (TerminalKeyboardKey.Insert, TerminalKeyboardModifiers.Control) => new(TerminalKeyboardActionKind.Copy),
             (TerminalKeyboardKey.Insert, TerminalKeyboardModifiers.Shift) => new(TerminalKeyboardActionKind.Paste),
