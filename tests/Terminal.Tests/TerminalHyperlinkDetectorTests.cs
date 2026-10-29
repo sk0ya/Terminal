@@ -11,6 +11,11 @@ public sealed class TerminalHyperlinkDetectorTests
     [InlineData("read /var/log/app.log:8 here", 10, "/var/log/app.log:8")]
     [InlineData("error at src/Foo.cs:12 col", 13, "src/Foo.cs:12")]
     [InlineData("error at ../src/Foo.cs:12 col", 14, "../src/Foo.cs:12")]
+    [InlineData("  src/Loomo.App/Services/History/EditorPositionStore.cs：保存", 10, "src/Loomo.App/Services/History/EditorPositionStore.cs")]
+    [InlineData("● Update(src/Loomo.App/Foo.cs)", 12, "src/Loomo.App/Foo.cs")]
+    [InlineData("記録は %APPDATA%/Loomo/editor-positions.json の中", 5, "%APPDATA%/Loomo/editor-positions.json")]
+    [InlineData("記録は %APPDATA%/Loomo/editor-positions.json の中", 20, "%APPDATA%/Loomo/editor-positions.json")]
+    [InlineData("see ~\\.claude\\settings.json here", 6, "~\\.claude\\settings.json")]
     public void ResolvesSupportedPlainTargets(string text, int textIndex, string expected)
     {
         Assert.True(TryResolve(text, textIndex, [], out TerminalHyperlinkMatch match));

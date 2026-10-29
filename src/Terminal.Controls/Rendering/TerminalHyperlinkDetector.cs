@@ -12,7 +12,8 @@ internal static class TerminalHyperlinkDetector
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex FilePathPattern = new(
-        @"(?:[A-Za-z]:[\\/]|\\\\[^\s\\/]+[\\/]|\.{0,2}[\\/])[^\s:*?""<>|]+(?:[\\/][^\s:*?""<>|]+)*(?::\d+(?::\d+)?)?" +
+        // %VAR%\… and ~\… are left unexpanded: the host resolves them like any other target.
+        @"(?:[A-Za-z]:[\\/]|\\\\[^\s\\/]+[\\/]|%\w+%[\\/]|~[\\/]|\.{0,2}[\\/])[^\s:*?""<>|]+(?:[\\/][^\s:*?""<>|]+)*(?::\d+(?::\d+)?)?" +
         @"|[\w.\-]+(?:[\\/][\w.\-]+)+\.\w+(?::\d+(?::\d+)?)?",
         RegexOptions.Compiled);
 

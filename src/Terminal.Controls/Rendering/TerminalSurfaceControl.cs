@@ -2505,6 +2505,19 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
         => TryGetHyperlinkRegion(lineIndex, textIndex, out target, out _, out _);
 
     /// <summary>
+    /// Whether a link (OSC 8 or a detected URL/file path) lies under <paramref name="point"/>.
+    /// TerminalTabView asks this to keep Ctrl+click on a link local while the app has mouse
+    /// reporting on (Claude Code, for one), instead of forwarding the click to the app.
+    /// </summary>
+    internal bool HasHyperlinkAt(Point point)
+        => TryCreateTextPosition(point, out TerminalTextPosition position) &&
+           TryGetHyperlink(position.LineIndex, position.TextIndex, out string? target) &&
+           !string.IsNullOrEmpty(target);
+
+    /// <summary>A Ctrl+press armed a link that the release (or a drag) has not consumed yet.</summary>
+    internal bool HasPendingLink => _pendingLink is not null;
+
+    /// <summary>
     /// Resolves the clickable target at a text position and the cell-column span it occupies on the
     /// line (used to draw the hover underline). Matches an OSC 8 hyperlink segment first, then a
     /// bare URL/file path detected in the plain text.

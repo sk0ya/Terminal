@@ -456,6 +456,14 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
+        // Ctrl+click on a link opens it even while the app reports the mouse (Claude Code turns
+        // reporting on): the surface arms the link, so the press must not reach the app.
+        if (IsCtrlOnHyperlink(e))
+        {
+            ReleaseTerminalMouseCapture(force: true);
+            return;
+        }
+
         if (TrySendMouseButtonEvent(e, pressed: true))
         {
             TryCaptureTerminalMouse();
@@ -488,6 +496,12 @@ public partial class TerminalTabView : UserControl
             return;
         }
 
+        // The release of a Ctrl+click on a link: the surface activates it; the app never saw the press.
+        if (e.ChangedButton == MouseButton.Left && TerminalOutput.HasPendingLink)
+        {
+            return;
+        }
+
         QueueTerminalInputFocus();
 
         bool handled = TrySendMouseButtonEvent(e, pressed: false);
@@ -501,6 +515,13 @@ public partial class TerminalTabView : UserControl
     private void TerminalOutput_PreviewMouseMove(object sender, MouseEventArgs e)
     {
         if (_mouseState.IsLocalSelectionActive)
+        {
+            return;
+        }
+
+        // Ctrl held over a link (or dragging an armed one out): let the surface underline / drag it.
+        if (TerminalOutput.HasPendingLink ||
+            (Keyboard.Modifiers & ModifierKeys.Control) != 0 && TerminalOutput.HasHyperlinkAt(e.GetPosition(TerminalOutput)))
         {
             return;
         }
@@ -574,6 +595,13 @@ public partial class TerminalTabView : UserControl
     {
         PasteFromClipboard();
         QueueTerminalInputFocus();
+    }
+
+    private bool IsCtrlOnHyperlink(MouseButtonEventArgs e)
+    {
+        return e.ChangedButton == MouseButton.Left &&
+            (Keyboard.Modifiers & ModifierKeys.Control) != 0 &&
+            TerminalOutput.HasHyperlinkAt(e.GetPosition(TerminalOutput));
     }
 
     private static bool ShouldStartLocalMouseSelection(MouseButtonEventArgs e)
