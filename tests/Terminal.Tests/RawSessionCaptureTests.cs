@@ -37,6 +37,23 @@ public sealed class RawSessionCaptureTests : IDisposable
     }
 
     [Fact]
+    public void WrappersForwardTheConsoleOwnerWindowToTheRealSession()
+    {
+        Environment.SetEnvironmentVariable(RawSessionCapture.EnvironmentVariable, _directory);
+        var inner = new FakeSession();
+
+        ITerminalSession session = RawSessionCapture.WrapIfEnabled(inner, "pwsh.exe");
+        session.SetOwnerWindow(new IntPtr(0x1234));
+        session.Dispose();
+
+        Assert.Equal(new IntPtr(0x1234), inner.OwnerWindow);
+    }
+
+    [Fact]
+    public void ReparentDoesNothingWithoutAPseudoConsole()
+        => Assert.False(ConPtyNative.Reparent(IntPtr.Zero, new IntPtr(0x1234)));
+
+    [Fact]
     public void CapturedStreamKeepsEscapeSequencesVerbatimAndSeparatesInput()
     {
         Environment.SetEnvironmentVariable(RawSessionCapture.EnvironmentVariable, _directory);
@@ -105,6 +122,10 @@ public sealed class RawSessionCaptureTests : IDisposable
         public bool IsOutputStalled(TimeSpan initialOutputTimeout, TimeSpan idleOutputTimeout) => false;
 
         public bool TryForceUnlock(uint exitCode = 1) => false;
+
+        public IntPtr OwnerWindow { get; private set; }
+
+        public void SetOwnerWindow(IntPtr ownerWindow) => OwnerWindow = ownerWindow;
 
         public void Dispose() => _ = Exited;
 

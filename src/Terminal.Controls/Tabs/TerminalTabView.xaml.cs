@@ -328,6 +328,8 @@ public partial class TerminalTabView : UserControl
         RequestDocumentRender();
         if (_hasStartedInitialSession)
         {
+            // Loaded again = moved into another window (detached); dialogs should follow the terminal there.
+            ApplyConsoleOwnerWindow();
             return;
         }
 
@@ -1035,6 +1037,7 @@ public partial class TerminalTabView : UserControl
             _cursorBlinkVisible = true;
             UpdateUiState(isRunning: true);
             UpdateActiveLaunchState(commandLine, workingDirectory);
+            ApplyConsoleOwnerWindow();
             if (focusTerminal)
             {
                 FocusTerminalInput();

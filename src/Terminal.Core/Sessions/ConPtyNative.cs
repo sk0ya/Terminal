@@ -33,6 +33,25 @@ internal static class ConPtyNative
             ClosePseudoConsole(pseudoConsole);
     }
 
+    /// <summary>
+    /// 擬似コンソールの隠しコンソールウィンドウの持ち主を <paramref name="ownerWindow"/> にする（Windows Terminal・VS Code 1.144 と同じ）。
+    /// プログラムがコンソールに結び付けて出すダイアログ（資格情報の選択・サインイン）が、端末を映すウィンドウの手前に出るようになる。
+    /// 同梱の ConPTY にしか無い口なので、受信箱の ConPTY では何もしない（false）。
+    /// </summary>
+    public static bool Reparent(IntPtr pseudoConsole, IntPtr ownerWindow)
+    {
+        if (!UsesBundled || pseudoConsole == IntPtr.Zero)
+            return false;
+        try
+        {
+            return ConptyReparentPseudoConsole(pseudoConsole, ownerWindow) == 0;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return false;   // 古い conpty.dll
+        }
+    }
+
     private static bool DetectBundled()
     {
         if (Environment.GetEnvironmentVariable("TERMINAL_CONPTY") is { } forced)
@@ -78,4 +97,7 @@ internal static class ConPtyNative
 
     [DllImport("conpty.dll", SetLastError = false)]
     private static extern void ConptyClosePseudoConsole(IntPtr pseudoConsole);
+
+    [DllImport("conpty.dll", SetLastError = false)]
+    private static extern int ConptyReparentPseudoConsole(IntPtr pseudoConsole, IntPtr newParent);
 }

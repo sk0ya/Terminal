@@ -143,6 +143,16 @@ public sealed class ConPtySession : ITerminalSession
         }
     }
 
+    public void SetOwnerWindow(IntPtr ownerWindow)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        ConPtyNative.Reparent(_handles.PseudoConsole, ownerWindow);
+    }
+
     public bool IsOutputStalled(TimeSpan initialOutputTimeout, TimeSpan idleOutputTimeout)
     {
         _ = idleOutputTimeout;

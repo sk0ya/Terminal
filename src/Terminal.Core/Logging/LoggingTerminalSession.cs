@@ -80,6 +80,8 @@ internal sealed class LoggingTerminalSession : ITerminalSession
 
     public void Resize(short columns, short rows) => _inner.Resize(columns, rows);
 
+    public void SetOwnerWindow(IntPtr ownerWindow) => _inner.SetOwnerWindow(ownerWindow);
+
     public bool IsOutputStalled(TimeSpan initialOutputTimeout, TimeSpan idleOutputTimeout) =>
         _inner.IsOutputStalled(initialOutputTimeout, idleOutputTimeout);
 
