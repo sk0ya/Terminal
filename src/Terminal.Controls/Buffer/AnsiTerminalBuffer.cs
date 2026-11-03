@@ -4515,7 +4515,16 @@ internal sealed partial class AnsiTerminalBuffer
 
     private void SetCursorPosition(int rowParameter, int columnParameter)
     {
-        _cursorUnplacedSinceEraseAll = false;
+        // Home is exactly where marks on a freshly erased, still-empty screen are taken to belong (see
+        // ShellZoneAbsoluteLine), so going there does not count as placing the cursor. On a busy machine
+        // ConPTY follows pwsh's Ctrl+L (ESC[2J) with a blank repaint — ESC[H, then ESC[K and a line feed
+        // per row, ending on the bottom row — before the new prompt's marks; treating that ESC[H as a
+        // placement put the prompt's A on the bottom row while the prompt itself was drawn at the top.
+        if (Math.Max(rowParameter, 1) != 1 || Math.Max(columnParameter, 1) != 1 || _originMode)
+        {
+            _cursorUnplacedSinceEraseAll = false;
+        }
+
         int rowOffset = Math.Max(rowParameter, 1) - 1;
         int baseRow = _originMode ? _scrollTop : 0;
         int maxRow = _originMode ? _scrollBottom : _rows - 1;

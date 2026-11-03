@@ -77,7 +77,11 @@ internal sealed class TerminalCommandOutputCoordinator
         }
 
         _promptStartIsSettled = false;
-        _start = buffer.MarkAbsoluteLine(absoluteLine);
+        // A command line long enough to wrap (a deep working folder makes the prompt alone wrap) puts C
+        // on the echo's last row, which holds only the wrapped tail (" beta" of "…; Write-Output beta").
+        // That fragment is not recognisable as the echo, so it stayed at the head of the output. Start at
+        // the wrapped run's first row instead: the whole echo is then there for the head trim to drop.
+        _start = buffer.MarkAbsoluteLine(buffer.WrappedRunStart(absoluteLine));
         _startCommandLine = commandLine;
     }
 

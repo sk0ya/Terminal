@@ -2820,6 +2820,28 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void Osc133MarkAfterEraseAllIgnoresConPtysBlankRepaint()
+    {
+        // Captured from a real pwsh Ctrl+L on a busy machine: after ESC[2J, ConPTY repaints the empty
+        // screen (ESC[H, then ESC[K and a line feed per row, ending on the bottom row) before the new
+        // prompt's marks. Nothing is drawn, so the marks still belong to the top of the cleared screen.
+        var buffer = new AnsiTerminalBuffer(20, 5);
+        buffer.Process("PS> echo hi\r\nhi\r\nPS> ");
+        var lines = new List<int>();
+        buffer.ShellCommandZoneReceived += (_, e) => lines.Add(e.AbsoluteLine);
+
+        buffer.Process("\u001b[2J");
+        buffer.Process("\u001b[?25l\u001b[H" + string.Concat(Enumerable.Repeat("\u001b[K\n", 4)) + "\u001b[K\u001b[20C");
+        buffer.Process("\u001b]133;D;0\u0007");
+        buffer.Process("\u001b]133;A\u0007");
+        buffer.Process("\u001b]133;B\u0007");
+        buffer.Process("\u001b[HPS> \u001b[?25h");
+
+        int newTop = buffer.ScrollbackLineCount;
+        Assert.Equal([newTop, newTop, newTop], lines);
+    }
+
+    [Fact]
     public void Osc133MarkAfterEraseAllFollowsAnExplicitCursorPlacement()
     {
         var buffer = new AnsiTerminalBuffer(20, 5);

@@ -70,7 +70,9 @@ public sealed class TerminalOutputLineTapRealPwshTests
                 return false;
             }
 
-            Assert.True(PumpUntil(() => view.IsShellIntegrationActive, 15000), "pwsh did not start with shell integration");
+            // Starting pwsh can take over 15 s while other test runs or builds share the machine. It normally
+            // takes a few seconds, so the generous limit only matters when the machine is busy.
+            Assert.True(PumpUntil(() => view.IsShellIntegrationActive, 60000), "pwsh did not start with shell integration");
 
             var lines = new List<string>();
             var finished = new List<int?>();

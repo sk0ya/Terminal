@@ -66,7 +66,9 @@ public sealed class TerminalStickyScrollRealPwshTests
                 return false;
             }
 
-            Assert.True(PumpUntil(() => view.IsShellIntegrationActive, 15000), "pwsh did not start with shell integration");
+            // Starting pwsh can take over 15 s while other test runs or builds share the machine. It normally
+            // takes a few seconds, so the generous limit only matters when the machine is busy.
+            Assert.True(PumpUntil(() => view.IsShellIntegrationActive, 60000), "pwsh did not start with shell integration");
             foreach (var command in new[] { "echo hi", "1..40 | % { \"row $_\" }" })
             {
                 int before = navigation.Commands.Count;
@@ -75,7 +77,13 @@ public sealed class TerminalStickyScrollRealPwshTests
 
                 before = navigation.Commands.Count;
                 session.Write("\u000c");
-                Assert.True(PumpUntil(() => navigation.Commands.Count > before, 10000), $"no prompt after Ctrl+L following {command}");
+                // Wait for the prompt at the top rather than checking at the first quiet moment, so a failure
+                // reports what never settled. (On a busy machine ConPTY repaints the cleared screen blank before
+                // the marks — see Osc133MarkAfterEraseAllIgnoresConPtysBlankRepaint for the sequence.)
+                bool settled = PumpUntil(() => navigation.Commands.Count > before
+                        && navigation.Commands[^1].PromptLine == view.ScreenTopLineForTests, 10000);
+                Assert.True(settled,
+                    $"no prompt at the top after Ctrl+L following {command}");
 
                 int top = view.ScreenTopLineForTests;
                 Assert.Equal(top, navigation.Commands[^1].PromptLine);

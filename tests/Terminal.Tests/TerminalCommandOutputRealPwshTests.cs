@@ -88,7 +88,9 @@ public sealed class TerminalCommandOutputRealPwshTests
                 return false;
             }
 
-            Assert.True(PumpUntil(() => view.IsShellIntegrationActive, 15000), "pwsh did not start with shell integration");
+            // Starting pwsh can take over 15 s while other test runs or builds share the machine. It normally
+            // takes a few seconds, so the generous limit only matters when the machine is busy.
+            Assert.True(PumpUntil(() => view.IsShellIntegrationActive, 60000), "pwsh did not start with shell integration");
             string[] commands =
             [
                 "Write-Output alpha; Write-Output beta",
@@ -99,7 +101,13 @@ public sealed class TerminalCommandOutputRealPwshTests
             foreach (var command in commands)
             {
                 int before = captured.Count;
-                session.Write(command + "\r");
+                // Type, let the echo finish painting, then press Enter — as a person does. Sending the
+                // line and Enter in one write let ConPTY paint the wrapped tail of the echoed command
+                // (" beta" — the prompt wraps here) after the C marker when the machine was busy, and
+                // it landed at the head of the cut output.
+                session.Write(command);
+                PumpUntil(() => true, 3000);
+                session.Write("\r");
                 Assert.True(PumpUntil(() => captured.Count > before, 10000), $"no output captured for {command}");
             }
 
