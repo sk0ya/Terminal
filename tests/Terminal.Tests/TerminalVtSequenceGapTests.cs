@@ -512,7 +512,7 @@ public sealed class TerminalVtSequenceGapTests
         buffer.Process("[c");
 
         // VT220 with 132-column (1) and ANSI color (22); Sixel (attribute 4) must be absent.
-        Assert.Equal("[?62;1;22c", emitted);
+        Assert.Equal("[?62;1;4;22c", emitted);
     }
 
     [Fact]

@@ -246,6 +246,12 @@ internal sealed partial class AnsiTerminalBuffer
     public event EventHandler<TerminalDesktopNotification>? DesktopNotificationRequested;
 
     /// <summary>
+    /// An inline image (Sixel / iTerm2 / Kitty) was placed on the screen. Not raised while replaying a
+    /// VT snapshot. Kitty's "put" of an already-transmitted image raises it again.
+    /// </summary>
+    internal event EventHandler<TerminalImage>? ImageReceived;
+
+    /// <summary>
     /// 通常状態で BEL（0x07）を受信したときに発火する。OSC / DCS の終端文字として
     /// 消費される 0x07 は対象外で、あくまで制御文字として届いたベルのみを通知する。
     /// </summary>
@@ -1635,12 +1641,31 @@ internal sealed partial class AnsiTerminalBuffer
 
         if (command.Kind == DcsCommandKind.Sixel)
         {
-            if (command.Payload is not null &&
-                SixelDecoder.TryDecode(command.Payload, out byte[] pixels, out int width, out int height))
+            if (command.Payload is null)
+            {
+                return;
+            }
+
+            bool decoded = SixelDecoder.TryDecode(
+                command.Payload, command.Parameters, out byte[] pixels, out int width, out int height, out SixelPlacement placement);
+            if (decoded)
             {
                 AddImage(new TerminalImage(
                     pixels, TerminalImageDataKind.Bgra32, "image/bgra32", width, height,
-                    _cursorColumn, null, null, null, null, true));
+                    _cursorColumn, null, null, null, null, true)
+                {
+                    ScaledWidthCells = placement.WidthCells,
+                    ScaledHeightCells = placement.HeightCells,
+                    Protocol = "sixel",
+                });
+            }
+
+            // Sixel is the one image sequence ConPTY understands: it moves its own cursor past the
+            // picture and sends us nothing for it. Move ours the same rows (column stays) to stay in
+            // lockstep — unlike iTerm2/Kitty, which ConPTY passes through without looking at.
+            for (int row = 0; row < Math.Min(placement.CursorRows, _rows * 4); row++)
+            {
+                MoveDownAndScrollIfNeeded();
             }
 
             return;
@@ -2067,7 +2092,7 @@ internal sealed partial class AnsiTerminalBuffer
 
         var image = new TerminalImage(
             imageData, dataKind, mimeType, pixelWidth, pixelHeight, _cursorColumn,
-            widthCells, heightCells, null, null, true);
+            widthCells, heightCells, null, null, true) { Protocol = "kitty" };
         StoreKittyImage(imageId, image);
         if (action == 'T') AddImage(image);
     }
@@ -2185,7 +2210,8 @@ internal sealed partial class AnsiTerminalBuffer
             bytes, TerminalImageDataKind.Encoded, mimeType, pixelWidth, pixelHeight,
             _cursorColumn, ParseItermCells(parameters, "width"), ParseItermCells(parameters, "height"),
             ParseItermPixels(parameters, "width"), ParseItermPixels(parameters, "height"),
-            !parameters.TryGetValue("preserveAspectRatio", out string? preserve) || preserve != "0"));
+            !parameters.TryGetValue("preserveAspectRatio", out string? preserve) || preserve != "0")
+        { Protocol = "iterm2" });
     }
 
     // An image is an overlay anchored to the current cell and never moves the cursor; see the
@@ -2194,6 +2220,11 @@ internal sealed partial class AnsiTerminalBuffer
     {
         _screen[_cursorRow].Images.Add(image);
         InvalidateScreenRenderCache();
+        // A replayed screen is the past, not a picture that just arrived (same rule as notifications).
+        if (!IsReplaying)
+        {
+            ImageReceived?.Invoke(this, image);
+        }
     }
 
     private static int? TryGetNonNegativeInt(Dictionary<char, string> values, char key) =>
@@ -2830,9 +2861,11 @@ internal sealed partial class AnsiTerminalBuffer
         _cursorRow = Math.Max(0, _cursorRow - 1);
     }
 
-    // DA1 reports VT220 (62) advertising 132-column (1) and ANSI color (22). Sixel (attribute 4)
-    // is intentionally omitted: Sixel graphics are not rendered, so advertising it would invite
-    // applications to emit data that is silently dropped.
+    // DA1 reports VT220 (62) advertising 132-column (1), Sixel (4) and ANSI color (22). Sixel used
+    // to be left out because the inbox ConPTY dropped it; the bundled ConPTY passes it through
+    // (measured), and it is also the one that forwards DA1 to us — under the inbox one conhost
+    // answers DA1 itself and this reply is never seen. Programs that probe DA1 for '4' (chafa, lsix,
+    // yazi…) only choose Sixel when it is here.
     private void DispatchDeviceAttributes(bool isPrivate, bool isSecondary)
     {
         if (isSecondary)
@@ -2843,11 +2876,11 @@ internal sealed partial class AnsiTerminalBuffer
 
         if (isPrivate)
         {
-            EmitInputSequence("\u001b[?62;1;22c");
+            EmitInputSequence("\u001b[?62;1;4;22c");
             return;
         }
 
-        EmitInputSequence("\u001b[?62;1;22c");
+        EmitInputSequence("\u001b[?62;1;4;22c");
     }
 
     private void DispatchDeviceStatusReport(int?[] parameters, bool isPrivate)

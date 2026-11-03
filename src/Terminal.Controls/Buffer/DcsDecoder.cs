@@ -12,7 +12,8 @@ internal enum DcsCommandKind
 internal readonly record struct DcsCommand(
     DcsCommandKind Kind,
     string? RequestToken = null,
-    string? Payload = null);
+    string? Payload = null,
+    string? Parameters = null);
 
 internal static class DcsDecoder
 {
@@ -36,7 +37,10 @@ internal static class DcsDecoder
         int introducerIndex = content.IndexOf('q');
         if (introducerIndex >= 0 && IsSixelIntroducer(content, introducerIndex))
         {
-            return new DcsCommand(DcsCommandKind.Sixel, Payload: content[(introducerIndex + 1)..]);
+            // The numeric parameters before 'q' carry P1 (the pixel aspect ratio), which decides how many
+            // text rows the image covers — and how far ConPTY moves its cursor past it.
+            return new DcsCommand(
+                DcsCommandKind.Sixel, Payload: content[(introducerIndex + 1)..], Parameters: content[..introducerIndex]);
         }
 
         return default;

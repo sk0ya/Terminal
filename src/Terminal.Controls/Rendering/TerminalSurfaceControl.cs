@@ -2250,6 +2250,12 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
             else width = height * aspect;
         }
 
+        if (image.ScaledWidthCells is double scaledWidth && image.ScaledHeightCells is double scaledHeight)
+        {
+            width = scaledWidth * _cellSize.Width;
+            height = scaledHeight * _cellSize.Height;
+        }
+
         command = new ImageCommand(
             bitmap,
             new Rect(image.Column * _cellSize.Width, 0, Math.Max(1, width), Math.Max(1, height)));

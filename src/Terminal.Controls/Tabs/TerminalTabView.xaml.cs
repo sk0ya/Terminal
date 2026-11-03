@@ -307,6 +307,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ClipboardQueryRequested += TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.DesktopNotificationRequested += TerminalBuffer_DesktopNotificationRequested;
+        _terminalBuffer.ImageReceived += TerminalBuffer_ImageReceived;
         _terminalBuffer.TaskbarProgressChanged += TerminalBuffer_TaskbarProgressChanged;
         _terminalBuffer.ProgramStatusChanged += TerminalBuffer_ProgramStatusChanged;
         _terminalBuffer.BellReceived += TerminalBuffer_BellReceived;
@@ -2290,6 +2291,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ClipboardQueryRequested -= TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer.CurrentDirectoryChanged -= TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.DesktopNotificationRequested -= TerminalBuffer_DesktopNotificationRequested;
+        _terminalBuffer.ImageReceived -= TerminalBuffer_ImageReceived;
         _terminalBuffer.TaskbarProgressChanged -= TerminalBuffer_TaskbarProgressChanged;
         _terminalBuffer.ProgramStatusChanged -= TerminalBuffer_ProgramStatusChanged;
         _terminalBuffer.BellReceived -= TerminalBuffer_BellReceived;
@@ -2313,6 +2315,7 @@ public partial class TerminalTabView : UserControl
         _terminalBuffer.ClipboardQueryRequested += TerminalBuffer_ClipboardQueryRequested;
         _terminalBuffer.CurrentDirectoryChanged += TerminalBuffer_CurrentDirectoryChanged;
         _terminalBuffer.DesktopNotificationRequested += TerminalBuffer_DesktopNotificationRequested;
+        _terminalBuffer.ImageReceived += TerminalBuffer_ImageReceived;
         _terminalBuffer.TaskbarProgressChanged += TerminalBuffer_TaskbarProgressChanged;
         _terminalBuffer.ProgramStatusChanged += TerminalBuffer_ProgramStatusChanged;
         _terminalBuffer.BellReceived += TerminalBuffer_BellReceived;

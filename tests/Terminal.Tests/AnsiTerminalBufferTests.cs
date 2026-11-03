@@ -353,6 +353,94 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void SixelMovesTheCursorDownTheRowsConPtyCounts()
+    {
+        // The bundled ConPTY passes Sixel through and moves its own cursor past the image on a 10x20
+        // virtual cell, sending nothing for it (measured against OpenConsole). We move ours the same:
+        // floor(newlines x 6 x aspect / 20) rows, column unchanged. 10 bands, each ending in '-', at
+        // the default 2:1 aspect = 10 x 6 x 2 / 20 = 6 rows.
+        string bands = string.Concat(Enumerable.Repeat("#0" + new string('~', 20) + "-", 10));
+        var buffer = new AnsiTerminalBuffer(40, 20);
+        buffer.Process("\u001b[3;1HAB\u001bPq#0;2;100;0;0" + bands + "\u001b\\X");
+
+        Assert.Equal(2 + 6, buffer.CursorRow);
+        Assert.Equal("  X", buffer.GetScreenLineText(8).TrimEnd());
+        TerminalImage image = Assert.Single(buffer.CreateRenderSnapshot(showCursor: false).Lines[2].Images!);
+        Assert.Equal(2.0, image.ScaledWidthCells);    // 20 px / 10
+        Assert.Equal(6.0, image.ScaledHeightCells);   // 60 px x 2 / 20
+        Assert.Equal("sixel", image.Protocol);
+    }
+
+    [Theory]
+    [InlineData("", 10, true, 6)]       // trailing '-' counts: 10 newlines x 12 / 20
+    [InlineData("", 10, false, 5)]      // no trailing '-': 9 newlines
+    [InlineData("", 4, false, 1)]       // 3 x 12 / 20
+    [InlineData("7;1;", 4, true, 1)]    // P1=7 is 1:1: 4 x 6 / 20
+    [InlineData("0;1;", 4, true, 2)]    // P1=0 is 2:1
+    public void SixelCursorAdvanceMatchesConPty(string p1, int bands, bool trailingNewline, int expectedRows)
+    {
+        string body = string.Concat(Enumerable.Repeat("#0" + new string('~', 20) + "-", bands));
+        if (!trailingNewline) body = body[..^1];
+        var buffer = new AnsiTerminalBuffer(40, 30);
+        buffer.Process("\u001bP" + p1 + "q#0;2;100;0;0" + body + "\u001b\\");
+
+        Assert.Equal(expectedRows, buffer.CursorRow);
+        Assert.Equal(0, buffer.CursorColumn);
+    }
+
+    [Theory]
+    [InlineData("1;1", 3)]   // raster pan/pad overrides P1: 1:1 -> 10 x 6 / 20
+    [InlineData("3;1", 9)]   // 3:1 -> 10 x 18 / 20
+    public void SixelRasterAspectOverridesP1(string panPad, int expectedRows)
+    {
+        string body = string.Concat(Enumerable.Repeat("#0" + new string('~', 20) + "-", 10));
+        var buffer = new AnsiTerminalBuffer(40, 30);
+        buffer.Process("\u001bPq\"" + panPad + ";20;40#0;2;100;0;0" + body + "\u001b\\");
+
+        Assert.Equal(expectedRows, buffer.CursorRow);
+    }
+
+    [Fact]
+    public void SixelPastTheBottomScrollsLikeConPty()
+    {
+        // Moving past the bottom scrolls, exactly as the same number of line feeds would.
+        string bands = string.Concat(Enumerable.Repeat("#0" + new string('~', 4) + "-", 10));
+        var sixel = new AnsiTerminalBuffer(20, 5);
+        sixel.Process("top\r\n\u001bPq#0;2;100;0;0" + bands + "\u001b\\X");
+        var feeds = new AnsiTerminalBuffer(20, 5);
+        feeds.Process("top\r\n" + new string('\n', 6) + "X");
+
+        Assert.Equal(feeds.CursorRow, sixel.CursorRow);
+        Assert.Equal(feeds.CursorColumn, sixel.CursorColumn);
+        Assert.Equal(
+            Enumerable.Range(0, 5).Select(feeds.GetScreenLineText),
+            Enumerable.Range(0, 5).Select(sixel.GetScreenLineText));
+    }
+
+    [Fact]
+    public void ImageReceivedFiresForEachProtocolButNotWhileReplaying()
+    {
+        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
+        var buffer = new AnsiTerminalBuffer(40, 10);
+        var received = new List<string>();
+        buffer.ImageReceived += (_, image) => received.Add(image.Protocol);
+
+        buffer.Process("\u001b]1337;File=inline=1:" + png + "\u0007");
+        buffer.Process("\u001b_Ga=T,f=100;" + png + "\u001b\\");
+        buffer.Process("\u001bPq#0;2;100;0;0#0~~\u001b\\");
+        Assert.Equal(["iterm2", "kitty", "sixel"], received);
+
+        // A replayed screen (re-attaching to a resident session; the snapshot is the first thing it
+        // sends) is the past, not a new picture — but it is still drawn.
+        var replayed = new AnsiTerminalBuffer(40, 10);
+        bool raised = false;
+        replayed.ImageReceived += (_, _) => raised = true;
+        replayed.Process("\u001b]7770;begin\u0007\u001b]1337;File=inline=1:" + png + "\u0007\u001b]7770;end\u0007");
+        Assert.False(raised);
+        Assert.Single(replayed.CreateRenderSnapshot(showCursor: false).Lines[0].Images!);
+    }
+
+    [Fact]
     public void KittyChunkedTransferReadsControlKeysFromTheFirstChunk()
     {
         const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
@@ -658,7 +746,7 @@ public sealed class AnsiTerminalBufferTests
         buffer.Process("\u001b[c");
         buffer.Process("\u001b[>c");
 
-        Assert.Equal(new[] { "\u001b[?62;1;22c", "\u001b[>0;10;1c" }, emitted);
+        Assert.Equal(new[] { "\u001b[?62;1;4;22c", "\u001b[>0;10;1c" }, emitted);
     }
 
     [Fact]
@@ -670,7 +758,7 @@ public sealed class AnsiTerminalBufferTests
 
         buffer.Process("\u001bZ");
 
-        Assert.Equal("\u001b[?62;1;22c", emitted);
+        Assert.Equal("\u001b[?62;1;4;22c", emitted);
     }
 
     [Fact]
@@ -3447,6 +3535,6 @@ public sealed class AnsiTerminalBufferTests
 
         buffer.Process("\u001b[c");
 
-        Assert.Equal("\u001b[?62;1;22c", emitted);
+        Assert.Equal("\u001b[?62;1;4;22c", emitted);
     }
 }

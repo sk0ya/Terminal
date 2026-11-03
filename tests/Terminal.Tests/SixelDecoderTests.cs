@@ -63,4 +63,33 @@ public sealed class SixelDecoderTests
         Assert.Equal(5, width);
         Assert.Equal(6, height);
     }
+
+    [Theory]
+    [InlineData(null, 2)]
+    [InlineData("", 2)]
+    [InlineData("0", 2)]
+    [InlineData("1", 2)]
+    [InlineData("2", 5)]
+    [InlineData("3", 3)]
+    [InlineData("4", 3)]
+    [InlineData("5", 2)]
+    [InlineData("6", 2)]
+    [InlineData("7", 1)]
+    [InlineData("9;1;0", 1)]
+    public void AspectFromP1FollowsTheVt340Table(string? parameters, int expected)
+        => Assert.Equal(expected, SixelDecoder.AspectFromP1(parameters));
+
+    [Fact]
+    public void PlacementIsCountedOnConPtysVirtualCell()
+    {
+        // 30 px wide, 2 bands (12 px) tall at 2:1 -> 3 cells wide, 1.2 rows tall; 2 newlines -> 1 row.
+        string payload = "#0;2;100;0;0" + new string('~', 30) + "-" + new string('~', 30) + "-";
+
+        Assert.True(SixelDecoder.TryDecode(payload, "0;1", out _, out int width, out int height, out SixelPlacement placement));
+
+        Assert.Equal((30, 12), (width, height));
+        Assert.Equal(3.0, placement.WidthCells);
+        Assert.Equal(1.2, placement.HeightCells, 3);
+        Assert.Equal(1, placement.CursorRows);
+    }
 }

@@ -5,8 +5,9 @@
 ### 高優先度
 
 - **iTerm2 インライン画像** — 対応済み・実機で描画確認。PNG/JPEG の `OSC 1337;File=...` をセル位置へ描画する
-- **Sixel グラフィクスの描画** — デコーダ・描画は実装済みだが **ConPTY がシーケンスを破棄するため実機では表示されない**（下記）
-- **Kitty Graphics Protocol** — 同上。実装済みだが ConPTY に破棄される
+- **Sixel グラフィクスの描画** — 対応済み。**同梱 ConPTY（`conpty.dll` + `OpenConsole.exe`）では通る**（下記）。ConPTY と同じだけカーソルを進める。inbox の ConPTY では破棄される
+- **Kitty Graphics Protocol** — 対応済み。同梱 ConPTY では通る。inbox では破棄される
+- **画像の常駐セッション越しの復元** — VT スナップショット（`CreateVtSnapshot`）は画像を書き出さないので、再接続すると画像は消える
 
 ### 中優先度
 
@@ -25,15 +26,23 @@
 
 ## 対応方針・意図的な非対応
 
-### ConPTY が通すプロトコル（実測: Windows 11 23H2 / build 22631）
+### ConPTY が通すプロトコル（実測: Windows 11 23H2 / build 22631、同梱は 2026-11-03 に再測定）
 
 pty へ各シーケンスを流し、ConPTY が再出力するストリームを直接観測した結果:
 
-| プロトコル | ConPTY 通過 |
-| --- | --- |
-| `OSC 1337;File=`（iTerm2） | **通る**（64KB ペイロードでも欠落なし） |
-| `DCS ... q`（Sixel） | **破棄される** |
-| `APC ESC _ G ...`（Kitty） | **破棄される** |
+| プロトコル | inbox（kernel32） | 同梱（`conpty.dll` + `OpenConsole.exe`） |
+| --- | --- | --- |
+| `OSC 1337;File=`（iTerm2） | 通る（64KB ペイロードでも欠落なし。2026-11 の再測定で `[Console]::Out.Write` からは落ちた——要再確認） | **そのまま通る**・ConPTY のカーソルは動かない |
+| `DCS ... q`（Sixel） | 破棄される | **そのまま通る**・**ConPTY のカーソルが進む**（下記） |
+| `APC ESC _ G ...`（Kitty） | 破棄される | **そのまま通る**・ConPTY のカーソルは動かない |
+
+**同梱 ConPTY は Sixel を解釈して自分のカーソルを画像の下へ進め、こちらには何も送らない**（端末も同じだけ進める前提）。
+進む量は実測で `floor(グラフィクス改行 '-' の数 × 6 × 縦横比 ÷ 20)` 行、桁はそのまま。最後の帯に `-` が付いていれば
+もう1帯ぶん進む。縦横比はラスター属性 `"pan;pad` があれば `pan/pad`、無ければ P1 の VT340 表（0,1,5,6→2・2→5・
+3,4→3・7,8,9→1）。ConPTY は**常に 10×20 の仮想セル**で数え、`CSI 16 t`／`CSI 14 t` に答えても変わらない（実測）。
+こちらも同じだけカーソルを進め、画像はその仮想セルの格子に合わせた大きさ（幅 `w/10`・高さ `h×縦横比/20` セル）で描く
+——進めないと、以後の行が ConPTY の思う行とずれ、絶対位置の再描画が画像の上に落ちる。DA1 は同梱 ConPTY ではこちらまで
+届くので、Sixel（属性 4）を返す（inbox では conhost が自分で答えるので、こちらの答えは使われない）。
 
 実機で画像を出す最小手順（PowerShell、実測で動作確認済み）。**1行で書く** — 複数行の関数定義は貼り付け時に PowerShell の継続ブロックへ吸い込まれるため:
 
@@ -45,7 +54,7 @@ function Show-Image { param([Parameter(Mandatory)][string]$Path,[int]$Width=40,[
 
 `wezterm imgcat` は `CSI 14 t`（ピクセル寸法）の応答を待つ。XTWINOPS 13/14/15/16 には WPF の実測値で答える。ConPTY は `CSI 14 t` / `CSI 16 t` をこちらまで**通す**（実測: 同ビルド）。`wezterm imgcat` を通しで動かしての確認はまだ。
 
-Sixel と Kitty はこちらのパーサに到達しないため、実装があっても実機では表示されない。`CreatePseudoConsole` に `PSEUDOCONSOLE_PASSTHROUGH_MODE`(8) を渡しても当該ビルドでは挙動が変わらなかった。実機で画像を出すには `chafa -f iterm` や `wezterm imgcat` など **iTerm2 形式で出力するツールを使う**。Sixel/Kitty を通すには、Sixel を実装した新しい conhost/conpty（Windows Terminal 同梱の OpenConsole 等）へ差し替える必要がある — 未検証。
+inbox の ConPTY では Sixel と Kitty はこちらのパーサに到達しない（`PSEUDOCONSOLE_PASSTHROUGH_MODE`(8) を渡しても当該ビルドでは変わらなかった）。同梱 ConPTY（`TERMINAL_CONPTY=inbox` で無効化できる）なら3つとも届く。
 
 ### 代替画面と Claude Code（実測: claude.exe 2.1.233 / pwsh 7.6.3）
 
@@ -103,8 +112,9 @@ CSI ?25h  CSI ?2026l
 ### 描画・カーソル
 
 - 画像は端末行のセルへアンカーして保持し、既存のスクロールバックと WPF surface の描画サイクルに乗せる。テキストの背面へ描画する。
-- **画像はカーソルを一切動かさない。** ConPTY は通常モード（`CreatePseudoConsole` の flags=0）で動作しており、画像シーケンスは ConPTY 自身の画面モデルには反映されないため、ConPTY のカーソルは画像の高さぶん進まない。こちらだけカーソルを進めると両者のモデルがずれ、絶対位置指定（`ESC[…H`）で再描画するプログラムは ConPTY のカーソルを基準に行を計算するため、テキストが画像の上に落ちる。これは2026-06-20に画像対応を一度削除した原因そのものなので、オーバーレイに徹して同期を保つ。
+- **iTerm2・Kitty の画像はカーソルを一切動かさない**（Sixel は上の「ConPTY が通すプロトコル」のとおり ConPTY と同じだけ進める）。ConPTY は通常モード（`CreatePseudoConsole` の flags=0）で動作しており、画像シーケンスは ConPTY 自身の画面モデルには反映されないため、ConPTY のカーソルは画像の高さぶん進まない。こちらだけカーソルを進めると両者のモデルがずれ、絶対位置指定（`ESC[…H`）で再描画するプログラムは ConPTY のカーソルを基準に行を計算するため、テキストが画像の上に落ちる。これは2026-06-20に画像対応を一度削除した原因そのものなので、オーバーレイに徹して同期を保つ。
   - 帰結として `imgcat` のようにテキストが流れる用途では、後続のプロンプトが画像の行へ重なって描かれる。ConPTY をパススルーモードで動かせるようになるまでは解消できない。
   - 同じ理由で、各プロトコルのカーソル移動抑制指定（iTerm2 の `doNotMoveCursor`、Kitty の `C=1`）は常時有効と同じ扱いになる。
+- ホストへは `TerminalTabView.InlineImageReceived` で画像を渡す（符号化済みの PNG/JPEG。Sixel・Kitty の生の画素は PNG にする）。画面の再生では発火しない。
 - 消去との関係：`ED 0/1/2/3` は消した行の画像も削除する。`EL` は削除しない（画像はプロンプト行にアンカーされるため、プロンプト再描画のたびに消えてしまう）。
 - Kitty の高度なアニメーション、Unicode placeholder による配置、`a=d` の一部サブモード、iTerm2 のファイル参照形式は未対応。`inline=1` のない `OSC 1337;File=` はファイル転送なので描画しない。壊れた画像データは画面を壊さず無視する。

@@ -1,5 +1,11 @@
 namespace Terminal.Buffer;
 
+/// <summary>
+/// Where a Sixel image lands on the text grid: its size in (fractional) cells and how many rows the
+/// cursor moves past it. See <see cref="SixelDecoder.TryDecode(string, string?, out byte[], out int, out int, out SixelPlacement)"/>.
+/// </summary>
+internal readonly record struct SixelPlacement(double WidthCells, double HeightCells, int CursorRows);
+
 /// <summary>Small, allocation-bounded Sixel raster decoder for terminal inline graphics.</summary>
 internal static class SixelDecoder
 {
@@ -7,7 +13,31 @@ internal static class SixelDecoder
     private const int MaxHeight = 16_384;
     private const int MaxPixels = TerminalImageData.MaxDecodedBytes / 4;
 
+    /// <summary>
+    /// The grid ConPTY (OpenConsole) lays a Sixel image on. It never asks the terminal for its real cell
+    /// size — answering CSI 16 t / CSI 14 t changes nothing (measured) — and always counts a VT340-style
+    /// 10×20 virtual cell.
+    /// </summary>
+    public const int VirtualCellWidth = 10;
+    public const int VirtualCellHeight = 20;
+
     public static bool TryDecode(string payload, out byte[] pixels, out int width, out int height)
+        => TryDecode(payload, null, out pixels, out width, out height, out _);
+
+    /// <summary>
+    /// Decodes the image and works out where it lands on the text grid. <paramref name="dcsParameters"/> is
+    /// the DCS parameter string before 'q' (P1 = pixel aspect ratio).
+    /// </summary>
+    /// <remarks>
+    /// The bundled ConPTY passes Sixel through and moves <b>its own</b> cursor past the image without
+    /// telling us (no cursor sequence follows), expecting the terminal to do the same. The amount,
+    /// measured against OpenConsole: <c>floor(graphicsNewlines × 6 × aspect / 20)</c> rows down, column
+    /// unchanged — counted from the '-' newlines, so a trailing '-' moves one band further. Not moving
+    /// ours by exactly that much puts every following line of text at a different row than ConPTY
+    /// thinks, and absolute repaints then land on top of the image.
+    /// </remarks>
+    public static bool TryDecode(
+        string payload, string? dcsParameters, out byte[] pixels, out int width, out int height, out SixelPlacement placement)
     {
         pixels = [];
         width = height = 0;
@@ -15,6 +45,8 @@ internal static class SixelDecoder
         int index = 0;
         int currentColor = 0;
         int repeat = 1;
+        int newlines = 0;
+        int aspect = AspectFromP1(dcsParameters);
 
         while (index < payload.Length)
         {
@@ -86,6 +118,13 @@ internal static class SixelDecoder
                 int start = index;
                 while (index < payload.Length && payload[index] is >= '0' and <= '9' or ';') index++;
                 string[] parameters = payload[start..index].Split(';');
+                if (parameters.Length >= 2 && int.TryParse(parameters[0], out int pan) &&
+                    int.TryParse(parameters[1], out int pad) && pan > 0 && pad > 0)
+                {
+                    // Raster attributes override P1's aspect ratio.
+                    aspect = Math.Clamp((int)Math.Round((double)pan / pad), 1, 16);
+                }
+
                 if (parameters.Length >= 4 && int.TryParse(parameters[2], out int rasterWidth) &&
                     int.TryParse(parameters[3], out int rasterHeight))
                 {
@@ -103,16 +142,34 @@ internal static class SixelDecoder
             {
                 canvas.X = 0;
                 canvas.Y += 6;
+                newlines++;
             }
         }
 
+        int cursorRows = (int)Math.Min(int.MaxValue, (long)newlines * 6 * aspect / VirtualCellHeight);
+        placement = new SixelPlacement(0, 0, cursorRows);
         if (canvas.Width == 0 || canvas.Height == 0)
         {
             return false;
         }
 
         canvas.TrimToContent(out width, out height, out pixels);
+        placement = new SixelPlacement(
+            (double)width / VirtualCellWidth, (double)height * aspect / VirtualCellHeight, cursorRows);
         return width > 0 && height > 0 && pixels.Length <= TerminalImageData.MaxDecodedBytes;
+    }
+
+    /// <summary>VT340's P1 table (pixel aspect ratio, vertical:horizontal). Missing or unknown → 2:1.</summary>
+    internal static int AspectFromP1(string? parameters)
+    {
+        string first = parameters?.Split(';')[0] ?? "";
+        return int.TryParse(first, out int p1) ? p1 switch
+        {
+            2 => 5,
+            3 or 4 => 3,
+            7 or 8 or 9 => 1,
+            _ => 2,
+        } : 2;
     }
 
     private sealed class Canvas

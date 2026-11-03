@@ -28,7 +28,21 @@ internal sealed record TerminalImage(
     int? HeightCells,
     int? WidthPixels,
     int? HeightPixels,
-    bool PreserveAspectRatio);
+    bool PreserveAspectRatio)
+{
+    /// <summary>
+    /// Exact size in cells, fractional, when the grid the image was laid on is known (Sixel: ConPTY's
+    /// 10×20 virtual cell). Wins over every other size, so the picture covers exactly the rows the
+    /// cursor was moved past.
+    /// </summary>
+    public double? ScaledWidthCells { get; init; }
+
+    /// <inheritdoc cref="ScaledWidthCells"/>
+    public double? ScaledHeightCells { get; init; }
+
+    /// <summary>Which sequence carried it: <c>sixel</c>, <c>iterm2</c> or <c>kitty</c>.</summary>
+    public string Protocol { get; init; } = "";
+}
 
 internal static class TerminalImageData
 {
