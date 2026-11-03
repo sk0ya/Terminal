@@ -1784,7 +1784,8 @@ public partial class TerminalTabView : UserControl
             charHeight,
             viewportBounds,
             ResolveOverlayCursorShape(_terminalBuffer.CursorShape, _isTerminalFocused),
-            proxyCaretBounds);
+            proxyCaretBounds,
+            _terminalBuffer.CursorCellWidth);
         UpdateCursorOverlay(cursorBounds);
     }
 
@@ -1831,7 +1832,8 @@ public partial class TerminalTabView : UserControl
         double charHeight,
         Rect viewportBounds,
         TerminalCursorShape cursorShape,
-        Rect? proxyCaretBounds = null)
+        Rect? proxyCaretBounds = null,
+        int cursorCellWidth = 1)
     {
         Rect proxyBounds = CalculateProxyBounds(cursorLeft, cursorTop, proxyWidth, proxyHeight, viewportBounds);
         double visualCursorLeft = proxyCaretBounds?.Left ?? cursorLeft;
@@ -1842,7 +1844,9 @@ public partial class TerminalTabView : UserControl
             charWidth,
             charHeight,
             viewportBounds,
-            cursorShape);
+            cursorShape,
+            // While composing, the caret sits inside the composition text, not on a grid cell.
+            proxyCaretBounds is null ? cursorCellWidth : 1);
         return (proxyBounds, cursorBounds);
     }
 
@@ -1926,7 +1930,8 @@ public partial class TerminalTabView : UserControl
         double charWidth,
         double charHeight,
         Rect viewportBounds,
-        TerminalCursorShape cursorShape)
+        TerminalCursorShape cursorShape,
+        int cursorCellWidth)
     {
         // When the cursor's line has scrolled out of the visible viewport, hide the overlay
         // instead of pinning it to the viewport edge so it tracks the actual input position.
@@ -1935,7 +1940,9 @@ public partial class TerminalTabView : UserControl
             return Rect.Empty;
         }
 
-        double overlayWidth = Math.Max(2, Math.Ceiling(charWidth));
+        // A wide glyph takes two cells; a block or underline drawn one cell wide covers only its
+        // left half. Other terminals size the cursor to the glyph, so this does too.
+        double overlayWidth = Math.Max(2, Math.Ceiling(charWidth * Math.Clamp(cursorCellWidth, 1, 2)));
         double overlayHeight = Math.Max(2, Math.Ceiling(charHeight));
 
         switch (cursorShape)

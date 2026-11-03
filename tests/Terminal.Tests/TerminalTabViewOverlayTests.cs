@@ -107,4 +107,55 @@ public sealed class TerminalTabViewOverlayTests
 
         Assert.Equal(expected, result);
     }
+
+    [Theory]
+    [InlineData((int)TerminalCursorShape.Block, 20)]
+    [InlineData((int)TerminalCursorShape.Underline, 20)]
+    [InlineData((int)TerminalCursorShape.Bar, 2)]
+    public void CalculateOverlayLayoutWidensCursorOverWideGlyph(int shapeValue, double expectedWidth)
+    {
+        (_, Rect cursorBounds) = TerminalTabView.CalculateOverlayLayout(
+            cursorLeft: 20,
+            cursorTop: 0,
+            proxyWidth: 10,
+            proxyHeight: 20,
+            charWidth: 10,
+            charHeight: 20,
+            viewportBounds: new Rect(0, 0, 100, 40),
+            cursorShape: (TerminalCursorShape)shapeValue,
+            cursorCellWidth: 2);
+
+        Assert.Equal(20, cursorBounds.Left, precision: 3);
+        Assert.Equal(expectedWidth, cursorBounds.Width, precision: 3);
+    }
+
+    [Fact]
+    public void CalculateOverlayLayoutKeepsOneCellWhileComposing()
+    {
+        (_, Rect cursorBounds) = TerminalTabView.CalculateOverlayLayout(
+            cursorLeft: 20,
+            cursorTop: 0,
+            proxyWidth: 30,
+            proxyHeight: 20,
+            charWidth: 10,
+            charHeight: 20,
+            viewportBounds: new Rect(0, 0, 100, 40),
+            cursorShape: TerminalCursorShape.Block,
+            proxyCaretBounds: new Rect(35, 0, 0, 20),
+            cursorCellWidth: 2);
+
+        Assert.Equal(10, cursorBounds.Width, precision: 3);
+    }
+
+    [Theory]
+    [InlineData("コミ[1G", 2)] // on the lead cell of a wide glyph
+    [InlineData("ab[1G", 1)]
+    [InlineData("コ", 1)] // after the glyph, on a blank cell
+    public void CursorCellWidthFollowsGlyphUnderCursor(string input, int expected)
+    {
+        var buffer = new AnsiTerminalBuffer(10, 3);
+        buffer.Process(System.Text.RegularExpressions.Regex.Unescape(input));
+
+        Assert.Equal(expected, buffer.CursorCellWidth);
+    }
 }

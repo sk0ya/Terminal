@@ -1135,6 +1135,31 @@ internal sealed partial class AnsiTerminalBuffer
         return ExtractLineText(_screen[row]);
     }
 
+    /// <summary>
+    /// Cells taken by the glyph under the cursor: 2 on the lead cell of a wide glyph, else 1. The cursor
+    /// is drawn that wide, since one cell over a wide glyph covers only its left half.
+    /// </summary>
+    internal int CursorCellWidth
+    {
+        get
+        {
+            if (_cursorRow < 0 || _cursorRow >= _screen.Count)
+            {
+                return 1;
+            }
+
+            TerminalCell[] cells = _screen[_cursorRow].Cells;
+            int column = CursorColumn;
+            if (column + 1 >= cells.Length)
+            {
+                return 1;
+            }
+
+            TerminalCell cell = cells[column];
+            return !cell.IsContinuation && cell.Width == 2 && cells[column + 1].IsContinuation ? 2 : 1;
+        }
+    }
+
     internal string? GetCellHyperlink(int row, int column) => GetCellHyperlinkLink(row, column)?.Uri;
 
     internal TerminalHyperlink? GetCellHyperlinkLink(int row, int column)
