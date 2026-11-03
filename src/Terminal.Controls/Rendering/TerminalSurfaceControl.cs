@@ -186,6 +186,7 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
         Unloaded += (_, _) =>
         {
             StopBlinkTimer();
+            ReleaseCursorCellCommands();
             TextFormatter? formatter = _textFormatter;
             _textFormatter = null;
             var cleanup = new List<Action> { _lines.Clear };
@@ -353,6 +354,7 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
 
             _fontLigaturesEnabled = value;
             _lines.InvalidateDrawables();
+            ReleaseCursorCellCommands();
             InvalidateVisual();
         }
     }
@@ -1493,6 +1495,118 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
         }
     }
 
+    // The glyph under a block cursor is redrawn inside the cursor in a contrasting colour, the way
+    // other terminals invert the cell, instead of being left under a translucent plate. The commands
+    // for the one segment involved are cached: the cursor element repaints on every blink.
+    private (int Line, TerminalLineSegmentLayout Segment, Color Text, IDrawCommand[] Commands)? _cursorCellCommands;
+
+    /// <summary>
+    /// Paints the block cursor over the cell(s) at <paramref name="column"/> of rendered line
+    /// <paramref name="lineIndex"/>: an opaque <paramref name="fill"/>, then the cell's glyph in
+    /// whichever of the cell's own background or foreground stands out more against it. The
+    /// drawing is in the cursor's coordinates (its top-left is the cell's top-left). Returns false
+    /// when it cannot, so the caller can fall back to a plain plate.
+    /// </summary>
+    internal bool RenderCursorCell(DrawingContext drawingContext, int lineIndex, int column, Size size, Color fill)
+    {
+        EnsureMetrics();
+        if (HighContrastMode || lineIndex < 0 || lineIndex >= _lines.Count ||
+            _cellSize.Width <= 0 || _cellSize.Height <= 0)
+        {
+            return false;
+        }
+
+        TerminalLineLayout line = _lines[lineIndex];
+        if (line.LineSize != TerminalLineSize.SingleWidth)
+        {
+            return false;
+        }
+
+        var cellRect = new Rect(new Point(0, 0), size);
+        drawingContext.DrawRectangle(GetBrush(fill), null, cellRect);
+
+        TerminalLineSegmentLayout? found = null;
+        foreach (TerminalLineSegmentLayout segment in line.Segments)
+        {
+            if (column >= segment.StartCell && column < segment.StartCell + segment.Snapshot.CellLength)
+            {
+                found = segment;
+                break;
+            }
+        }
+
+        if (found is not { } cursorSegment || string.IsNullOrEmpty(cursorSegment.Snapshot.Text))
+        {
+            return true;
+        }
+
+        Color text = PickCursorTextColor(fill, cursorSegment.Snapshot.Background, cursorSegment.Snapshot.Foreground);
+        IDrawCommand[] commands;
+        if (_cursorCellCommands is { } cached &&
+            cached.Line == lineIndex && cached.Segment == cursorSegment && cached.Text == text)
+        {
+            commands = cached.Commands;
+        }
+        else
+        {
+            ReleaseCursorCellCommands();
+            var built = new List<IDrawCommand>();
+            AppendSegmentCommands(built, cursorSegment with { Snapshot = cursorSegment.Snapshot with { Foreground = text } });
+            commands = built.ToArray();
+            _cursorCellCommands = (lineIndex, cursorSegment, text, commands);
+        }
+
+        drawingContext.PushClip(new RectangleGeometry(cellRect));
+        try
+        {
+            double offsetX = -(column * _cellSize.Width);
+            foreach (IDrawCommand command in commands)
+            {
+                command.Render(drawingContext, offsetX, 0);
+            }
+        }
+        finally
+        {
+            drawingContext.Pop();
+        }
+
+        return true;
+    }
+
+    private void ReleaseCursorCellCommands()
+    {
+        if (_cursorCellCommands is { } cached)
+        {
+            _cursorCellCommands = null;
+            DisposableResourceOwner.DisposeAllBestEffort(cached.Commands.OfType<IDisposable>());
+        }
+    }
+
+    /// <summary>
+    /// The cell's background is the usual choice (an inverted cell). When the cell is itself already
+    /// inverted - an app drawing its own reverse-video cursor, as Claude Code does - its background is
+    /// close to the cursor fill and its foreground reads better, so the one further from the fill wins.
+    /// </summary>
+    internal static Color PickCursorTextColor(Color fill, Color cellBackground, Color cellForeground)
+    {
+        double fillLuminance = RelativeLuminance(fill);
+        return Math.Abs(RelativeLuminance(cellBackground) - fillLuminance) >=
+            Math.Abs(RelativeLuminance(cellForeground) - fillLuminance)
+            ? cellBackground
+            : cellForeground;
+    }
+
+    private static double RelativeLuminance(Color color)
+    {
+        static double Channel(byte value)
+        {
+            double c = value / 255.0;
+            return c <= 0.03928 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
+        }
+
+        return (0.2126 * Channel(color.R)) + (0.7152 * Channel(color.G)) + (0.0722 * Channel(color.B));
+    }
+
     private readonly TerminalHighlighter _highlighter = new();
     private readonly Dictionary<Color, Brush> _highlightBrushes = [];
 
@@ -2333,6 +2447,7 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
         _fontFallback = new FontFallbackResolver(_typeface);
         // Font metrics changed, so any glyphs shaped against the old typeface/size are stale.
         _lines.InvalidateDrawables();
+        ReleaseCursorCellCommands();
         var text = new FormattedText(
             "W",
             CultureInfo.CurrentCulture,

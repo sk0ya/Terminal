@@ -33,6 +33,7 @@ public partial class TerminalTabView : UserControl
     private static readonly TimeSpan CloseShutdownTimeout = TimeSpan.FromSeconds(2);
     private const int ExitOutputDrainPasses = 3;
     private static readonly Brush BlockCursorBrush = CreateFrozenBrush(Color.FromArgb(0xA0, 0xE3, 0xE3, 0xE3));
+    private static readonly Color BlockCursorFillColor = Color.FromRgb(0xE3, 0xE3, 0xE3);
     private static readonly Brush AccentCursorBrush = CreateFrozenBrush(Color.FromRgb(0x5F, 0xAF, 0xFF));
     private static readonly Brush UnfocusedCursorBorderBrush = CreateFrozenBrush(Color.FromArgb(0xC0, 0xE3, 0xE3, 0xE3));
 
@@ -1786,7 +1787,7 @@ public partial class TerminalTabView : UserControl
             ResolveOverlayCursorShape(_terminalBuffer.CursorShape, _isTerminalFocused),
             proxyCaretBounds,
             _terminalBuffer.CursorCellWidth);
-        UpdateCursorOverlay(cursorBounds);
+        UpdateCursorOverlay(cursorBounds, absoluteCursorLine, invertCell: proxyCaretBounds is null);
     }
 
     // The proxy shows the IME composition where the committed text will go, so it has to draw it
@@ -1863,7 +1864,7 @@ public partial class TerminalTabView : UserControl
             Math.Max(0, renderedLineCount - 1));
     }
 
-    private void UpdateCursorOverlay(Rect bounds)
+    private void UpdateCursorOverlay(Rect bounds, int renderedLine, bool invertCell)
     {
         if (bounds.IsEmpty || !ShouldShowCursorOverlay())
         {
@@ -1886,9 +1887,18 @@ public partial class TerminalTabView : UserControl
         // Unfocused: an outlined cell, so a split or a background window shows where input would
         // go without looking like the pane that has the keyboard.
         bool hollow = !_isTerminalFocused;
+        // Focused block on a grid cell: the cell is drawn inverted inside the cursor, so the glyph
+        // under it stays readable. Not while composing - the caret is inside the IME text then.
+        bool inverted = !hollow && invertCell && _terminalBuffer.CursorShape == TerminalCursorShape.Block;
+        if (inverted)
+        {
+            TerminalCursorCell.Show(TerminalOutput, renderedLine, _terminalBuffer.CursorColumn, BlockCursorFillColor);
+        }
+
+        TerminalCursorCell.Visibility = inverted ? Visibility.Visible : Visibility.Collapsed;
         TerminalCursorOverlay.Width = bounds.Width;
         TerminalCursorOverlay.Height = bounds.Height;
-        TerminalCursorOverlay.Background = hollow ? Brushes.Transparent : background;
+        TerminalCursorOverlay.Background = hollow || inverted ? Brushes.Transparent : background;
         TerminalCursorOverlay.BorderBrush = hollow ? UnfocusedCursorBorderBrush : null;
         TerminalCursorOverlay.BorderThickness = hollow ? new Thickness(1) : new Thickness(0);
         Canvas.SetLeft(TerminalCursorOverlay, bounds.Left);

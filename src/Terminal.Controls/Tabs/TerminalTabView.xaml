@@ -404,7 +404,10 @@
                             Panel.ZIndex="2"
                             Width="2"
                             Height="20"
-                            Background="#A0E3E3E3" />
+                            Background="#A0E3E3E3">
+                        <local:TerminalCursorCell x:Name="TerminalCursorCell"
+                                                  Visibility="Collapsed" />
+                    </Border>
 
                     <local:TerminalInputTextBox x:Name="TerminalInputProxy"
                              Panel.ZIndex="1"
