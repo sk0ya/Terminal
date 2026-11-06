@@ -2219,6 +2219,8 @@ internal sealed partial class AnsiTerminalBuffer
     private void AddImage(TerminalImage image)
     {
         _screen[_cursorRow].Images.Add(image);
+        // 絵だけの行も「書かれた」行（再生では送り手の時刻が付く。付けないと、文字の無い絵の行だけ時刻が抜ける）。
+        StampLineWritten(_screen[_cursorRow]);
         InvalidateScreenRenderCache();
         // A replayed screen is the past, not a picture that just arrived (same rule as notifications).
         if (!IsReplaying)

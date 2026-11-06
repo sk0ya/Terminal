@@ -214,25 +214,39 @@ internal sealed class VtParser(
     }
 
     // OSC 1337;File= carries a base64 image, which legitimately runs past the ordinary control
-    // string budget. The command number is everything before the first ';', so the decision can be
-    // made as soon as that separator arrives - every other OSC keeps the 64 KB cap.
+    // string budget. So does OSC 7770 — the replay bracket of a VT snapshot also carries the images
+    // that were on the screen (see AnsiTerminalBuffer.VtSnapshot). The command number is everything
+    // before the first ';', so the decision can be made as soon as that separator arrives - every
+    // other OSC keeps the 64 KB cap.
     private void RaiseLimitForImageOsc()
     {
-        const string imageOscPrefix = "1337;";
-        if (_controlStringLimit != MaxControlStringLength || _sequence.Length != imageOscPrefix.Length)
+        if (_controlStringLimit != MaxControlStringLength)
         {
             return;
         }
 
-        for (int index = 0; index < imageOscPrefix.Length; index++)
+        if (SequenceIs("1337;") || SequenceIs(AnsiTerminalBuffer.ReplayOscCommand + ";"))
         {
-            if (_sequence[index] != imageOscPrefix[index])
+            _controlStringLimit = MaxImageControlStringLength;
+        }
+    }
+
+    private bool SequenceIs(string prefix)
+    {
+        if (_sequence.Length != prefix.Length)
+        {
+            return false;
+        }
+
+        for (int index = 0; index < prefix.Length; index++)
+        {
+            if (_sequence[index] != prefix[index])
             {
-                return;
+                return false;
             }
         }
 
-        _controlStringLimit = MaxImageControlStringLength;
+        return true;
     }
 
     private void ProcessOscEscape(char ch)

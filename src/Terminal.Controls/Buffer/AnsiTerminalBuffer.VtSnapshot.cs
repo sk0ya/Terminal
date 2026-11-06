@@ -55,6 +55,17 @@ internal sealed partial class AnsiTerminalBuffer
 
     private void DispatchReplayOsc(string value)
     {
+        if (value.StartsWith(ReplayImagePrefix, StringComparison.Ordinal))
+        {
+            // 画像も再生の中だけ（外で同じ並びが流れても、ただの印字として捨てる）。
+            if (IsReplaying && TryDecodeReplayImage(value.AsSpan(ReplayImagePrefix.Length), out TerminalImage? image))
+            {
+                AddImage(image);
+            }
+
+            return;
+        }
+
         if (value.StartsWith("t;", StringComparison.Ordinal))
         {
             // 行の時刻は再生の中だけで意味を持つ（外で同じ並びが流れても、ただの印字として捨てる）。
@@ -379,6 +390,13 @@ internal sealed partial class AnsiTerminalBuffer
 
                 SetStyle(cell.Style, cell.Hyperlink);
                 Output.Append(cell.Text);
+            }
+
+            // 画像は行の文字の後、改行の前に置く：ここならカーソルは必ずこの行にいる（折り返す行の末尾でも、
+            // 次の文字が来るまでは次の行へ移らない）。画像はカーソルを動かさないので、後の行に響かない。
+            foreach (TerminalImage image in line.Images)
+            {
+                AppendReplayImage(Output, image);
             }
 
             if (isLast)
