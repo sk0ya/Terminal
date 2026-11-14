@@ -48,7 +48,9 @@ public partial class TerminalTabView : UserControl
     private readonly DispatcherTimer _sessionWatchdog = new(DispatcherPriority.Background);
     private readonly DispatcherTimer _cursorBlinkTimer = new(DispatcherPriority.Background);
     private readonly DispatcherTimer _renderThrottleTimer = new(DispatcherPriority.Background);
-    private readonly DispatcherTimer _synchronizedUpdateWatchdogTimer = new(DispatcherPriority.Background);
+    // Normal, not Background: a busy UI (streaming output, other panes) starved the tick well past the
+    // timeout, so a frame whose end never arrived stayed off screen for longer than 250ms.
+    private readonly DispatcherTimer _synchronizedUpdateWatchdogTimer = new(DispatcherPriority.Normal);
     private readonly DispatcherTimer _toastDismissTimer = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(4) };
     private readonly DispatcherTimer _commandOutputSettleTimer = new(DispatcherPriority.Background) { Interval = TerminalCommandOutputCoordinator.SettleDelay };
     private readonly TerminalCommandOutputCoordinator _commandOutput = new();
@@ -1306,6 +1308,10 @@ public partial class TerminalTabView : UserControl
         try
         {
             _session.Write(text);
+            if (TerminalLatencyTrace.Enabled)
+            {
+                TerminalLatencyTrace.Write(this, $"input {text.Length} chars");
+            }
             _cursorBlinkVisible = true;
             // The next output is normally the shell's echo for this input. Render that echo
             // immediately instead of making interactive typing wait for the output throttle.
@@ -1346,35 +1352,18 @@ public partial class TerminalTabView : UserControl
 
         if (!string.IsNullOrEmpty(nextBatch))
         {
-            bool wasReplaying = _terminalBuffer.IsReplaying;
-            bool endedSynchronizedUpdate = _terminalBuffer.Process(nextBatch);
-            TryCompleteAgentSentinel();
-            if (!_terminalBuffer.IsReplaying)
-            {
-                PumpOutputTaps();
-            }
-            if (_commandOutput.HasPending)
-            {
-                // Still painting after D (ConPTY paints text after forwarding the marker): wait for quiet.
-                _commandOutputSettleTimer.Stop();
-                _commandOutputSettleTimer.Start();
-            }
             bool prioritizeRender = _outputBatch.ConsumeRenderPriority();
-            if (_terminalBuffer.IsReplaying)
+            // A finished synchronized frame followed by the start of the next one: draw the finished
+            // frame first, or it stays hidden behind the new frame until that one ends.
+            int split = TerminalSynchronizedUpdateSplitter.FindSplitAfterCompletedFrame(nextBatch);
+            if (split > 0)
             {
-                // A re-attached session's snapshot (a whole scrollback, up to a second to parse) is
-                // drawn once, finished, rather than scrolling past batch by batch. Its end is part of
-                // the same output frame, so this does not need the synchronized-update watchdog.
+                ProcessOutputChunk(nextBatch[..split], prioritizeRender);
+                prioritizeRender = false;
+                nextBatch = nextBatch[split..];
             }
-            else if (!_terminalBuffer.SynchronizedUpdateActive)
-            {
-                StopSynchronizedUpdateWatchdog();
-                RequestDocumentRender(immediate: prioritizeRender || endedSynchronizedUpdate || wasReplaying);
-            }
-            else
-            {
-                ScheduleSynchronizedUpdateWatchdog();
-            }
+
+            ProcessOutputChunk(nextBatch, prioritizeRender);
         }
 
         if (forceEndTransientModes)
@@ -1385,6 +1374,46 @@ public partial class TerminalTabView : UserControl
         if (_outputBatch.EnsureFlushScheduled())
         {
             _ = Dispatcher.BeginInvoke(FlushPendingOutput, DispatcherPriority.Normal);
+        }
+    }
+
+    private void ProcessOutputChunk(string chunk, bool prioritizeRender)
+    {
+        bool wasReplaying = _terminalBuffer.IsReplaying;
+        bool wasSynchronizing = _terminalBuffer.SynchronizedUpdateActive;
+        bool endedSynchronizedUpdate = _terminalBuffer.Process(chunk);
+        if (TerminalLatencyTrace.Enabled)
+        {
+            TerminalLatencyTrace.Write(this,
+                $"output {chunk.Length} chars sync {(wasSynchronizing ? 1 : 0)}->{(_terminalBuffer.SynchronizedUpdateActive ? 1 : 0)}" +
+                $"{(endedSynchronizedUpdate ? " ended" : "")}{(prioritizeRender ? " prioritized" : "")}");
+        }
+
+        TryCompleteAgentSentinel();
+        if (!_terminalBuffer.IsReplaying)
+        {
+            PumpOutputTaps();
+        }
+        if (_commandOutput.HasPending)
+        {
+            // Still painting after D (ConPTY paints text after forwarding the marker): wait for quiet.
+            _commandOutputSettleTimer.Stop();
+            _commandOutputSettleTimer.Start();
+        }
+        if (_terminalBuffer.IsReplaying)
+        {
+            // A re-attached session's snapshot (a whole scrollback, up to a second to parse) is
+            // drawn once, finished, rather than scrolling past batch by batch. Its end is part of
+            // the same output frame, so this does not need the synchronized-update watchdog.
+        }
+        else if (!_terminalBuffer.SynchronizedUpdateActive)
+        {
+            StopSynchronizedUpdateWatchdog();
+            RequestDocumentRender(immediate: prioritizeRender || endedSynchronizedUpdate || wasReplaying);
+        }
+        else
+        {
+            ScheduleSynchronizedUpdateWatchdog();
         }
     }
 
@@ -1409,6 +1438,7 @@ public partial class TerminalTabView : UserControl
         _synchronizedUpdateWatchdogTimer.Stop();
         if (_renderCoordinator.ConsumeWatchdogTick())
         {
+            TerminalLatencyTrace.Write(this, "sync watchdog fired");
             ForceEndSynchronizedUpdateAndRender();
         }
     }
@@ -1668,6 +1698,7 @@ public partial class TerminalTabView : UserControl
         finally
         {
             _renderCoordinator.EndRender(DateTime.UtcNow);
+            TerminalLatencyTrace.Write(this, "rendered");
         }
     }
 
