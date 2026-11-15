@@ -25,6 +25,31 @@ public sealed class TerminalTabViewViewportTests
         Assert.False(_coordinator.UpdateSize(132, 41));
     }
 
+    [Fact]
+    public void ResizeDuringSessionCreationReachesSessionOnceAttached()
+    {
+        // The session is requested at the pre-restore size...
+        _coordinator.SetSessionSize(120, 30);
+        // ...and the window is restored to another size before it attaches.
+        Assert.True(_coordinator.UpdateSize(150, 42));
+
+        Assert.True(_coordinator.TryTakeSessionResize(out short columns, out short rows));
+        Assert.Equal(150, columns);
+        Assert.Equal(42, rows);
+
+        // The view no longer changes size, but the session has already caught up.
+        Assert.False(_coordinator.UpdateSize(150, 42));
+        Assert.False(_coordinator.TryTakeSessionResize(out _, out _));
+    }
+
+    [Fact]
+    public void SessionAtViewSizeNeedsNoResize()
+    {
+        _coordinator.SetSessionSize(120, 30);
+
+        Assert.False(_coordinator.TryTakeSessionResize(out _, out _));
+    }
+
     [Theory]
     [InlineData(0, 0, false)]
     [InlineData(0.0005, 0, false)]

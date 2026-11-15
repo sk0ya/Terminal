@@ -967,30 +967,42 @@ public partial class TerminalTabView : UserControl
     private void UpdateTerminalViewportSize()
     {
         var (columns, rows) = CalculateTerminalSize();
-        if (!_viewportState.UpdateSize(columns, rows))
+        bool viewChanged = _viewportState.UpdateSize(columns, rows);
+        if (viewChanged)
         {
-            UpdateTerminalChrome();
-            return;
+            RenumberOutputTaps(() => _terminalBuffer.Resize(columns, rows));
+            RequestDocumentRender();
         }
 
-        RenumberOutputTaps(() => _terminalBuffer.Resize(columns, rows));
-        RequestDocumentRender();
+        bool hasSession = _session is not null;
+        SyncSessionSize();
+        if (!viewChanged || hasSession)
+        {
+            UpdateTerminalChrome();
+        }
+    }
 
-        if (_session is null)
+    /// <summary>
+    /// Sends the view's size to the session when they differ. Compared against what the session
+    /// was last given, not against the view's previous size: a resize that happens while the
+    /// session is still being created (no session to tell yet) must still reach it once attached,
+    /// otherwise the shell keeps the stale size until the view happens to change size again.
+    /// </summary>
+    private void SyncSessionSize()
+    {
+        if (_session is not { } session || !_viewportState.TryTakeSessionResize(out short columns, out short rows))
         {
             return;
         }
 
         try
         {
-            _session.Resize(columns, rows);
+            session.Resize(columns, rows);
         }
         catch (Exception ex)
         {
             SetStatus($"Resize failed: {ex.Message}");
         }
-
-        UpdateTerminalChrome();
     }
 
     private async Task StartTerminalAsync(bool focusTerminal = false)
@@ -1004,7 +1016,11 @@ public partial class TerminalTabView : UserControl
         {
             UpdateUiState(_session is not null);
             TerminalSessionStartResult result = await _sessionOrchestrator.StartAsync(
-                () => CreateSessionAsync(commandLine, _viewportState.Columns, _viewportState.Rows, workingDirectory),
+                () =>
+                {
+                    _viewportState.SetSessionSize(_viewportState.Columns, _viewportState.Rows);
+                    return CreateSessionAsync(commandLine, _viewportState.Columns, _viewportState.Rows, workingDirectory);
+                },
                 WireSessionEvents,
                 UnwireSessionEvents,
                 ResetViewForSessionStart);
@@ -1038,6 +1054,8 @@ public partial class TerminalTabView : UserControl
                 return;
             }
 
+            // The view may have been resized while the session was being created.
+            SyncSessionSize();
             _cursorBlinkVisible = true;
             UpdateUiState(isRunning: true);
             UpdateActiveLaunchState(commandLine, workingDirectory);

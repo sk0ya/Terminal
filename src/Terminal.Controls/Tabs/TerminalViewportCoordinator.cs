@@ -6,6 +6,7 @@ internal sealed class TerminalViewportCoordinator(
     short initialRows = 30)
 {
     private bool _isAlternateScreenMode;
+    private (short Columns, short Rows)? _sessionSize;
 
     public bool FollowOutput { get; private set; } = true;
     public short Columns { get; private set; } = initialColumns;
@@ -20,6 +21,26 @@ internal sealed class TerminalViewportCoordinator(
 
         Columns = columns;
         Rows = rows;
+        return true;
+    }
+
+    /// <summary>The size the session being started was created with. The view's size and the
+    /// session's size are tracked separately: creating a session can take a while (a resident
+    /// host behind a pipe), and a layout change that lands meanwhile resizes only the view.</summary>
+    public void SetSessionSize(short columns, short rows) => _sessionSize = (columns, rows);
+
+    /// <summary>True when the session lags behind the view; the caller sends the returned size
+    /// and it is recorded as the session's size.</summary>
+    public bool TryTakeSessionResize(out short columns, out short rows)
+    {
+        columns = Columns;
+        rows = Rows;
+        if (_sessionSize == (Columns, Rows))
+        {
+            return false;
+        }
+
+        _sessionSize = (Columns, Rows);
         return true;
     }
 
