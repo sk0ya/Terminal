@@ -411,6 +411,11 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
     internal void UpdateSnapshot(AnsiTerminalBuffer.TerminalRenderSnapshot snapshot)
     {
         EnsureMetrics();
+        // 選択は行番号で持つ。画面の内容が変わったあとに、選んでいた行が同じ内容のままか確かめるため、
+        // 更新の前に選択の行の中身を覚えておく。
+        var previousSelection = NormalizeSelection(_selection);
+        var previousSelectedLines = SelectedLineSnapshots(previousSelection);
+
         // The maximum cell length (for the horizontal scroll extent) comes straight from the
         // lightweight value snapshots, so no LineLayout has to be built here. Layouts are produced
         // on demand by the cache when OnRender / selection / search ask for a specific line.
@@ -426,11 +431,67 @@ public sealed partial class TerminalSurfaceControl : Control, IScrollInfo
             }
         }
 
+        KeepSelectionOnlyIfUnchanged(previousSelection, previousSelectedLines, snapshot.Lines);
         CoerceSelection();
         CoerceKeyboardCursor();
         UpdateScrollMetrics();
         InvalidateVisual();
         NotifyAutomationTextChanged();
+    }
+
+    /// <summary>選択が指している行の中身（描き直しの前に取る）。選択が無いときは null。</summary>
+    private AnsiTerminalBuffer.TerminalRenderLineSnapshot[]? SelectedLineSnapshots(TerminalTextRange? selection)
+    {
+        if (selection is not { IsEmpty: false } range)
+        {
+            return null;
+        }
+
+        int first = range.Start.LineIndex;
+        int last = range.End.LineIndex;
+        if (first < 0 || last >= _lines.Count)
+        {
+            return null;
+        }
+
+        var lines = new AnsiTerminalBuffer.TerminalRenderLineSnapshot[last - first + 1];
+        for (int k = 0; k < lines.Length; k++)
+        {
+            lines[k] = _lines.GetSnapshot(first + k);
+        }
+
+        return lines;
+    }
+
+    /// <summary>
+    /// 画面の内容が変わったとき、選んでいた行が同じ位置に同じ内容のまま残っていれば選択を残す。内容が変わった
+    /// （スクロール・描き直しで行が動いた）ときは選択を外す。選択の枠だけが元の場所に残って別の文字を指すことを防ぐ。
+    /// </summary>
+    private void KeepSelectionOnlyIfUnchanged(
+        TerminalTextRange? previous,
+        AnsiTerminalBuffer.TerminalRenderLineSnapshot[]? selected,
+        AnsiTerminalBuffer.TerminalRenderLineSnapshot[] lines)
+    {
+        if (previous is not { } range || selected is null)
+        {
+            return;
+        }
+
+        int first = range.Start.LineIndex;
+        bool unchanged = first + selected.Length <= lines.Length;
+        for (int k = 0; unchanged && k < selected.Length; k++)
+        {
+            unchanged = selected[k].ContentEquals(lines[first + k]);
+        }
+
+        if (unchanged)
+        {
+            return;
+        }
+
+        ClearSelection();
+        _selectionAnchor = null;
+        _selectionAnchorPoint = null;
     }
 
     internal void SetViewportFloor(Size size)
