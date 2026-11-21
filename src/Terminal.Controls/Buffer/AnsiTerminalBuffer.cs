@@ -882,6 +882,20 @@ internal sealed partial class AnsiTerminalBuffer
     }
 
     /// <summary>
+    /// The logical-line counterpart of <see cref="GetPlainTextForAbsoluteLineRange"/>: rows that
+    /// soft-wrapped at the screen width come back joined, so a caller reading command output (build
+    /// diagnostics, say) does not take the tail of a cut line for a line of its own. Trailing blank
+    /// screen rows are ignored the same way.
+    /// </summary>
+    internal string GetLogicalTextForAbsoluteLineRange(int startInclusive, int endExclusive)
+    {
+        int totalLines = _scrollback.Count + FindLastVisibleScreenRow(showCursor: false) + 1;
+        int start = Math.Clamp(startInclusive, 0, totalLines);
+        int end = Math.Clamp(endExclusive, start, totalLines);
+        return string.Join(Environment.NewLine, GetLogicalLines(start, end));
+    }
+
+    /// <summary>
     /// How many lines have left the head of the buffer so far, by the scrollback limit or by a
     /// scrollback clear. A line number remembered earlier moves up by the change in this count.
     /// </summary>

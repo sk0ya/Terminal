@@ -49,7 +49,7 @@ public partial class TerminalTabView
     private void AbortActiveAgentCommand()
     {
         _agentCommands.Abort(startLine =>
-            _terminalBuffer.GetPlainTextForAbsoluteLineRange(startLine, int.MaxValue));
+            _terminalBuffer.GetLogicalTextForAbsoluteLineRange(startLine, int.MaxValue));
     }
 
     private void CancelAgentCommand(TerminalAgentCommandExecution execution)
@@ -64,14 +64,15 @@ public partial class TerminalTabView
 
     /// <summary>
     /// Driven from the OSC 133 shell-zone handler to capture the output region (C..D) and
-    /// exit code for the active shell-integration command.
+    /// exit code for the active shell-integration command. Rows soft-wrapped at the screen width
+    /// come back joined, so a long diagnostic line is one line of output, not two.
     /// </summary>
     private void OnAgentShellCommandZone(ShellCommandZoneEventArgs e)
     {
         _agentCommands.OnShellZone(
             e,
             (startLine, endLine) =>
-                _terminalBuffer.GetPlainTextForAbsoluteLineRange(startLine, endLine));
+                _terminalBuffer.GetLogicalTextForAbsoluteLineRange(startLine, endLine));
     }
 
     /// <summary>
