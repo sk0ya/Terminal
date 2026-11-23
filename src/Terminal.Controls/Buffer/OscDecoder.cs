@@ -179,6 +179,37 @@ internal static class OscDecoder
         return true;
     }
 
+    /// <summary>
+    /// ConEmu の OSC 9;9（作業フォルダーの申告）を読む。<paramref name="value"/> は OSC 9 の本体（<c>9;"C:\path"</c> の形）。
+    /// Windows Terminal の手順や oh-my-posh の <c>osc99</c> はプロンプトのたびにこれを出す。デスクトップ通知と読むと、
+    /// プロンプトのたびに通知が出てしまう（kitty 0.51.0 も同じ理由で作業フォルダーとして読む）。
+    /// パスは引用符で囲まれていても、いなくても受け付ける。
+    /// <paramref name="isConEmuDirectory"/> は本体が <c>9;</c> で始まるか（そうなら通知にしない）。返り値は絶対パスとして読めたか。
+    /// </summary>
+    public static bool TryDecodeConEmuCurrentDirectory(string value, out string path, out bool isConEmuDirectory)
+    {
+        path = string.Empty;
+        isConEmuDirectory = value.StartsWith("9;", StringComparison.Ordinal);
+        if (!isConEmuDirectory)
+        {
+            return false;
+        }
+
+        string raw = value[2..].Trim();
+        if (raw.Length >= 2 && raw[0] == '"' && raw[^1] == '"')
+        {
+            raw = raw[1..^1];
+        }
+
+        if (raw.Length == 0 || !System.IO.Path.IsPathFullyQualified(raw))
+        {
+            return false;
+        }
+
+        path = raw;
+        return true;
+    }
+
     public static OscShellPayload DecodeShellIntegration(string value)
     {
         int separatorIndex = value.IndexOf(';');

@@ -162,4 +162,35 @@ public sealed class OscDecoderTests
     {
         Assert.False(OscDecoder.TryDecodeCurrentDirectory(string.Empty, out _));
     }
+
+    [Theory]
+    [InlineData("9;\"C:\\Users\\A B\"", @"C:\Users\A B")]
+    [InlineData("9;C:\\Projects", @"C:\Projects")]
+    [InlineData("9;\"\\\\server\\share\\dir\"", @"\\server\share\dir")]
+    public void TryDecodeConEmuCurrentDirectoryReadsQuotedAndBarePaths(string raw, string expected)
+    {
+        Assert.True(OscDecoder.TryDecodeConEmuCurrentDirectory(raw, out string path, out bool isConEmu));
+        Assert.True(isConEmu);
+        Assert.Equal(expected, path);
+    }
+
+    [Theory]
+    [InlineData("9;")]
+    [InlineData("9;\"\"")]
+    [InlineData("9;relative\\dir")]
+    public void TryDecodeConEmuCurrentDirectoryRejectsUnreadablePathButStillClaimsIt(string raw)
+    {
+        Assert.False(OscDecoder.TryDecodeConEmuCurrentDirectory(raw, out _, out bool isConEmu));
+        Assert.True(isConEmu);
+    }
+
+    [Theory]
+    [InlineData("Build done")]
+    [InlineData("9 tests passed")]
+    [InlineData("4;1;50")]
+    public void TryDecodeConEmuCurrentDirectoryLeavesOtherOsc9Alone(string raw)
+    {
+        Assert.False(OscDecoder.TryDecodeConEmuCurrentDirectory(raw, out _, out bool isConEmu));
+        Assert.False(isConEmu);
+    }
 }

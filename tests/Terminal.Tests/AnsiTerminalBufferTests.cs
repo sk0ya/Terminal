@@ -2664,6 +2664,36 @@ public sealed class AnsiTerminalBufferTests
         Assert.Equal("/home/user/project", receivedPath);
     }
 
+    [Fact]
+    public void Osc9Point9FiresCurrentDirectoryChangedInsteadOfNotification()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        string? receivedPath = null;
+        bool notified = false;
+        buffer.CurrentDirectoryChanged += (_, path) => receivedPath = path;
+        buffer.NotificationRequested += (_, _) => notified = true;
+
+        buffer.Process("\u001b]9;9;\"C:\\Users\\user\\project\"\u001b\\");
+
+        Assert.Equal(@"C:\Users\user\project", receivedPath);
+        Assert.False(notified);
+    }
+
+    [Fact]
+    public void Osc9Point9WithUnreadablePathRaisesNothing()
+    {
+        var buffer = new AnsiTerminalBuffer(32, 10);
+        bool changed = false;
+        bool notified = false;
+        buffer.CurrentDirectoryChanged += (_, _) => changed = true;
+        buffer.NotificationRequested += (_, _) => notified = true;
+
+        buffer.Process("\u001b]9;9;\"~\"\u0007");
+
+        Assert.False(changed);
+        Assert.False(notified);
+    }
+
 
     [Fact]
     public void Osc4SetsAnsiPaletteColorAndAffectsRendering()

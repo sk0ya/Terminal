@@ -1921,11 +1921,23 @@ internal sealed partial class AnsiTerminalBuffer
 
         if (command == "9")
         {
-            // ConEmu OSC 9;4 はタスクバー進捗。それ以外の OSC 9 はデスクトップ通知。
-            // Windows Terminal と同じく "4;" プレフィックスで判別する。
+            // ConEmu OSC 9;4 はタスクバー進捗、9;9 は作業フォルダー。それ以外の OSC 9 はデスクトップ通知。
+            // Windows Terminal と同じく "4;" / "9;" プレフィックスで判別する。
             if (value == "4" || value.StartsWith("4;", StringComparison.Ordinal))
             {
                 DispatchOscTaskbarProgress(value);
+                return;
+            }
+
+            // 9;9 は OSC 7 と同じく作業フォルダーの変化として流す。読めないパスでも通知にはしない。
+            if (OscDecoder.TryDecodeConEmuCurrentDirectory(value, out string conEmuDirectory, out bool isConEmuDirectory))
+            {
+                CurrentDirectoryChanged?.Invoke(this, conEmuDirectory);
+                return;
+            }
+
+            if (isConEmuDirectory)
+            {
                 return;
             }
 
