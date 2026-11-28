@@ -26,7 +26,7 @@ internal static class TerminalReflowPositionMapper
         for (int row = logicalStart; row <= logicalEnd; row++)
         {
             TerminalLine line = source[row];
-            int length = line.IsWrapped ? line.Cells.Length : FindLastOccupiedColumn(line) + 1;
+            int length = TerminalReflowCalculator.ContinuesOnNextRow(line) ? line.Cells.Length : FindLastOccupiedColumn(line) + 1;
             if (row < clampedPositionRow)
             {
                 positionOffset += length;
@@ -67,7 +67,10 @@ internal static class TerminalReflowPositionMapper
         }
 
         targetRow = outputStart + Math.Min(rowOffset, outputCount - 1);
-        targetColumn = Math.Min(targetCellColumn, targetColumns - 1);
+        // 行末の空白は中身として運ばないので、その後ろにある位置（"PS> " の次のカーソル）は運ばなかった桁数を
+        // 足して戻す。足さないと空白のぶん左へ寄り、シェルの思うカーソル位置とずれる。
+        int beyondContent = Math.Max(0, positionOffset - cells.Count);
+        targetColumn = Math.Min(targetCellColumn + beyondContent, targetColumns - 1);
     }
 
     private static int FindLastOccupiedColumn(TerminalLine line)

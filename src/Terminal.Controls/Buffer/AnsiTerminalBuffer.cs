@@ -464,7 +464,9 @@ internal sealed partial class AnsiTerminalBuffer
         // Pulling the cut back leaves more rows than fit; what overflows is the blank tail below
         // the content, so drop it.
         int copiedRows = Math.Min(newRows, reflowed.Count - screenStart);
-        int targetStart = hadScrollback ? newRows - copiedRows : 0;
+        // 上へ寄せる。ConPTY の中の conhost も自分の画面を折り返し直して上へ寄せ、シェル（PSReadLine）はその
+        // 位置を前提に描き直す。こちらだけ下へ寄せると行がずれ、広げた後の入力やプロンプトが行の途中に出る。
+        const int targetStart = 0;
         for (int row = 0; row < copiedRows; row++)
         {
             screen[targetStart + row] = reflowed[screenStart + row];

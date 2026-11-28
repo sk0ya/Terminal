@@ -1003,6 +1003,41 @@ public sealed class AnsiTerminalBufferTests
     }
 
     [Fact]
+    public void ResizeDoesNotJoinARowThatWrappedOnlyOnErasingBlanks()
+    {
+        // PSReadLine erases its gray prediction by writing blanks; when they run past the right edge the row
+        // gets a wrap mark, but the next row is then written as a row of its own (cursor positioning, CR LF).
+        // Reflowing must not glue "input + blanks + next row" into one line (2026-11-28, Loomo).
+        var buffer = new AnsiTerminalBuffer(20, 10);
+        buffer.Process("PS> echo q" + new string(' ', 12));
+        buffer.Process("\u001b[2;1H" + new string(' ', 4) + "\u001b[1;11H\r\nout\r\nPS> ");
+
+        buffer.Resize(40, 10);
+
+        Assert.Equal("PS> echo q", buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("out", buffer.GetScreenLineText(1).TrimEnd());
+        Assert.Equal("PS>", buffer.GetScreenLineText(2).TrimEnd());
+    }
+
+    [Fact]
+    public void ResizeKeepsContentAtTopWhenGrowingColumnsWithScrollback()
+    {
+        // ConPTY's conhost reflows its own screen to the top and the shell redraws from where conhost says the
+        // cursor is. Bottom-aligning here put every later prompt and output on the wrong row.
+        var buffer = new AnsiTerminalBuffer(20, 6);
+        // 3 lines of 30 at 20 columns take 6 rows; the prompt pushes one into the scrollback. At 40 columns
+        // everything fits in 4 rows.
+        buffer.Process("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\r\ncccccccccccccccccccccccccccccc\r\ndddddddddddddddddddddddddddddd\r\nPS> ");
+
+        buffer.Resize(40, 6);
+
+        Assert.Equal(new string('b', 30), buffer.GetScreenLineText(0).TrimEnd());
+        Assert.Equal("PS>", buffer.GetScreenLineText(3).TrimEnd());
+        Assert.Equal(3, buffer.CursorRow);
+        Assert.Equal(4, buffer.CursorColumn);
+    }
+
+    [Fact]
     public void ResizeReflowsAlternateScreenContent()
     {
         var buffer = new AnsiTerminalBuffer(32, 10);

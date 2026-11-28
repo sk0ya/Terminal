@@ -69,7 +69,8 @@ internal static class TerminalReflowCalculator
             do
             {
                 TerminalLine line = source[sourceRow];
-                int length = line.IsWrapped ? line.Cells.Length : FindLastOccupiedColumn(line) + 1;
+                bool continues = ContinuesOnNextRow(line);
+                int length = continues ? line.Cells.Length : FindLastOccupiedColumn(line) + 1;
                 // Anchor each image at its offset from the start of the logical line, so it can be
                 // remapped onto whichever target row that cell ends up on.
                 TerminalReflowImages.Collect(line, cells.Count, images);
@@ -79,7 +80,7 @@ internal static class TerminalReflowCalculator
                 }
 
                 sourceRow++;
-                if (!line.IsWrapped)
+                if (!continues)
                 {
                     break;
                 }
@@ -212,6 +213,26 @@ internal static class TerminalReflowCalculator
         }
 
         return screen;
+    }
+
+    /// <summary>
+    /// この行が次の行へ文字として続いているか。折り返しの印があっても、行末が既定の空白なら続いていないと見る。
+    /// PSReadLine は入力候補（灰色の文字）を空白で上書きして消し、その空白が行末を越えると端末は折り返しの印を
+    /// 付ける。次の行はその後に位置指定や改行で別の行として書かれるが、印は残るので、幅を変えて折り返し直すと
+    /// 「入力 + 空白 + 次の行の出力やプロンプト」が 1 行につながってしまう。本当の文章が行末の空白でちょうど
+    /// 折り返していた場合は、そこで改行される（つながりを 1 か所失うだけで、文字は消えない）。
+    /// </summary>
+    internal static bool ContinuesOnNextRow(TerminalLine line)
+    {
+        if (!line.IsWrapped || line.Cells.Length == 0)
+        {
+            return line.IsWrapped;
+        }
+
+        TerminalCell last = line.Cells[^1];
+        bool blank = !last.IsContinuation && (string.IsNullOrEmpty(last.Text) || last.Text == " ") &&
+            last.Style == TerminalStyle.Default && last.Hyperlink is null;
+        return !blank;
     }
 
     private static int FindLastOccupiedColumn(TerminalLine line)
